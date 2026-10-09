@@ -1,0 +1,174 @@
+# Mortal 第 2 轮离线训练配置（基于 config.offline.toml，按 2026-10-09 复盘结论改 3 处）
+# 运行前必须：MORTAL_CFG=<本文件绝对路径>；先跑 tools/player_stats/build_whitelist.sh 生成白名单
+#
+# 相对第 1 轮的改动（★ 标注），其余保持不变（单变量原则）：
+#   ★1 吞吐：num_workers 2→8、file_batch_size 8→16，配合 RAYON_NUM_THREADS=8（实测管道 3.12→7.48 it/s）
+#   ★2 信号源：dataset.player_names_files 用自建强度榜，只学顶尖选手自己的决策
+#   ★3 评测：test_play 卫冕者换成第 1 轮 200k 快照（随机 baseline 会让 avg_rank 饱和在 1.0）
+#   ★ 另：GRP 续训到 150k 步，写入独立的 checkpoints/grp_v2.pth，不动第 1 轮的 grp.pth
+
+[control]
+version = 4
+online = false
+state_file = 'checkpoints/round2/mortal.pth'      # 新目录 → 不会覆盖第 1 轮文件；启动前从 mortal.pth 拷入作暖启
+best_state_file = 'checkpoints/round2/best.pth'
+tensorboard_dir = 'runs/main_r2'
+device = 'cuda:0'
+enable_cudnn_benchmark = true
+enable_amp = true
+enable_compile = false
+batch_size = 512
+opt_step_every = 1
+save_every = 1000
+test_every = 50000
+submit_every = 1000
+max_train_steps = 450000        # 累计值：暖启 200k → 本轮再训 250k 步 ≈ 白名单池（≈234k 步/epoch）的 1.07 epoch
+snapshot_every = 50000
+
+# using env `TRAIN_PLAY_PROFILE`
+[train_play.default]
+games = 800
+log_dir = 'runs/train_play'
+boltzmann_epsilon = 0.005
+boltzmann_temp = 0.05
+top_p = 1.0
+repeats = 1
+
+[test_play]
+games = 2000                    # 每 50000 步一次；现在对手是「上一代自己」，指标有区分度
+log_dir = 'runs/selection_r2'
+enable_amp = false
+enable_rule_based_agari_guard = true
+
+[dataset]
+globs = [
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202[2-5]??/**/*.json.gz',
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/20260[1-8]/**/*.json.gz',
+]
+# ★2 自建强度榜（tools/player_stats/build_whitelist.sh 产出）；语义见 gameplay.rs::load_events：
+#    只有「名单内玩家自己座位」的决策会成为样本 → 席位量决定数据量，见 whitelist_coverage.py
+#    实测 400 人（长期 avg_pt>=+2.41、≥400 局）→ 席位 704,231 / 样本 ≈120M / 1 epoch ≈ 234k 步
+# ⚠ file_index 必须换新名字：旧的 indexes/main_recent_v1.pth 是「无白名单」时缓存的文件表，
+#    沿用会跳过过滤逻辑。另外自建 2026 牌谱的 start_game 没有 names 字段，白名单模式下自然不产出样本。
+player_names_files = ['../dataset/index/top_players_400.txt']
+file_index = 'indexes/main_r2_whitelist_v1.pth'
+file_batch_size = 16            # ★1 原 8；内存 251 GB 足够（≈1.4 GB/worker）
+reserve_ratio = 0.0
+num_workers = 8                 # ★1 原 2
+num_epochs = 1
+enable_augmentation = false     # 留作第 3 轮变量（开了等效样本 ×2，耗时 ×2）
+augmented_first = false
+
+[env]
+gamma = 1                       # 保持 1（单变量原则）；第 3 轮候选：0.99 / 0.995 做跨局信用分配
+pts = [6.0, 4.0, 2.0, 0.0]
+
+[resnet]
+conv_channels = 192
+num_blocks = 40
+
+[cql]
+min_q_weight = 5
+
+[aux]
+next_rank_weight = 0.2
+
+[freeze_bn]
+mortal = false                  # 离线 false；未来在线必须 true
+
+[optim]
+eps = 1e-8
+betas = [0.9, 0.999]
+weight_decay = 0.1
+max_grad_norm = 5.0
+
+[optim.scheduler]
+peak = 1e-4
+final = 1e-4
+warm_up_steps = 2000
+max_steps = 2000                # 暖启后恒定 1e-4（第 3 轮若跑 >1M 步再考虑长程衰减）
+
+[baseline.train]
+device = 'cuda:0'
+enable_compile = false
+state_file = 'checkpoints/mortal_step_000200000.pth'
+
+[baseline.test]
+device = 'cuda:0'
+enable_compile = false
+state_file = 'checkpoints/mortal_step_000200000.pth'   # ★3 卫冕者 = 第 1 轮终态快照
+
+[online]
+history_window = 50
+enable_compile = false
+
+[online.remote]
+host = '127.0.0.1'
+port = 5000
+
+[online.server]
+buffer_dir = '/path/to/buffer'
+drain_dir = '/path/to/drain'
+sample_reuse_rate = 0
+sample_reuse_threshold = 0
+capacity = 1600
+force_sequential = false
+
+[1v3]
+seed_key = -1
+games_per_iter = 2000
+iters = 500
+log_dir = 'runs/1v3'
+
+[1v3.challenger]
+device = 'cuda:0'
+name = 'mortal'
+state_file = 'checkpoints/round2/best.pth'
+stochastic_latent = false
+enable_compile = false
+enable_amp = true
+enable_rule_based_agari_guard = true
+
+[1v3.champion]
+device = 'cuda:0'
+name = 'baseline'
+state_file = 'checkpoints/mortal_step_000200000.pth'
+stochastic_latent = false
+enable_compile = false
+enable_amp = true
+enable_rule_based_agari_guard = true
+
+[1v3.akochan]
+enabled = false
+dir = '/path/to/akochan'
+tactics = '/path/to/tactics.json'
+
+[grp]
+state_file = 'checkpoints/grp_h128.pth'             # ★ 独立文件，第 1 轮的 grp.pth 保持可用
+
+[grp.network]
+hidden_size = 128                                  # 若续训后 val loss 仍明显下降，可试 128（模型仅 1.4 MB）
+num_layers = 3
+
+[grp.control]
+device = 'cuda:0'                                 # 启动前 CUDA_VISIBLE_DEVICES 指到 P100（float64 强项）
+enable_cudnn_benchmark = true
+tensorboard_dir = 'runs/grp_h128'
+batch_size = 512
+save_every = 2000
+val_steps = 200
+max_train_steps = 60000                          # ★ 从 30k 暖启续训到 150k（≈85 min）
+
+[grp.dataset]
+train_globs = [
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202[2-5]??/**/*.json.gz',
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/20260[1-8]/**/*.json.gz',
+]
+val_globs = [
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202609/**/*.json.gz',
+]
+file_index = 'indexes/grp_recent_v1.pth'          # 数据未变，可直接复用旧缓存
+file_batch_size = 50
+
+[grp.optim]
+lr = 1e-4

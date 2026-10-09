@@ -1,0 +1,117 @@
+"""未见月离线指标：判断「训练有没有在进步」的便宜监控量（秒级，不打牌局）。
+
+对每个 checkpoint 在一批未见过的牌谱（默认 202609，主模型只训到 202608）上算：
+  - top1      : masked Q 的 argmax 与人类实际动作的一致率（随机权重≈0.25 为下限）
+  - dqn_loss  : 0.5·MSE(Q(s,a_人类), q_target)，与 const_loss（只预测常数）对比
+  - R2        : 1 − MSE/var(target)；var_q/var_t 用来判断 Q 幅度是否高估
+  - agari     : 和了动作(43) 被排为第一的比例（agari guard 的健全性）
+用法：
+  python holdout_metrics.py ckpt1.pth ckpt2.pth ...            # 用默认月份与批量
+  python holdout_metrics.py --month 202610 --n 48 ckpt.pth     # 换月份/样本量
+"""
+import argparse
+import glob
+import random
+import torch
+from torch.utils.data import DataLoader
+from config import config
+from model import Brain, DQN
+from dataloader import FileDatasetsIter
+
+ROOT = '/mnt/data8/mortal/Mortal/dataset/mjai/houou4'
+DEVICE = torch.device(config['control']['device'])
+
+
+def collect(month, n_batch, bs, seed, workers):
+    files = sorted(glob.glob(f'{ROOT}/{month}/*.json.gz'))
+    if not files:
+        raise SystemExit(f'没有文件: {ROOT}/{month}')
+    random.seed(seed)
+    files = files[: max(n_batch * bs // 600 + 8, 64)]
+    ds = FileDatasetsIter(
+        version = config['control']['version'],
+        file_list = files,
+        pts = config['env']['pts'],
+        file_batch_size = 8,
+        reserve_ratio = 0.0,
+        player_names = [],
+        num_epochs = 1,
+        enable_augmentation = False,
+        augmented_first = False,
+    )
+    it = iter(DataLoader(ds, batch_size = bs, drop_last = True,
+                         num_workers = workers, pin_memory = True))
+    batches = []
+    while len(batches) < n_batch:
+        obs, actions, masks, std, kr, ranks = next(it)
+        if obs.shape[0] != bs:
+            continue
+        q_target = (config['env']['gamma'] ** std.to(torch.int64)
+                    * kr.to(torch.float64)).to(torch.float32)
+        batches.append((obs, actions, masks, q_target))
+    return batches
+
+
+def evaluate(name, ckpt, batches, bs):
+    st = torch.load(ckpt, map_location = torch.device('cpu'), weights_only = True)
+    cfg = st['config']
+    version = cfg['control'].get('version', 1)
+    mortal = Brain(version = version, **cfg['resnet']).to(DEVICE).eval()
+    dqn = DQN(version = version).to(DEVICE).eval()
+    mortal.load_state_dict(st['mortal'])
+    dqn.load_state_dict(st['current_dqn'])
+    pq, pt = [], []
+    agree = 0
+    total = 0
+    lse = 0.0
+    n_agari = n_agari_hit = 0
+    with torch.inference_mode():
+        for obs, actions, masks, q_target in batches:
+            n = obs.shape[0]
+            total += n
+            obs = obs.to(dtype = torch.float32, device = DEVICE)
+            actions = actions.to(dtype = torch.int64, device = DEVICE)
+            masks = masks.to(dtype = torch.bool, device = DEVICE)
+            q_out = dqn(mortal(obs), masks)
+            q = q_out[torch.arange(n, device = DEVICE), actions]
+            pq.append(q.float().cpu())
+            pt.append(q_target)
+            argmax = q_out.argmax(-1)
+            agree += int((argmax == actions).sum().item())
+            lse += float(torch.logsumexp(q_out, dim = -1).mean().item())
+            m = actions == 43
+            c = int(m.sum().item())
+            n_agari += c
+            if c > 0:
+                n_agari_hit += int((argmax[m] == 43).sum().item())
+    q = torch.cat(pq)
+    t = torch.cat(pt)
+    mse = float(torch.mean((q - t) ** 2))
+    var_t = float(t.var())
+    var_q = float(q.var())
+    const = float((t - t.mean()).pow(2).mean())
+    print(f'{name:<40} steps={str(st.get("steps", "-")):<8} '
+          f'top1={agree / total:.4f}  dqn_loss={0.5 * mse:.4f} (const={0.5 * const:.4f})  '
+          f'R2={1 - mse / var_t:+.4f}  var_q/var_t={var_q:.4f}/{var_t:.4f}  '
+          f'agari_top1={n_agari_hit}/{n_agari}  logsumexp_q={lse / len(batches):+.3f}', flush = True)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('ckpts', nargs = '+')
+    ap.add_argument('--month', default = '202609')
+    ap.add_argument('--n', type = int, default = 24, help = '批数（每批 batch_size 条）')
+    ap.add_argument('--seed', type = int, default = 20261009)
+    ap.add_argument('--workers', type = int, default = None,
+                    help = '数据 loader 进程数；跟训练共机时建议设小（2）以免抢 CPU')
+    args = ap.parse_args()
+    bs = config['control']['batch_size']
+    workers = args.workers if args.workers is not None else config['dataset']['num_workers']
+    batches = collect(args.month, args.n, bs, args.seed, workers)
+    print(f'holdout={args.month} batches={len(batches)} x bs={bs} '
+          f'= {len(batches) * bs:,} 样本（同一批数据用于所有 checkpoint）', flush = True)
+    for ckpt in args.ckpts:
+        evaluate(ckpt.split('/')[-1], ckpt, batches, bs)
+
+
+main()

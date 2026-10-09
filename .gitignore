@@ -1,0 +1,32 @@
+.vscode
+__pycache__
+
+/target
+*.pyd
+*.dll
+*.exe
+*.so
+*.pth
+
+.ipynb_checkpoints
+*.ipynb
+
+/_draft
+
+# ---- 本项目追加（2026-10-09）：大文件与天凤 ToS 受限数据一律不入库 ----
+# 注意：memory/ 与 tools/ 下的文档是本项目唯一的知识载体，**不要忽略它们**
+/dataset
+mortal/runs/
+mortal/logs/
+mortal/indexes/
+mortal/*.log
+mortal/*.bak
+mortal/train_play/
+mortal/test_play/
+mortal/1v3/
+mortal/ladder/
+tools/tenhou_data/logs/
+tools/tenhou_data/.venv/
+
+# 本地备份区（代码包 + checkpoint 副本），绝不入库
+backups/

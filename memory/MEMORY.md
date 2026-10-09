@@ -822,7 +822,7 @@ __pycache__
 | 9 | ✅ 历史数据来源已解决 | HF 18 个年度包已上传服务器 `dataset/tenhou_hf`（17 GB）并**已全部 merge 进 mjai 树** |
 | 9b | ✅ D 盘散装残留已清 | 已删除 `D:\tenhou_mjai`；`D:\tenhou_hf` 原包亦已迁到服务器，**本机不再承担训练数据职责** |
 | 9c | ✅ 历史数据训练落地（已完成） | 2,630,640 局已在服务器 NTFS 本地盘（`/mnt/data8`），**exFAT 限制不复存在** |
-| 10 | ⚠️ **`.gitignore` 仍未处理** | 服务器目录**根本不是 git 仓库**（无 `.git`），代码改动只存一份；见 §14-14、§16.10 |
+| 10 | ✅ `.gitignore` + 本地 git 仓库已建 | 10-09：`.gitignore` 补齐（dataset/runs/logs/backups 等）并 `git init` → 基线提交 `33e63bc`（分支 `main`、460 个文件、4.4 MB）、tag `round1-complete`。**仅缺远端推送**（服务器当前无外网）；见 §16.10 |
 | 11 | ✅ 第一轮已训完 | GRP 30k 步 + 主模型 200k 步（10-08~10-09）；**结果不可用**，指标饱和且强度持平，见 §16.7 |
 | 12 | ✅ 确认 GPU 与显存 | 服务器 4×P100-16GB + 1×RTX 8000-48GB；实际 GRP→P100、主训→RTX 8000，192×40/batch512 无压力 |
 
@@ -869,7 +869,7 @@ __pycache__
 12. `avg_pt([90,45,0,-135])` 仅用于显示与最优判定，**从不参与训练**
 13. ⚠️ **D 盘是 exFAT（簇 256 KiB）外置 USB 盘**，**绝不能存海量小文件**（每个 `.json.gz` 白占 256 KiB）。历史牌谱只以年度 `.tar.zst` 原包留存；散装 mjai 只能放 NTFS 卷。排查磁盘空间异常时先看文件系统与簇大小（`Get-Volume`；`Get-CimInstance Win32_Volume -Filter "DriveLetter='D:'"` 的 `BlockSize`）。相关：D 盘 USB 链路曾报 Event 153（I/O 重试）
     → 2026-10-09 补充：数据已整体迁到服务器 NTFS 本地盘，此坑不再影响训练；但**本机 → 服务器传输必须先 tar/7z 打包**（百万级小文件直传极慢），且**服务器上无此问题也不代表可以往任意卷狂撒小文件**
-14. ⚠️ **服务器代码无版本控制**：`/mnt/data8/mortal/Mortal` 无 `.git`，而代码已相对上游/本机打过补丁（§16.4）。一旦本地重新覆盖上传，补丁会静默丢失；改动必须先 `git init` 提交或 scp 回本机备份
+14. ✅ ~~服务器代码无版本控制~~ → **10-09 已解决**：已 `git init` 并提交基线（`main` / `33e63bc` / tag `round1-complete`），`.gitignore` 确保牌谱与权重不入库。仍适用的风险：① **无远端**（服务器无外网，无法 push），单机器单副本仍未真正消除；② 提交身份用的是临时 `-c user.name='mortal-trainer'`（环境里本来没有任何 git 身份，我没改你的配置），想换成自己的：`git -c user.name='你的名字' -c user.email='you@example.com' commit --amend --reset-author`；③ 本机旧代码覆盖上传前，先 `git status` 看是否会把服务器侧改动抹掉
 15. ⚠️ **随机 baseline 会让 `test_play` 指标完全失效**：`baseline.pth` 为随机初始化权重时，`avg_rank` 从第一次评测（50k 步）就顶到 1.000、`avg_pt` 顶到 90（因为随机对手几乎不会和牌，模型必然全场 1 位）。此时：① 指标无区分度；② `best.pth` 只会记录**第一个**评测点（后续 89.955 < 90 永远“不破记”，§16.6）。→ 训练内监控不要用 avg_rank，改见 §16.7 的两类可用指标
 16. ⚠️ **评测种子固定 + 评测目录被重建**：`player.py::test_play` 用写死的 `seed_start=(10000, 0x2000)` 且每次 `shutil.rmtree(log_dir)` → ① 所有检查点在同一批 500 组牌山上比较（易过拟合牌山选择模型）；② 历史评测牌谱全部丢失，事后无法重算。建议：种子轮换 + 每步单独存目录（`runs/selection/<step>/`）
 17. ⚠️ **吞吐瓶颈默认在 CPU 管道而非 GPU**：`num_workers=2` + `RAYON_NUM_THREADS=4` 时管道只能 3.12 it/s，而 GPU（RTX 8000+AMP, batch 512）能跑 8.88 it/s → 实得 2.56 it/s（§16.9）。改 `num_workers=4~8` + `RAYON_NUM_THREADS=8` 即可近 2.4× 免费提速；环境变量必须在启动训练**前**设好（rayon 线程池在进程内只初始化一次）
@@ -1117,10 +1117,10 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"   # 训练可省
 
 | 风险 | 实况 | 建议动作 |
 |---|---|---|
-| 代码只存一份 | 无 `.git`；补丁只在服务器；本机代码更旧、本机文档更新 | ✔ **10-09 已部分缓解**：`backups/code_docs_20261009.tar.gz`（32 MB，已排除 dataset/target/runs/logs/checkpoints）。仍需：`git init` + 推私有远端 + scp 回本机 |
+| 代码只存一份 | ✔ **10-09 已建本地 git**：基线提交 `33e63bc`（`main`，460 文件/4.4 MB，tag `round1-complete`）；防泄漏校验已跑：`git ls-files -- dataset` = 0，`.json.gz/.pth/.so/.dll/.exe/.tar` 被跟踪数 = 0 | 待做：有网时加私有远端并 `git push`（当前无外网，推不了）；另已有 `backups/code_docs_20261009.tar.gz`（32 MB）作双保险 |
 | checkpoint 只存一份 | ✔ **10-09 已处理**：`backups/ckpt_round1/`（592 MB）= grp / grp_h128 / grp_best / baseline / 四个 mortal_step 副本，已验证可加载。仍在同一磁盘（/mnt/data8），真正异地备份待做 | 下次拉到别的机器/云盘时带一份；`backups/` 已加进 `.gitignore` |
 | 评测牌谱被覆写 | `runs/selection` 每次 `rmtree`，只剩最后一次 | 改为 `runs/selection/<step>` 归档（已含本次 200k 的 2,000 局，建议先备份再开新轮） |
-| `.gitignore` 未覆盖大文件 | 仍只忽略官方那几项；`dataset/`（34 GB）与 `runs/`、`logs/` 未列 | 已补（本轮改动）；注意 **不要盲照旧待办把 `memory/`、`tools/` 一并忽略**（这两处是本项目唯一的文档） |
+| `.gitignore` 未覆盖大文件 | ✔ 已补齐（`/dataset`、`mortal/runs|logs|indexes`、`backups/`、`tools/tenhou_data/logs` 等；`*.pth`/`*.so` 官方已含） | 注意 **不要把 `memory/`、`tools/` 一并忽略**（这两处是本项目唯一的文档）；旧待办 #10 的原写法会误伤文档 |
 | GRP 与主模型共用同一时间窗 | 两者都用 2022-01~2026-08 | 可接受（GRP 是奖励模型），但主模型 holdout 靠 202609+，新增数据时别泄露 |
 | 合规 | 牌谱与 HF 加工数据仅本地使用 | 不入 git、不对外分发（§8.7） |
 
@@ -1183,6 +1183,21 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"   # 训练可省
 
 **⑥ 备份与一处副作用（10-09 14:28~14:35）**
 
-- 已做：`backups/code_docs_20261009.tar.gz`（32 MB，不含 dataset/target/runs/logs/checkpoints）+ `backups/ckpt_round1/`（592 MB，8 个关键 checkpoint 副本，逐个 `torch.load` 验证可加载）；`backups/` 已加入 `.gitignore`。**git init 仍未做**（需你点头）。
+- 已做：`backups/code_docs_20261009.tar.gz`（32 MB，不含 dataset/target/runs/logs/checkpoints）+ `backups/ckpt_round1/`（592 MB，8 个关键 checkpoint 副本，逐个 `torch.load` 验证可加载）；`backups/` 已加入 `.gitignore`。**git 已于 14:42 建立**（见下方 ⑧）。
 - 副作用（**无损**）：`train_grp.py` 把最优盘硬编码写到 `dirname(state_file)/grp_best.pth`，所以容量实验**覆盖了第 1 轮的 `checkpoints/grp_best.pth`**。现在它是 h128/l3、60k 步、best_val 2.44599，与 `grp_h128.pth` 内容一致（探针数值逐位相同）；而旧 grp_best 本就与保留着的 `grp.pth` 完全相同 → 没丢信息。
 - 记住这个坑：**不同尺寸的 GRP 实验会互盖 `grp_best.pth`**。历史存档只认各自专用的 `state_file`（已按此命名）+ 定期副本到 `backups/`。
+
+**⑦ 本地 git 仓库已建立（10-09 14:42，用户明确授权）**
+
+脚本：`tools/git_init_repo.sh`（幂等：已有 `.git` 则直接退出；含防泄漏与必要文件齐全性双重校验，任一不过就**不提交**）。结果：
+
+| 项 | 值 |
+|---|---|
+| 分支 / 基线提交 | `main` / `33e63bc`（本机 git 2.17 不支持 `init -b`，用 `git symbolic-ref HEAD refs/heads/main` 改名） |
+| tag | `round1-complete`（annotated，标第 1 轮完成态，便于 baseline 换代与回退） |
+| 入库规模 | 460 个文件、共 4.0 MB；`.git` 4.4 MB |
+| 防泄漏校验 | `git ls-files -- dataset` = **0**；`.json.gz/.pth/.so/.dll/.exe/.tar` 被跟踪数 = **0**；`git status --ignored` 确认 `dataset/ target/ backups/ mortal/{checkpoints,indexes,runs,logs,libriichi.so}` 均被忽略 |
+| 提交身份 | 环境里本来没有任何 git 身份 → **没改你的配置**，仅用临时 `-c user.name='mortal-trainer' -c user.email='mortal@localhost'`。要换成自己的：`git -c user.name='你' -c user.email='你@x' commit --amend --reset-author`（并记得用同样方式重做 tag） |
+| 尚未做 | **无远端也推不了**（今天 `curl raw.githubusercontent.com` 超时）；有网后：`git remote add origin <私有仓地址> && git push -u origin main && git push origin --tags` |
+
+> 坑：`git tag -a`（annotated）**也需要身份**。第一次只给 `commit` 加了 `-c`，结果 commit 成功、tag 报 `fatal: unable to auto-detect email address`；脚本已修正（两条命令共用 `GITID` 数组），并用 `--amend --no-edit` 合并为一个干净的基线提交。

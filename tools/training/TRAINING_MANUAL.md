@@ -944,7 +944,7 @@ tensorboard --logdir runs --host 127.0.0.1 --port 6006   # 本机 ssh -L 6006:lo
 | `mortal/train_grp.py` | 预算自停；`grp_best.pth`（按 val loss 取优）；固定验证抽样种子；日志加 `est. %` | `grp.control.max_train_steps` |
 | `mortal/player.py` | `TestPlayer` 的 AMP / agari guard 改从配置读；评测固定种子块 | `test_play.enable_amp`、`test_play.enable_rule_based_agari_guard` |
 
-⚠️ 三处均靠 `.get(key, default)` 兼容上游配置，但 **四个文件只在服务器有一份，无 git**；下次开机第一件事就是 `git init` 并提交，否则本机旧版覆盖一次就全丢。本机文档若已把补丁写成 §4.1/§4.2/§4.3，请逐条与本表对校。
+⚠️ 三处均靠 `.get(key, default)` 兼容上游配置。**10-09 已建本地 git 仓库**（基线 `33e63bc` / `main` / tag `round1-complete`，见 §15.5），补丁不再只存一份；但**仍无远端**，单机器风险未根除。本机文档若已把补丁写成 §4.1/§4.2/§4.3，请逐条与本表对校。
 
 ### 14.3 实跑配方与结果（第一轮）
 
@@ -1016,7 +1016,7 @@ python ladder.py <challenger.pth> <champion.pth> [seed_start=30000] [sets=500]
 
 | # | 动作 | 命令/配置要点 |
 |---|---|---|
-| 1 | 备份与版本化 | `git init && git add -A && git commit`；`.gitignore` 已补 `dataset/`、`mortal/runs/`、`mortal/logs/`；checkpoint `tar` 一份到另盘 |
+| 1 | ✅ 备份与版本化（10-09 已完成） | `tools/git_init_repo.sh` 已建本地 git（基线 `33e63bc`）；`.gitignore` 已补 `dataset/`、`mortal/runs/`、`mortal/logs/`、`backups/`；checkpoint 副本与代码包已入 `backups/`。待做：有网时加私有远端并 push |
 | 2 | 吞吐调优 | `num_workers=4~8`、`RAYON_NUM_THREADS=8`、`file_batch_size=15~20`；先 `bench_pipe.py` 跑一遍定参 |
 | 3 | ~~把 GRP 训收敛~~ → **加 GRP 容量** | 续训已证伪“未收敛”（30k→42k 仅 nll −0.019、val loss 在噪声带内）；改跑 `mortal/run_grp_capacity.sh`（h128/l3、从零 60k 步），用 `grp_quality_probe.py` 的 **hit@3/hit@6/nll_last** 判胜负，胜出才换奖励模型（详见 §15.3） |
 | 4 | 开新一轮离线（换信息源，不是只加步数） | 新目录/新 `state_file`（否则自动续训旧步数）；候选变量（一次只动 1–2 个）：<br>a) `enable_augmentation=true`（样本×2）<br>b) `player_names_files` 高手白名单（把“模仿全体凤凰卓”变成“模仿顶尖”）<br>c) `gamma` 1→0.99/0.995（跨局信用分配）<br>d) 扩大时间窗（全量 2.63 M 或 2019+）**且同步重训 GRP**<br>e) scheduler 改长程衰减（现 warm_up=2000/peak=final=1e-4） |
@@ -1104,16 +1104,18 @@ python ladder.py <challenger.pth> <champion.pth> [seed_start=30000] [sets=500]
 
 已挂上**自动验收监控**（tmux `r2_watch` → `mortal/run_r2_monitor.sh`，日志 `mortal/logs/r2_monitor.log`）：
 
-> 备份（上面代码块的步骤 1）已于 14:28 补做：`backups/code_docs_20261009.tar.gz`（32 MB）+ `backups/ckpt_round1/`（592 MB，含 grp / grp_h128 / baseline / 四个 mortal_step 副本），`backups/` 已写进 `.gitignore`；`git init` 仍待你确认。**副作用提醒**：容量实验覆盖了 `checkpoints/grp_best.pth`（`train_grp.py` 硬编码把最优盘写到 `dirname(state_file)/grp_best.pth`），现在它是 h128/60k 的那份，与 `grp_h128.pth` 等价，旧份与保留的 `grp.pth` 完全相同 → 无信息丢失，但**跨尺寸 GRP 实验共用这个名字会互盖**。
-
 - 每出现一个新的 `checkpoints/round2/mortal_step_*.pth`（每 50k 步）→ 自动跑 `holdout_metrics.py`（与第 1 轮 200k 同一批未见月样本、同一口径比 top1/dqn_loss/R²）；
 - 训练进程一退出 → 自动跑**双向 ladder**：新 vs 旧（seed 40000）与旧 vs 新（seed 41000），各 500 sets = 2000 局；两方向吻合才能算真增益（消除牌山与座位偏置）；
 - 评测全部放空闲 P100（`CUDA_VISIBLE_DEVICES=1`）+ `nice -n 10` + `RAYON_NUM_THREADS=4` + `--workers 2`，避免抢训练的 CPU（已冒烟验证：约 2.5 min 跑完，训练瞬时吞吐从 7.2 降到 6.0 后即恢复）。
 
 > 写这类监控的坑：用 `pgrep -f "python -u train.py"` 判断训练是否还在跑会**永不出循环** —— tmux 里的 `bash -c "… python -u train.py …"` 包装进程 cmdline 含同样字符串；必须锚定：`pgrep -c -f '^python -u train\.py$'`（实测正确匹到主进程+8 个 worker = 9）。
 
+> 备份与版本化已完成：14:28 做了 `backups/code_docs_20261009.tar.gz`（32 MB）+ `backups/ckpt_round1/`（592 MB，含 grp / grp_h128 / grp_best / baseline / 四个 mortal_step 副本），14:42 建了本地 git（§15.5）。**副作用提醒**：容量实验覆盖了 `checkpoints/grp_best.pth`（`train_grp.py` 硬编码把最优盘写到 `dirname(state_file)/grp_best.pth`），现在它是 h128/60k 的那份，与 `grp_h128.pth` 等价，旧份与保留的 `grp.pth` 完全相同 → 无信息丢失，但**跨尺寸 GRP 实验共用这个名字会互盖**。
+
+下面三个步骤的执行命令（**已于 14:17~14:28 全部执行完毕**，保留在此供后续轮次复用）：
+
 ```bash
-# 1) 先备份（无 git 的当下最低成本保险手段；若你认可，也可以改做 git init + 本地提交）
+# 1) 备份代码与文档（backups/ 已在 .gitignore 里，不会入库）
 cd /mnt/data8/mortal/Mortal && tar czf /mnt/data8/mortal/code_docs_$(date +%Y%m%d).tar.gz \
     --exclude=dataset --exclude=target --exclude='mortal/runs' --exclude='mortal/logs' \
     --exclude='mortal/checkpoints' --exclude='mortal/__pycache__' .
@@ -1139,6 +1141,27 @@ python holdout_metrics.py checkpoints/round2/mortal.pth checkpoints/mortal_step_
 预期：首次会重建白名单索引（≈1.3 分钟，写入 `indexes/main_r2_whitelist_v1.pth`，之后秒级复用）；调优后吞吐目标 ≈ 6~7 it/s → 250k 步 ≈ **10~12 h**（含 5 次 test_play，每次 21 min，现在对手是上一代自己，指标有区分度）。
 
 **判进规则（写死，免得起争议）**：`ladder.py 新快照 vs mortal_step_000200000.pth`（≥500 sets）avg_pt > 0 且超出 ±3.6 pt 噪声 → 本轮有效；否则回到 §14.6 换下一个变量（`enable_augmentation` / `gamma<1` / 扩大时间窗），**不要靠 dqn_loss 下降当作进步证据**。
+
+### 15.5 版本控制（10-09 14:42 已建立）
+
+用 `tools/git_init_repo.sh`（幂等：已有 `.git` 直接退出；**防泄漏 + 必要文件齐全性双重校验**，任一不过则不提交）。结果：
+
+| 项 | 值 |
+|---|---|
+| 分支 / 基线提交 | `main` / `33e63bc`（本机 git 2.17 不支持 `init -b`，改用 `git symbolic-ref HEAD refs/heads/main`） |
+| tag | `round1-complete`（annotated，标第 1 轮完成态，方便 baseline 换代与回退） |
+| 入库规模 | 460 个文件、共 4.0 MB；`.git` 4.4 MB |
+| 防泄漏校验 | `git ls-files -- dataset` = **0**；`.json.gz/.pth/.so/.dll/.exe/.tar` 被跟踪数 = **0**；`git status --ignored` 确认 `dataset/ target/ backups/ mortal/{checkpoints,indexes,runs,logs,libriichi.so}` 均被忽略 |
+| 工作区 | `git status --porcelain` 为空（干净） |
+
+两个约定：
+
+1. **提交身份**：环境里本来没有任何 git 身份，脚本**没改你的配置**，只用临时 `-c user.name='mortal-trainer' -c user.email='mortal@localhost'`。想换成自己的：`git -c user.name='你' -c user.email='你@x' commit --amend --reset-author`（并用同样方式重做 tag）。
+2. **不入库、需自行重建的两个前置件**（牌谱按 ToS 红线永不进 git）：`mortal/libriichi.so` ← `cargo build -p libriichi --lib --release`（§2.5）；`dataset/index/top_players_400.txt` ← `bash tools/player_stats/build_whitelist.sh`（77 秒，需牌谱）。
+
+尚未做（需外网）：`git remote add origin <私有仓地址> && git push -u origin main && git push origin --tags`（今天 `curl raw.githubusercontent.com` 超时）。推不动的这段时间，`backups/code_docs_*.tar.gz` 是唯一可带走的副本。
+
+> 坑：`git tag -a`（annotated）**也需要身份**。第一次只给 `commit` 加了 `-c`，结果 commit 成功、tag 报 `fatal: unable to auto-detect email address`；脚本已修正（两条命令共用 `GITID` 数组）。
 
 ---
 

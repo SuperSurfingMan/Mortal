@@ -1,5 +1,6 @@
 # 两个 checkpoint 之间的 1v3 duplicate-mahjong 对抗（真实强度阶梯评测）
-# 用法: MORTAL_CFG=... python ladder.py <challenger.pth> <champion.pth> [seed_start] [n_sets]
+# 用法: python ladder.py <challenger.pth> <champion.pth> [seed_start] [n_sets] [log_dir]
+#   并发跑多组时第 5 个参数必传（各自独立的日志目录，否则会互相 rmtree 覆盖）
 import sys
 import shutil
 import torch
@@ -33,7 +34,8 @@ def main():
     seed_start = int(sys.argv[3]) if len(sys.argv) > 3 else 30000
     n_sets = int(sys.argv[4]) if len(sys.argv) > 4 else 500      # 1 set = 4 局同牌山
     key = 0x2000
-    log_dir = path.abspath('runs/ladder')
+    # 并发安全：允许为每个任务指定独立日志目录（默认 runs/ladder）
+    log_dir = path.abspath(sys.argv[5]) if len(sys.argv) > 5 else path.abspath('runs/ladder')
     if path.isdir(log_dir):
         shutil.rmtree(log_dir)
     chal = load_engine(chal_ckpt, 'challenger')
@@ -49,6 +51,7 @@ def main():
     print(f'challenger = {chal_ckpt}')
     print(f'champion   = {cham_ckpt}')
     print(f'sets = {n_sets} (hanchans = {n_sets * 4}), seed_start = {seed_start}')
+    print(f'log_dir = {log_dir}')
     print(f'raw rankings = {rankings}')
     print(f'avg_rank = {stat.avg_rank:.4f}   avg_pt = {stat.avg_pt([90, 45, 0, -135]):.3f}')
     print(f'1st/2nd/3rd/4th = {stat.rank_1_rate:.3f} {stat.rank_2_rate:.3f} {stat.rank_3_rate:.3f} {stat.rank_4_rate:.3f}')

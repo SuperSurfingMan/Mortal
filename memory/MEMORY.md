@@ -25,6 +25,7 @@
 14. [关键坑位备忘](#14-关键坑位备忘)
 15. [关键文件索引](#15-关键文件索引)
 16. [服务器实跑现状（2026-10-07~10-09 远程同步）](#16-服务器实跑现状2026-10-0710-09-远程同步)
+17. [进展总纲（10-01→10-11 系统性汇总，新会话先读这一节）](#17-进展总纲10-0110-11系统性汇总)
 
 ---
 
@@ -876,7 +877,9 @@ __pycache__
 18. ⚠️ **`best_perf` 初始值与“更强 checkpoint”无关**：`train.py` 的 `best` 判定仅比较当前评测；想选最强模型必须跑配对对抗（`ladder.py`）而不是信 `best.pth`
 19. ⚠️ **`CUDA_VISIBLE_DEVICES` 的序号默认不等于 `nvidia-smi` 的序号**：不设 `CUDA_DEVICE_ORDER=PCI_BUS_ID` 时，CUDA 按算力优先枚举（本机 ordinal 0 = RTX 8000，1~4 = P100），而 `nvidia-smi` 按 PCI 序（RTX 8000 是 2）→ 同一个 `=2` 在两套序下分别是 P100 / RTX 8000。后果是“以为在用 48GB 的 8000，实际在跑 P100”且只能从速度反推。做法：**固定 `CUDA_DEVICE_ORDER=PCI_BUS_ID`，并在启动后看日志 `device: cuda:0 (型号)` 那一行做校验**。逐个实测表见 `ENV_SETUP_P100.md §10`（日志 `mortal/logs/env_map.log`）
 20. ⚠️ **`import libriichi` 必须在 `mortal/` 目录下**：仓库根目录有个同名 Rust crate 目录 `libriichi/`，会被 Python 当成**命名空间包**遮蔽真扩展（实测 `__path__=_NamespacePath([...])`、`dir()` 为空、`libriichi.__version__` 报 AttributeError）→ 看起来像“没编译/没装”，其实只是目录不对。同理 `config.py` 的相对路径、`checkpoints/`、`runs/` 也都依赖 cwd=`mortal/`
-21. ⚠️ **`LD_LIBRARY_PATH` 的作用域被旧手册写大了**：实测 `import libriichi`、GPU 前向+AMP、牌谱解码在最小环境（只有 PATH/HOME）全部正常；但 `target/release/validate_logs` 与 `stat` 链接了 `libpython3.12.so.1.0`，不给 `LD_LIBRARY_PATH=$CONDA_PREFIX/lib` 会 `error while loading shared libraries`（退出码 **127**）→ **只有跑 Rust CLI 时才是必需项**
+21. ⚠️ **`ladder.py` 并发必须传独立的日志目录**：它开头就 `shutil.rmtree(log_dir)`，原本硬编码 `runs/ladder` → 多卡并行跑时后启动的任务会把己在跑的任务牌谱删掉（表现为结果文件缺失/统计错乱）。已加第 5 个位置参数 `log_dir`；用法 `python ladder.py <chal> <cham> <seed_start> <sets> <自己的日志目录>`
+22. ⚠️ **离线模式一个 epoch 就退出，与 `max_train_steps` 无关**：第 2 轮预算 450k 但只跑到 424.8k 就“静默正常退出”（无报错、无 `training budget reached`，日志末尾只有一行 `ResourceWarning: Implicitly cleaning up <TemporaryDirectory>`）。想跑更长必须提 `num_epochs`（或用 `ladder` 定量核实确实跑完了数据）。另注意：`DataLoader` 全轮只产生一个不满批（碎片在缓冲里拼接），所以进度条停在半周期是“数据吃完”的正常特征，不是被人为中断
+23. ⚠️ **`LD_LIBRARY_PATH` 的作用域被旧手册写大了**：实测 `import libriichi`、GPU 前向+AMP、牌谱解码在最小环境（只有 PATH/HOME）全部正常；但 `target/release/validate_logs` 与 `stat` 链接了 `libpython3.12.so.1.0`，不给 `LD_LIBRARY_PATH=$CONDA_PREFIX/lib` 会 `error while loading shared libraries`（退出码 **127**）→ **只有跑 Rust CLI 时才是必需项**
 
 ---
 
@@ -926,7 +929,7 @@ __pycache__
 
 ---
 
-## 16. 服务器实跑现状（2026-10-07~10-09 远程同步）
+## 16. 服务器实跑现状（2026-10-07~10-10 远程同步）
 
 > 本节全部为 **2026-10-09 在训练服务器上实测/复算得到**的数据（日志、TensorBoard event、checkpoint、牌谱重算），非推算。
 > 目的：把远程侧已经发生的事实固定下来，供与本机较新的文档做一次双向对账（需核对项见 §16.11）。
@@ -937,7 +940,7 @@ __pycache__
 |---|---|
 | 数据 | ✅ 2,630,640 局凤凰卓半庄（200902~202610）已在服务器，训练窗 2022-01~2026-08 = 813,145 局 |
 | GRP | ✅ 已训 30,000 步（约 1.9 epoch）；⚠️ val loss 仍在下降，**未收敛** |
-| 主模型 | ✅ 离线 CQL 一轮 200,000 步完成（仅覆盖一个 epoch 的 19%）；⚠️ 与 50k 步相比**对局强度持平** |
+| 主模型 | ✅ 第 1 轮 200k 步；✅ 第 2 轮 424k（白名单+grp_h128）**+2.86 pt 显著变强**；❌ 第 3 轮 650k（同池第 2 个 epoch）**δ=−0.03±0.59 无增益** → 见 §16.13/§16.15 |
 | 评测 | ❌ **当前评测体系失效**（对手是随机权重）→ 不可用 `test_play` 判断增益，也不可用 `best.pth` 选模型 |
 | 性能 | ⚠️ 吞吐被 CPU 管道卡住（实得 2.56 it/s vs GPU 上限 8.88），改 2 个参数可获 2.4× 免费加速 |
 | 工程风险 | ❌ 无 git 仓库、无异地备份、评测牌谱被覆盖；需立刻处理 |
@@ -997,7 +1000,7 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"   # 训练可省
 | `mortal/train_grp.py` | 10-08 03:51 | 新 `grp.control.max_train_steps`（L87/L251）、`grp_best.pth` 按 val loss 取最优（L232/L249）、`best_val_loss` 写入 state、验证集固定 generator seed `20261008`、日志加 `est. %`（按 10 局/文件估算 epoch 百分比）、每次启动强制 `lr = cfg.optim.lr` |
 | `mortal/player.py` | 10-08 02:49 | `TestPlayer` 的 `enable_amp` / `enable_rule_based_agari_guard` 改从 `[test_play]` 配置读（`.get(...)`）；评测改为固定种子块 `seed_start=(10000, 0x2000)`（可复现但永不换牌山，见 §14-16） |
 | `mortal/config.offline.toml` | 10-08 03:43 | 实跑配方（§16.5/§16.6）；`.bak` 为 GBK 乱码原件，已由 `fix_encoding.py` 转 UTF-8并修正 `val_globs` 缺失的 `Mortal/` 路径段 |
-| 新增小工具 | 10-09 | `mortal/ladder.py`（checkpoint 间 1v3 配对对抗）、`mortal/bench_pipe.py`（数据管道吞吐量基准）——本次复盘产物，不需要可删 |
+| 新增小工具 | 10-09 | `mortal/ladder.py`（checkpoint 间 1v3 配对对抗）、`mortal/bench_pipe.py`（数据管道吞吞吐基准）——本次复盘产物，不需要可删 |
 
 > ⚠️ 表中“上游无”是按行为反推，**未做精确 `git diff`**（服务器当前无外网，`curl raw.githubusercontent.com` 超时）。下次有网时第一步：`git clone` 上游到临时目录后 `diff -u` 校准，并把补丁提交进版本控制。
 
@@ -1101,7 +1104,7 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"   # 训练可省
 → 整体节奏已与人类凤凰卓相当接近（这本身说明特征/数据/训练链路完全跑通了）；差异集中在“不太会退”：流局率低 4.4 pp、ron 放铳高 12%。离线 RL 看不到“应该弃和”的反事实，这是预期内的缺陷，也是下一轮可以针对的点（`cql.min_q_weight`、奖励平滑、或 oracle 特征）。
 ⚠️ 口径提醒：两张表来自不同的“对手世界”（4 人类 vs 4 同家族模型），只能看趋势，不能绝对对齐。
 
-### 16.9 吞吐量实测（10-09 基准）
+### 16.9 吞吞吐实测（10-09 基准）
 
 | 配置 | 数据管道（不算 GPU） |
 |---|---|
@@ -1201,3 +1204,198 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"   # 训练可省
 | 尚未做 | **无远端也推不了**（今天 `curl raw.githubusercontent.com` 超时）；有网后：`git remote add origin <私有仓地址> && git push -u origin main && git push origin --tags` |
 
 > 坑：`git tag -a`（annotated）**也需要身份**。第一次只给 `commit` 加了 `-c`，结果 commit 成功、tag 报 `fatal: unable to auto-detect email address`；脚本已修正（两条命令共用 `GITID` 数组），并用 `--amend --no-edit` 合并为一个干净的基线提交。
+
+### 16.13 第 2 轮判定：【有效】（10-10，5000 sets = 20,000 半庄）
+
+上一轮“500 sets 看不出差异”的结论在加大样本后被推翻 —— 不是没变强，是样本不够。
+
+| 项 | 值 |
+|---|---|
+| 方法 | 双向同牌山配对。A = 新当挑战者（5 块 × 500 sets）；B = 旧当挑战者（5 块 × 500 sets，独立种子块）；δ = (pt_A − pt_B) / 2 |
+| A 方向 | 10,000 半庄 avg_pt = **+3.299**（SE 0.820）；5 块全正：+3.62 / +3.89 / +2.00 / +4.43 / +2.54 |
+| B 方向 | 10,000 半庄 avg_pt = **−2.430**（SE 0.856）；5 块全负（等价于新方 +2.43） |
+| **结论** | **δ = +2.86 pt/半庄，SE 0.59，t = +4.83，95%CI [+1.70, +4.03] → 第 2 轮（白名单 top400 + grp_h128）统计显著有效** |
+| 代价 | 20,000 局共 **29 分钟**（5 卡并行，每波 5×500 sets ≈ 14 分） |
+
+两条可复用的经验：
+
+1. **样本量要按 SE 倒推**：要分辨效应 δ，需 `sets ≥ 当前 sets × (2·SE/δ)²`（`tools/training/agg_ladder.py` 会自动算并打印）。500 sets 时 SE≈±1.9，完全定不了 ±1~3 pt 的胜负，而且小样本还会**低估**效应（本次：+0.70 → 加大后 +3.30）。
+2. 实测分块波动（5 块标准差 ≈ 1.0 pt）**小于**按独立样本算的 SE（±1.9）→ 同牌山四座位轮换确实压方差；但汇总器仍按独立样本保守估计。
+
+工具：`mortal/run_r2_ladder.sh`（5 卡两波并行，每任务独立日志目录）、`tools/training/agg_ladder.py`（分块明细 + δ + SE + t + 判读）。**20,000 局牌谱已全部保留**（`mortal/logs/ladder_r2/{A,B}_*/`，共 806 MB），后续要算行为统计或重配对分析无需重跑。
+
+### 16.14 第 3 轮在跑（10-10 05:34 启动）
+
+- 配方与第 2 轮**完全一致**（白名单 top400 + `grp_h128` + nw=8/fbs=16/RAYON=8），唯一实质变量是 `num_epochs = 2`（同一池 480,414 文件再过一遍）
+- 暖启：`checkpoints/round3/mortal.pth ← round2/mortal.pth`（steps=424,000）；预算 `max_train_steps = 650000`（再 +226k 步）
+- 路径：`mortal/config.round3.toml`（由 `tools/training/make_round3_cfg.sh` 从 round2 派生）、看板 `runs/main_r3`、评测 `runs/selection_r3`、日志 `logs/main_r3_train.log`、tmux 会话 `train_r3`（RTX 8000）
+- 启动实锤：`loaded 400 players` → `file list size: 480,414` → `total steps: 424,000 (~26,000)` → `device: cuda:0 (Quadro RTX 8000)`
+- ⚠ 定成败要看 **ladder vs round2 终态（424k）**，不能 vs 第 1 轮；且 epoch 2 是重复数据，holdout top1 上涨不能当变强证据
+
+### 16.15 第 3 轮判定：【无增益】（10-11，5000 sets = 20,000 半庄）
+
+第 3 轮于 10-10 15:56 **正常跑到预算 650,000 步自停**（无报错；10:4 h / 实测 6.7 it/s），产物 `checkpoints/round3/{mortal.pth, mortal_step_450k…650k}`。随后用与 §16.13 完全相同的双向配对方法判定（A = 650k 挑战 424k，B = 反向，各 5×500 sets，新种子块 60000+/70000+）：
+
+| 方向 | 结果 |
+|---|---|
+| A（650k 当挑战者，10,000 局） | avg_pt = **−0.059**，SE 0.845；5 块 −2.99/+0.52/+1.58/−0.20/+0.81 |
+| B（424k 当挑战者，10,000 局） | avg_pt = **−0.004**，SE 0.838 |
+| **强度差** | **δ = −0.03 pt/半庄，SE 0.595，t = −0.05，95%CI [−1.19, +1.14]** |
+| 结论 | **第 3 轮（同一白名单池的第 2 个 epoch）对强度毫无提升**；且这次不是“测不出”而是“测到了接近 0”——增益上界只有 +1.1 pt，与第 2 轮的 +2.86±0.59 形成鲜明对比 |
+
+旁证（三个口径互相印证）：
+
+1. **未见月 top1 不升反降**（202609，同批 12,288 样本）：424k **0.8122** → 450k 0.8114 → 550k 0.8110 → 650k 0.8091（第 1 轮 200k 为 0.8041）→ epoch 2 已在轻微过拟合这个池，不再泛化。
+2. 损失几乎不动：dqn_loss 424k 0.374 → 650k 0.363；cql 0.458→0.452；next_rank 0.741→0.725。
+3. 行为指标（agari/houjuu/riichi）在 450k→650k 均无方向性变化。
+
+**方法论警告（本次踩到）**：用固定种子块的 `test_play`（或基于它的逐局配对差）做跨轮判定会**严重偏高**。同一批 500 sets（10000-10499）已被三轮训练反复用于选模型，本轮配对法给出 Δ=+4.52±2.07（t=2.19），而全新种子块的 ladder 给出 δ=−0.03±0.59 —— **差了 4.5 pt**，全部是牌山过拟合。定成败必须用**未参与过选模型的新种子块**。
+
+两个待修的状态残留（10-11 处理进度）：
+
+- ✅ **已修**：`best_perf` 会随 state 一路继承：`round2/round3` 的 `mortal.pth` 里仍是第 1 轮在随机对手时代刷出的 `{avg_rank:1.0, avg_pt:90.0}` → `better` 条件永远不成立 → **`best.pth` 从第 2 轮起再没写过**。现 `train.py` 实现自动重置：存盘多写 `best_perf_baseline`（当时的 `baseline.test.state_file`），加载时命中“手动 `control.reset_best_perf` / 旧 state 无该字段（来源不明，保守重置，正好修好现有盘）/ 卫冕者已更换”任一→重置为哨兵 `{4.0, −135.0}` 并记日志。四路回归测试全过（`tools/training/test_bestperf_reset.sh`），详见 MANUAL §16.6。
+- 自写解析复算名次与 Rust `Stat` 在**平分 tie-break** 上不同（r3 差 0.006 名次、r2 差 0.023 名次 ≈ 1.4 pt），且 arena 导出的 `end_game` 不带 scores，只能累加 deltas → **判定一律以 ladder（Rust Stat）为准**，自算只作参考（工具 `tools/training/check_selection_stats.py` 可做这个交叉校验）。
+
+### 16.16 当前结论与下一步（10-11）
+
+- 已证实有效的只有**数据选择（白名单 top400）+ 更好的奖励模型**这一次跳跃（+2.86 pt）；**单纯同一池反复过数据无效**。
+- GPU 已全部空闲（10-10 15:56 至今日），磁盘 3.5 TB 可用；`checkpoints` 2.2 GB、`logs/ladder_r3` 815 MB（牌谱保留可事后重算）。
+- 下一轮候选（仍保持单变量）：① 收紧名单 top200（更强但数据更少，已备好强度榜 CSV 可直接切）；② `enable_augmentation=true`（样本×2 且不引入重复）；③ `gamma<1` 做跨局信用分配；④ 扩大时间窗到 2019+ 并同步重训 GRP。按 §16 的教训，**“多加一个 epoch”这类重复数据的做法应排最后**。
+
+---
+
+### 16.17 代码评审（10-11）与修复：4 个真 bug + 第 4 轮启动
+
+对全部本地修改（train.py/train_grp.py/player.py/ladder.py/三份 config/11 个新工具）做了一次以正确性为主的评审（含对真实牌谱回放验证），发现并修复：
+
+| # | 问题 | 严重度 | 修法/状态 |
+|---|---|---|---|
+| 1 | **三个工具的供托计分错**（`scan_player_ratings.py` / `check_selection_stats.py` / `paired_selection_diff.py`）：只取首局 scores 且从不扣立直宣言的 1000 → 每人分数高估 1000×立直次数，排名偏向高频立直者（实测**11~13% 半庄名次错**） | 会污染白名单 + 错误结论 | 已按 `stat.rs::from_game` 权威口径重写（每局 start_kyoku 重置 + reach_accepted −1000 + hora/ryukyoku deltas 含其余供托）；**交叉验证：runs/selection_r2/r3 复算与 Rust Stat 完全一致**（2.5055/+0.158 与 2.4560/+3.60）；旧值（2.5280/−1.215）已作废 |
+| 2 | **白名单 v1 因此有偏**（阈值附近的 53/400 人进出，约 ±1800 人次）→ 已重建 v2（阈值 +2.45；命中 492,810 文件 / 735,249 席位 / 244k 步每遍） | 影响训练数据选择 | 已重建并存为 `_v1`/`_v2` 两套；第 4 轮用 v2 |
+| 3 | round2/round3 的 `best.pth` 从未生成，而两份 config 的 `[1v3.challenger]` 指向它们 → 跑 one_vs_three 会 FileNotFoundError | 悬空引用 | 已各 cp 一份终态快照为 best.pth（round2←round2/mortal.pth、round3←round3/mortal.pth），引用不再悬空 |
+| 4 | `holdout_metrics.py` 未传 `worker_init_fn`（多 worker 重复遍历全表）、`--seed` 形同虚设 | 次要 | 已修（传 worker_init_fn + 真随机抽样 + 印出 seed）；**注意：修后抽样变了，旧的 holdout 绝对值不能与新值跨版比较** |
+| 5 | `test_bestperf_reset.sh` 的 grep 模式停在旧步数 425,000 | 次要 | 已改为 651,000 |
+
+评审确认无误的：训练循环不丢最后一次 save（raise SystemExit 位于 save/snapshot/test 之后且预算整除 save_every）；best_perf 重置逻辑正确；三份 run 脚本的环境变量/并发/相对路径无问题。评审建议项（**均已实现**）：① `agg_ladder.py` 新增按 set 的 block bootstrap（`--logs-root` + `--bootstrap`，不假设局间独立，并给出组内相关粗估）——对 R3 的 20,000 局实测：**组内相关 ρ≈+0.18（同牌山 4 局确实正相关），但 bootstrap SE=0.515 < 解析 SE=0.595、CI 更窄 → 解析口径偏保守**，R3 的 δ≈0 结论不变；② `reset_best_perf` 改为**一次性令牌**（state 记录 `best_perf_reset_token`，同值不重复触发，换值才再生效），四路回归测试新增 D1/D2 验证（D1 生效并写入令牌、D2 同值 0 次重置）。另外三处重复的计分实现已收敛为单一模块 `tools/mjai_score.py`（消除复制）。
+
+### 16.18 第 4 轮已启动（10-11 09:25，tmux `r4_chain`）
+
+- **唯一实验变量**：`enable_augmentation = true` + `augmented_first = true`（席位视角增强；冒烟已验：同一文件增强前后**样本数不变、obs 张量确实不同**——×2 来自两遍遍历而非每遍翻倍）
+- 基础设施同步升级：白名单换 v2、`file_index` 换新名（`main_r4_whitelist_v2.pth`，建于 72 s）、暖启自 `round2/mortal.pth`（424k，holdout top1 峰值）；预算 `max_train_steps=645000`（再训 221k 步 ≈ 0.91 遍增强样本）
+- 启动实锤：预检全绿（env_check）→ 暖启拷贝 → **`resetting best_perf {1.0,90.0} → {4.0,-135.0}, reason: 旧 state 未记录当时的卫冕者`（新补丁首次实战生效）** → `device: cuda:0 (Quadro RTX 8000)` → `loaded 400 players` → `file list size: 492,810`（与覆盖度预估一字不差）→ `total steps: 424,000`
+- 判定与训练在**同一会话链式执行**（`mortal/run_round4.sh`）：训练到点自停 → 双向各 5×500 sets（新种子块 80000+/90000+）→ `agg_ladder.py` 汇总；预计 ≈9.2 h + 29 min
+- 监控：`tail -f mortal/logs/round4_chain.log`（链）与 `mortal/logs/main_r4_train.log`（训练）；看板 `runs/main_r4`
+
+---
+
+## 17. 进展总纲（10-01→10-11 系统性汇总）
+
+> 新会话只读本节即可接手；需细节时按小节号回查 §8～§16。
+
+### 17.1 编年
+
+| 日期 | 里程碑 | 产出/要点 |
+|---|---|---|
+| 10-01 | 架构与可行性调研 | Rust+Python 双层分析；确认作者不开放权重且训练文档全为空占位（§3～§7） |
+| 10-01 | 天凤端点实测 | list.cgi / scc 格式 / 牌谱下载 / 年度 zip 已 404（§8） |
+| 10-02 | 发现 HF 数据集 | `tenhou-to-mjai` 2009–2025 全量，可用 hf-mirror（§8.6） |
+| 10-02~10-03 | 自建采集 + 文档 | 2026 YTD 130,407 局；TASKLIST/MANUAL 成文 |
+| 10-06 | 服务器环境 | conda mortal + torch 2.6.0+cu118 + rust 1.99 + libriichi.so/bins |
+| 10-07 | 数据全量上服 | HF 18 包 merge-hf + prune --apply → 2,630,640 局（§16.3） |
+| 10-08 | GRP + 第 1 轮训练 | grp 30k 步（21 min）；主模型 200k 步/22.9 h（§16.5/§16.6） |
+| 10-09 | 首次复盘 | 发现评测饱和与 best.pth 陷阱；吞吐瓶颈；代码补丁清单（§16.4/§16.7/§16.9） |
+| 10-09 | 工具与数据选择落地 | 玩家强度榜 + 白名单 top400；holdout_metrics / ladder / bench_pipe；git 基线；**第 2 轮开跑** |
+| 10-10 | GRP 两假设 + 第 2 轮完成 | 加步数无效、加容量有效（grp_h128）；第 2 轮 424,847 步因 `num_epochs=1` 静默退出 |
+| 10-11 | 双向判定与第 3 轮收尾 | 第 2 轮 δ=+2.86 显著；第 3 轮（epoch 2）δ=−0.03 无增益；best_perf 重置已实现并验证 |
+
+### 17.2 模型谱系与强度账（全部用 ladder 双向同牌山 ≥5000 sets 判定）
+
+| 世代 | 数据 | 奖励模型 | 步数 | 实测吞吐 | δ vs 上一代 | holdout top1（202609） | 产物 |
+|---|---|---|---|---|---|---|---|
+| R1 | 2022-01~2026-08 全体 813,145 局 | grp h64/l2 (30k) | 0→200k | 2.56 it/s / 22.9 h | —（基准） | 0.8041 | `mortal_step_000200000.pth` |
+| R2 | 同窗 + **白名单 top400**（480,414 文件） | **grp_h128** h128/l3 (60k) | 200k→424,847 | 6.71 it/s / 9.5 h | **+2.86 pt**（SE 0.59，t=4.83）✅ | **0.8122**（峰值） | `round2/mortal.pth` + step_250k…400k |
+| R3 | **与 R2 完全相同**，仅 `num_epochs=2` | 同 grp_h128 | 424k→650,000 | 6.7 it/s / 10.4 h | **−0.03 pt**（SE 0.595，t=−0.05，95%CI[−1.19,+1.14]）❌ | 0.8091（下降） | `round3/mortal.pth` + step_450k…650k |
+| R4（**在跑**） | R2 同窗 + **白名单 v2**（492,810 文件） | 同 grp_h128 | 424k→645,000（预算） | 预计 6.7 it/s / ≈9.2 h | 待定（判定中，新种子块 80000+/90000+） | 待测 | `round4/mortal.pth`（10-11 09:25 起） |
+
+→ **目前唯一有效的增益来自“换数据/换奖励”（R2），而不是“同数据多跑”（R3）**。现役最强模型 = `checkpoints/round3/mortal.pth`（650k；与 round2/424k 统计上等价，选它只是因为多跑了且行为指标不差）。
+
+### 17.3 可直接引用的量化事实
+
+| 主题 | 数值 |
+|---|---|
+| 数据 | 全树 2,630,640 局（200902~202610，16 GB）；训练窗 813,145；白名单 top400 → 480,414 文件 / 704,231 席位 |
+| 单局量 | 10.6 局/半庄；全座位 678 样本/文件；仅白名单座位 234.8 样本/文件 |
+| epoch 换算 | 白名单池 1 epoch ≈ **220,268 步**（R2 实测 224,847 = 102%，验证了估算链） |
+| 吞吐 | GPU 上限 8.88 it/s；管道 nw2/rayon4=3.12 → nw8/rayon8=**7.48** it/s（瓶颈在 CPU） |
+| 判定精度 | 单半庄顺位点 std ≈ 88 → 500 sets：SE(δ)≈±1.9；5000 sets：SE(δ)≈±0.59；需 `sets ≥ 当前 × (2SE/δ)²` |
+| 评测代价 | 500 sets（2000 局）≈ 14 分/卡；5 卡两波 5000 sets ≈ **29 分** |
+| GRP | val loss 平台在 30k 步；h128/l3 把 nll_last 1.2780→1.2361，但 **delta_pt std 恒≈0.70** → 受 7 维输入的信息量限制 |
+| 行为对照 | 与人类凤凰卓同口径：立直 0.1794 vs 0.1769、副露 0.4566 vs 0.4826、**流局 10.9% vs 15.3%（弃和不足）** |
+| 硬件 | 56 线程 / 251 GB 内存 / 4×P100 + 1×RTX 8000 / 磁盘剩 3.5 TB |
+
+### 17.4 代码与配置已做的修改（汇总）
+
+| 文件 | 修改 | 状态 |
+|---|---|---|
+| `mortal/train.py` | ① `max_train_steps` 预算自停；② `snapshot_every` 编号快照；③ 索引构建改 `start.get('names', [])` 防 KeyError；④ **`best_perf` 重置机制**：新增 `state['best_perf_baseline']` 记录当时的卫冕者，加载时若（手动 `control.reset_best_perf` / 旧 state 无记录 / 卫冕者已更换）则重置为哨兵 `{4.0, −135.0}` | ①②③ 已跑过三轮；④ **10-11 四路测试通过**（`tools/training/test_bestperf_reset.sh`） |
+| `mortal/train_grp.py` | `grp.control.max_train_steps`、`grp_best.pth` 按 val loss 取优、固定验证抽样种子、`est. %` 日志 | ✅ 已用（grp_h128 即此产物） |
+| `mortal/player.py` | `enable_amp` / `enable_rule_based_agari_guard` 从 `[test_play]` 读；固定评测种子块 | ✅（固定块现在只用于同轮趋势，见 §17.7-坑 2） |
+| `mortal/ladder.py` | 第 5 个参数 `log_dir`（并发必传） | ✅ 已用于 10-10/10-11 两次 5000 sets 判定 |
+| 配置 | `config.offline.toml`（R1）→ `config.round2.toml` → `config.round3.toml`（由 `make_round3_cfg.sh` 派生） | 共存，R1 产物不变 |
+| `.gitignore` | 补 `dataset/`、`mortal/{runs,logs,indexes}/` 等；**故意不忽略 `memory/`、`tools/`**（它们是本项目唯一文档） | ✅ |
+
+### 17.5 工具索引（一条命令能干一件事）
+
+| 工具 | 用途 |
+|---|---|
+| `mortal/env_check.py` | 开跑前自检（目录遮蔽/环境变量/选卡/config/globs/目录） |
+| `mortal/holdout_metrics.py` | 未见月 top1 一致率、Q 校准、R²、和了 top1（秒级，适合频繁监控） |
+| `mortal/ladder.py` + `mortal/run_ladder_r3.sh` | 单对/批量双向同牌山对抗 |
+| `tools/training/agg_ladder.py` | 汇总分块 → δ / SE / t / 95%CI / “还需多少 sets”；`--logs-root` 可加做按 set 的 block bootstrap（不假设局间独立） |
+| `tools/mjai_score.py` | **计分口径的唯一权威实现**（与 `stat.rs`/`rankings.rs` 对齐）：三个工具与 bootstrap 共用 |
+| `mortal/bench_pipe.py` | 数据管道吞吐基准（定 num_workers/RAYON） |
+| `tools/player_stats/build_whitelist.sh` | 重建玩家强度榜与 top-N 名单（813k 文件 77 秒） |
+| `tools/player_stats/whitelist_coverage.py` | 选 top-N 前算席位/样本/步数覆盖度 |
+| `tools/training/grp_quality_probe.py` | GRP 分位置真实质量（hit@1/3/6/9/末、nll） |
+| `mortal/run_grp_capacity.sh` + `grp_quality_probe.py --state/--hidden/--layers` | GRP 容量实验与同口径定档（注意 `grp_best.pth` 会被不同尺寸实验互盖，历史存档认各自 `state_file`） |
+| `tools/training/dump_curves.py` / `check_selection_stats.py` / `paired_selection_diff.py` | 曲线汇总 / 解析交叉校验 / 同牌山配对差 |
+| `tools/training/make_round3_cfg.sh`、`make_round4_cfg.sh` | 从上一轮 config 派生下一轮（只改预算/路径/变量） |
+| `mortal/run_round4.sh` | **端到端链**：env_check → 暖启 → 训练 → 双向判定 → 汇总（单 tmux 会话） |
+| `tools/training/smoke_round4_augmentation.py` | 启前冒烟：验白名单生效 + 增强样本确实不同（样本数守恒） |
+| `mortal/launch_round3.sh` / `run_r2_ladder.sh` / `run_ladder_r3.sh` |  tmux 长跑入口，**内建完整 env 重置** |
+
+### 17.6 数据与产物台账
+
+| 路径 | 内容 | 体量 |
+|---|---|---|
+| `dataset/mjai/houou4/` | 2,630,640 局 mjai（训练直接读） | 16 GB |
+| `dataset/tenhou_hf/` | 18 个 HF 年度原包 | 17 GB |
+| `dataset/raw/`、`dataset/index/` | 2026 自建 mjlog；清单 CSV + **强度榜 CSV/top400** | 1.2 GB / 197 MB |
+| `mortal/checkpoints/` | R1 快照、R2、R3、grp×3、随机 baseline | 2.2 GB |
+| `mortal/logs/ladder_r2`、`ladder_r3` | 两次 20,000 局判定牌谱（可事后重算） | 0.8 + 0.8 GB |
+| `mortal/indexes/` | `main_r2_whitelist_v1.pth`（480,414）等文件表 | 248 MB |
+| 本地 git | 分支 `main`，基线 `33e63bc`、`5a1867f`，tag `round1-complete`；**无远端** | 4.4 MB |
+
+### 17.7 坑位索引（按主题，详情在 §14 与 §16）
+
+| 主题 | 条目 |
+|---|---|
+| 评测与判定 | 随机 baseline 使 test_play 饱和（§14-15）；**固定种子块不能跨轮比较**（§16.15，虚高 4.5 pt）；小样本只会低估（§16.13）；`best_perf` 继承会停写 best.pth（已修）；自写解析与 Rust Stat 平分 tie-break 不同（±1.4 pt） |
+| 数据 | `file_index` 换名单/换窗必须改名；2026 部分无 `names`；exFAT 簇浪费（已迁服务器）；大文件传输必须打包 |
+| 训练 | 离线只跑一个 epoch 就静默退出（§14-22）；state_file 存在即续训；GRP 必须先行且尺寸与 checkpoint 必须同步；`grp_best.pth` 会被不同容量实验互盖 |
+| 环境 | `MORTAL_CFG` 必需（默认 config.toml 不存在）；`CUDA_DEVICE_ORDER=PCI_BUS_ID` 否则选卡错（§14-19）；`import libriichi` 必须在 `mortal/` 下（§14-20）；`LD_LIBRARY_PATH` 只有跑 Rust CLI 才必需（§14-21）；RAYON 必须启动前设好 |
+| 工程 | 长任务一律 tmux + 日志落 `mortal/logs/`；脚本内用绝对路径解释器 `$PY`；`pgrep -f` 要锚定模式；并发 ladder 必传独立 log_dir |
+
+### 17.8 未决与下一步
+
+| 类型 | 事项 |
+|---|---|
+| 已决策并执行 | **第 4 轮 = augmentation**（10-11 09:25 启动，链式脚本自带判定）；若判定有效，下一轮候选：top200 / gamma<1 / 扩窗+重训 GRP |
+| 可做未做 | akochan 外部锚点（需 JRE，本机无）；上游 `git diff` 校准补丁清单（**服务器无外网**，curl 超时）；git 无远端→推不出去；checkpoint 无异地备份；固定种子块轮换（代码层可改为每轮不同 `seed_start`）；GRP 目标形式改造（真实点数差监督）；`agg_ladder` 的 SE 按 set 做 block bootstrap 复核 |
+| 文档对账 | §16.11 四项（尤其本机手册的 §4.x 代码修改章节与本节 §17.4 的逐条比对）；本地 `.md` 仍无法从服务器读取（无盘映射），需上传后才能真合并 |
+
+### 17.9 新会话接手三步
+
+1. 读本节 §17.2/§17.8 确认“现在在哪、下一步选什么”；环境细节看 §16.2 与 `ENV_SETUP_P100.md §10`。
+2. `tmux ls` + `ps -eo pid,etime,args | grep python` 看有无残留（习惯：长任务只用 tmux，日志进 `mortal/logs/`）。
+3. 开跑前必做：`cd mortal && python env_check.py --cfg <本轮 config>`；训练完后只认 **ladder 双向 ≥5000 sets 且用全新种子块**（`run_ladder_r3.sh` 改三行即可复用）。

@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 from config import config
 from model import Brain, DQN
-from dataloader import FileDatasetsIter
+from dataloader import FileDatasetsIter, worker_init_fn
 
 ROOT = '/mnt/data8/mortal/Mortal/dataset/mjai/houou4'
 DEVICE = torch.device(config['control']['device'])
@@ -26,8 +26,12 @@ def collect(month, n_batch, bs, seed, workers):
     files = sorted(glob.glob(f'{ROOT}/{month}/*.json.gz'))
     if not files:
         raise SystemExit(f'没有文件: {ROOT}/{month}')
-    random.seed(seed)
+    # --seed 真正参与抽样（否则排序后的切片是确定的，seed 形同虚设）
+    random.Random(seed).shuffle(files)
     files = files[: max(n_batch * bs // 600 + 8, 64)]
+    # 与训练相同：worker_init_fn 会把 file_list 按 worker 切分；不加它每个 worker
+    # 都会各自完整遍历整个 file_list（重复采样 + 8 倍 IO）
+    workers = max(1, min(workers, len(files) // 4))
     ds = FileDatasetsIter(
         version = config['control']['version'],
         file_list = files,
@@ -40,7 +44,8 @@ def collect(month, n_batch, bs, seed, workers):
         augmented_first = False,
     )
     it = iter(DataLoader(ds, batch_size = bs, drop_last = True,
-                         num_workers = workers, pin_memory = True))
+                         num_workers = workers, pin_memory = True,
+                         worker_init_fn = worker_init_fn))
     batches = []
     while len(batches) < n_batch:
         obs, actions, masks, std, kr, ranks = next(it)
@@ -108,8 +113,8 @@ def main():
     bs = config['control']['batch_size']
     workers = args.workers if args.workers is not None else config['dataset']['num_workers']
     batches = collect(args.month, args.n, bs, args.seed, workers)
-    print(f'holdout={args.month} batches={len(batches)} x bs={bs} '
-          f'= {len(batches) * bs:,} 样本（同一批数据用于所有 checkpoint）', flush = True)
+    print(f'holdout={args.month} seed={args.seed} batches={len(batches)} x bs={bs} '
+          f'= {len(batches) * bs:,} 样本（同一批数据用于所有 checkpoint；换 seed 会换抽样）', flush = True)
     for ckpt in args.ckpts:
         evaluate(ckpt.split('/')[-1], ckpt, batches, bs)
 

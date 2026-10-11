@@ -18,49 +18,32 @@ import argparse
 import collections
 import csv
 import glob as globmod
-import gzip
-import json
 import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 
-PTS = [90.0, 45.0, 0.0, -135.0]
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+from mjai_score import PTS, final_scores, load_events, player_by_rank  # noqa: E402  权威计分口径（与 stat.rs 对齐）
 TOTAL = 250000.0   # 南场结束前理论上界，仅用于无 end_game 时的兜底判断
 
 
 def scan_one(path: str):
-    """返回 ([(name, rank_index, pt), ...], 局数) 或 (None, 错误原因)。"""
+    """返回 ([(name, rank_index, pt), ...], 错误原因)；成功时原因为空串。"""
     try:
-        with gzip.open(path, 'rt', encoding='utf-8') as f:
-            text = f.read()
+        events = load_events(path)
     except Exception as exc:  # noqa: BLE000
         return None, type(exc).__name__
 
-    scores = [25000.0] * 4
     names = None
     kyoku = 0
     ended = False
-    for line in text.splitlines():
-        if not line:
-            continue
-        try:
-            o = json.loads(line)
-        except Exception:  # noqa: BLE000
-            return None, 'bad_json'
+    for o in events:
         t = o.get('type')
         if t == 'start_game':
             names = o.get('names')
         elif t == 'start_kyoku':
             kyoku += 1
-            if kyoku == 1:
-                s = o.get('scores')
-                if isinstance(s, list) and len(s) == 4:
-                    scores = [float(x) for x in s]
-        elif t in ('hora', 'ryukyoku'):
-            d = o.get('deltas')
-            if isinstance(d, list) and len(d) == 4:
-                for i in range(4):
-                    scores[i] += float(d[i])
         elif t == 'end_game':
             ended = True
 
@@ -71,7 +54,7 @@ def scan_one(path: str):
     if not ended or kyoku == 0:
         return None, 'incomplete'
 
-    order = sorted(range(4), key=lambda i: -scores[i])
+    order = player_by_rank(final_scores(events))   # 权威口径：稳定排序，平分按座位号小者优先
     rows = []
     for rank, seat in enumerate(order):
         rows.append((str(names[seat]), rank, PTS[rank]))
@@ -100,6 +83,10 @@ def main() -> None:
     for pat in args.globs:
         files.extend(globmod.glob(pat, recursive=True))
     files.sort(reverse=True)
+    if not files:
+        print('未匹配到任何文件！本工具的 --globs 约定为「相对仓库根目录」的相对路径，'
+              '请在 /mnt/data8/mortal/Mortal 下运行（如 build_whitelist.sh 那样）。', flush=True)
+        return
     if args.limit:
         files = files[:args.limit]
     print(f'待扫文件: {len(files):,} | workers={args.workers}', flush=True)

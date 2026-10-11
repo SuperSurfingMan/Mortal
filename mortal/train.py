@@ -99,10 +99,22 @@ def train():
     scheduler = LinearWarmUpCosineAnnealingLR(optimizer, **config['optim']['scheduler'])
     scaler = GradScaler(device.type, enabled=enable_amp)
     test_player = TestPlayer()
-    best_perf = {
+    # 哨兵值取最差档（4 人局 avg_rank 4 / avg_pt −135），保证首次评测必定为新纪录
+    init_best_perf = {
         'avg_rank': 4.,
         'avg_pt': -135.,
     }
+    best_perf = dict(init_best_perf)
+
+    # `best_perf` 只在「同一个卫冕者」下可比：test_play 的对手（baseline.test.state_file）一旦换代，
+    # 历史阈值就失去意义（例如第 1 轮 vs 随机权重刷出的 avg_rank=1.0 / avg_pt=90 饱和值，
+    # 换成真实卫冕者后永不满足 better 条件 → best.pth 永久停写）。因此记下换代标识并在变更时重置。
+    #
+    # 手动开关 `control.reset_best_perf` 是**一次性令牌**：任何非 false 值（true 或字符串）只在
+    # 它与 state 里记录的上次令牌不同时生效一次（存盘时会把令牌记进 state）；想再次强制重置就
+    # 换一个值（如日期字符串）。这样即使忘了删开关，也不会每次重启都把 best.pth 的竞争重置。
+    champion_baseline = config['baseline']['test']['state_file']
+    reset_token = config['control'].get('reset_best_perf', False)
 
     steps = 0
     state_file = config['control']['state_file']
@@ -120,6 +132,21 @@ def train():
         scaler.load_state_dict(state['scaler'])
         best_perf = state['best_perf']
         steps = state['steps']
+
+        saved_baseline = state.get('best_perf_baseline')
+        saved_token = state.get('best_perf_reset_token', False)
+        if reset_token is not False and reset_token != saved_token:
+            reason = (f'config 里 control.reset_best_perf={reset_token!r} 与上次记录 '
+                      f'{saved_token!r} 不同（一次性生效）')
+        elif saved_baseline is None:
+            reason = '旧 state 未记录当时的卫冕者（来源不明，保守重置）'
+        elif path.abspath(saved_baseline) != path.abspath(champion_baseline):
+            reason = f'卫冕者已更换: {saved_baseline} → {champion_baseline}'
+        else:
+            reason = ''
+        if reason:
+            logging.info(f'resetting best_perf {best_perf} → {init_best_perf}, reason: {reason}')
+            best_perf = dict(init_best_perf)
 
     if not online and max_train_steps > 0 and steps >= max_train_steps:
         logging.info('training budget already reached')
@@ -315,6 +342,10 @@ def train():
                     'steps': steps,
                     'timestamp': datetime.now().timestamp(),
                     'best_perf': best_perf,
+                    # 与 best_perf 配套的换代标识：下一次用不同卫冕者重启训练时可自动重置
+                    'best_perf_baseline': champion_baseline,
+                    # 上次生效的一次性令牌：同值的 reset_best_perf 不会重复触发重置
+                    'best_perf_reset_token': reset_token,
                     'config': config,
                 }
                 torch.save(state, state_file)

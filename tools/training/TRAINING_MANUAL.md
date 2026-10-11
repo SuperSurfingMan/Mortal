@@ -26,6 +26,7 @@
 13. [附录 B：数据更新后如何重训](#附录-b数据更新后如何重训)
 14. [远程实跑记录与修正（2026-10-07~10-09）](#14-远程实跑记录与修正2026-10-0710-09)
 15. [第 2 轮就绪状态（10-09 已落地）](#15-第-2-轮就绪状态10-09-已落地)
+16. [第 2 轮判定结果与第 3 轮（10-10）](#16-第-2-轮判定结果与第-3-轮10-10)
 
 ---
 
@@ -1024,7 +1025,7 @@ python ladder.py <challenger.pth> <champion.pth> [seed_start=30000] [sets=500]
 | 6 | 外部锚点（可选） | akochan：装 JRE → `AKOCHAN_DIR`/`AKOCHAN_TACTICS` → `[1v3.akochan] enabled=true` → `python one_vs_three.py` |
 | 7 | 在线自博弈（最后才动） | `online=true` + `freeze_bn.mortal=true`；`server.py` + `train.py` + `client.py`×多（P100 当 client 集群）；不要绕过 `main()` 的子进程规避 |
 
-**重要认知更新**（§0 “三个事实”之外的第 6 条）：本轮已经实测到“**loss 在降、人类一致率在涨，但对局强度持平**”。在 `gamma=1` + CQL 锚定行为策略的设定下，离线阶段本质上是“把人类行为拟合得更准”，而不是“超越人类”。想拿到真增益，必须换信号源（GRP 质量/数据选择/跨局视界）或进入在线自博弈。**因此“把 200k 改成 1M 同配方续训”是低优先选项。**
+**重要认知更新**（§0 “三个事实”之外的第 6 条）：本轮已经实测到“**loss 在降、人类一致率在涨，但对局强度持平**”。在 `gamma=1` + CQL 锚定行为策略的设定下，离线阶段本质上是“把人类行为拟合得更准”，而不是“超越人类”。想拿到真增益，必须换信号源（GRP 质量/数据选择/跨局视界）或进入在线自博弈。**因此“把 200k 改成 1M 同配方续训”是低优先选项。**（→ 10-11 已由 §16.5 实证：同池第 2 个 epoch 的 δ=−0.03±0.59，确实无增益）
 
 > ⚠️ 本小节里“GRP 未收敛、先续训到 100k~150k”的判断已由 10-09 的续训实验**推翻**（平台期在 30k 就到），结论以 §15 为准。
 
@@ -1162,6 +1163,118 @@ python holdout_metrics.py checkpoints/round2/mortal.pth checkpoints/mortal_step_
 尚未做（需外网）：`git remote add origin <私有仓地址> && git push -u origin main && git push origin --tags`（今天 `curl raw.githubusercontent.com` 超时）。推不动的这段时间，`backups/code_docs_*.tar.gz` 是唯一可带走的副本。
 
 > 坑：`git tag -a`（annotated）**也需要身份**。第一次只给 `commit` 加了 `-c`，结果 commit 成功、tag 报 `fatal: unable to auto-detect email address`；脚本已修正（两条命令共用 `GITID` 数组）。
+
+---
+
+## 16. 第 2 轮判定结果与第 3 轮（10-10）
+
+### 16.1 第 2 轮为何“提前退出”（不是故障）
+
+预算 `max_train_steps = 450000`，实际停在 **424,847 步**：从 200k 暖启算起吃了 **224,847 步**，而同口径实测白名单池（480,414 文件 × 234.8 样本/文件 ÷ 512）= **1 个 epoch ≈ 220,268 步**（± 10,442），即实际消耗为预测的 **102%** → **离线模式跑完一个 epoch 就 `break`**（源码有意设计），与预算无关。日志特征：无 Traceback、无 `training budget reached`，末尾只有一行 `ResourceWarning: Implicitly cleaning up <TemporaryDirectory>`（解释器正常关闭的 GC 噪声，第 1 轮正常退出时也一样），cgroup `oom_kill=0`。
+
+要跑更长只有两条路：提 `num_epochs`（第 3 轮就是这么做的），或降 `max_train_steps` 让它“预算到点自停”（数字游戏，不增加数据）。
+
+### 16.2 判定实验的正规做法（5 卡并行，已实测）
+
+```bash
+# 前提：ladder.py 已支持第 5 个参数 log_dir（并发必传，否则互相 rmtree 删牌谱）
+bash mortal/run_r2_ladder.sh          # 已写成脚本，内含完整 env 重置
+```
+
+| 要点 | 值 |
+|---|---|
+| 规模 | 双向各 5 块 × 500 sets = 5000 sets = 20,000 半庄 |
+| 卡分配 | 每任务一张卡（`CUDA_DEVICE_ORDER=PCI_BUS_ID` + `CUDA_VISIBLE_DEVICES=2/0/1/3/4`），两波串行 |
+| 实测耗时 | **每波 ≈ 14 分，总计 29 分**（500 sets = 2000 局） |
+| 统计量 | δ = (pt_A − pt_B)/2，SE 按独立样本保守估计；`agg_ladder.py` 输出 t、95%CI 与“还需多少 sets” |
+| 牌谱 | 全部保留在 `mortal/logs/ladder_r2/{A,B}_*/`（806 MB），可事后重算行为统计 |
+
+### 16.3 结果：第 2 轮【有效】
+
+| 项 | 值 |
+|---|---|
+| A（新当挑战者，10,000 局） | avg_pt **+3.299**，SE 0.820；5 块全正（+2.00 ~ +4.43） |
+| B（旧当挑战者，10,000 局） | avg_pt **−2.430**，SE 0.856；5 块全负 |
+| **强度差** | **δ = +2.86 pt/半庄，SE 0.59，t = +4.83，95%CI [+1.70, +4.03]** |
+| 结论 | 白名单 top400 + grp_h128 的组合 **统计显著变强**（相对第 1 轮 200k） |
+
+**重要教训**：上次两组各 500 sets 给出 +0.70 / +2.23，均落在噪声内→差点误判为“无增益”。样本量需按 `sets ≥ 当前 sets × (2·SE/δ)²` 倒推；小样本不只能“判不出”，还会**低估**效应。
+
+### 16.4 第 3 轮（在跑）
+
+| 项 | 值 |
+|---|---|
+| 变量 | **只有 `num_epochs` 1→2**（同一白名单池再过一遍）；其余与第 2 轮全同 |
+| 配置 | `mortal/config.round3.toml`（`tools/training/make_round3_cfg.sh` 从 round2 派生） |
+| 暖启 / 预算 | `checkpoints/round3/mortal.pth ← round2/mortal.pth`（424,000）；`max_train_steps = 650000`（再 +226k 步） |
+| 启动 | 10-10 05:34，tmux 会话 `train_r3`，日志 `logs/main_r3_train.log`，看板 `runs/main_r3` |
+| 实测 | 6.7 it/s（与第 2 轮一致）→ 10-10 15:56 已到预算并正常退出（见 §16.5） |
+| 判定基准 | ⚠ ladder 必须 **vs round2 终态 424k**（不是 vs 第 1 轮）；且 epoch 2 属重复数据，holdout top1 上涨不算变强证据 |
+| 启动命令 | `bash mortal/launch_round3.sh`（内含“每次跑前重置全部环境变量”的写法） |
+
+> 坑（本次踩过）：`launch_round3.sh` 里的前置自检用了 base 环境的 `python`（无 torch）→ `set -e` 下脚本在启动前就退出。脚本里**所有 python 调用都必须用绝对路径的解释器** `$PY`，不能依赖已经激活的 conda 环境（tmux 新会话不会继承）。
+
+### 16.5 第 3 轮结果：跑到预算正常退出，判定为【无增益】
+
+10-10 15:56 日志 `training budget reached`（650,000 步，10.4 h，6.7 it/s，无报错）。用与 §16.3 相同的双向配对方法（新种子块 60000+/70000+）判定：
+
+| 方向 | avg_pt | SE |
+|---|---|---|
+| A：650k 挑战 424k（10,000 局） | −0.059 | 0.845 |
+| B：424k 挑战 650k（10,000 局） | −0.004 | 0.838 |
+| **δ(650k − 424k)** | **−0.03 pt/半庄** | **SE 0.595，t=−0.05，95%CI [−1.19, +1.14]** |
+
+旁证：未见月 top1 **不升反降** 0.8122(424k) → 0.8091(650k)；dqn_loss 仅 0.374→0.363。
+
+→ **结论：同一白名单池重复过数据（epoch 2）不产生强度增益**。下一轮请换信息源，不要再靠加 epoch/加步数；复跑命令：`bash mortal/run_ladder_r3.sh`（脚本内含每任务完整 env 重置，~29 分钟出结果）。
+
+### 16.6 两个必修的残留
+
+1. **~~`best.pth` 自第 2 轮起再没写过~~（已修，10-11）**：原因—— state 里的 `best_perf` 一路继承第 1 轮在随机对手下的 `{1.0, 90.0}`，`better` 条件永不成立。现 `mortal/train.py` 已实现自动重置：
+   - 存盘时多写一个字段 `best_perf_baseline = config['baseline']['test']['state_file']`（当时的卫冕者）；
+   - 加载时若命中三者任一→ 重置为哨兵 `{avg_rank:4, avg_pt:-135}` 并记日志：① 手动开关 `control.reset_best_perf = true`；② 旧 state 里没有该字段（来源不明，保守重置，正好修好现有的 round2/round3 盘）；③ 卫冕者路径变了（`abspath` 比较）；
+   - 日志样子：`resetting best_perf {...} → {...}, reason: 卫冕者已更换: A → B`。
+   - 手动开关 `control.reset_best_perf` 是**一次性令牌**：非 false 值只在「与 state 里记录的上次令牌不同」时生效一次（存盘写入 `best_perf_reset_token`）；想再次强制重置就换一个值（如日期串）。避免忘删开关导致每次重启都重置 best.pth 竞争。
+   - 回归测试：`bash tools/training/test_bestperf_reset.sh`（四路：A 旧 state 重置+存盘写入标识 / B 同卫冕者不重置 / C 换卫冕者重置 / D 令牌一次性——D1 生效并写令牌、D2 同值 0 次重置），10-11 全部通过。
+   - 效果：换代后首次评测必记为新纪录，`best.pth` 回到“在当前卫冕者面前刷新纪录”的正确语义；但**选模型仍应以 ladder 为准**（`best.pth` 只反映单个固定种子块）。
+2. **固定种子块的 `test_play` 不能跨轮比较**：同一批 500 sets 已被多轮选模型使用，逐局配对法给出 Δ=+4.52±2.07，而新种子块 ladder 给出 −0.03±0.59（差 4.5 pt，全是牌山过拟合）。定成败一律用**未参与过选模型的新种子块**。
+
+### 16.7 下一轮（第 4 轮）候选配方
+
+| 优先 | 变量 | 做法 | 预期与代价 |
+|---|---|---|---|
+| 1 | 收紧名单 | `player_names_files` 换 top200（长期 avg_pt≥+3.97） | 席位 324,484 → 108k 步/epoch；强度更高但数据更少，建议配 `max_train_steps≈+110k` |
+| 2 | 数据增强 | `enable_augmentation = true` | 样本×2 且不引入重复（优于加 epoch）；同池步数×2 |
+| 3 | 跨局视界 | `env.gamma = 0.995` 或 0.99 | 让 Q 覆盖多局，改善信用分配；与第 1 轮 “强度不涨”的推测直接相关 |
+| 4 | 扩大时间窗 | globs 改 2019+ 或全量 2.63M，**并同步重训 GRP** | 单 epoch 步数线性变大（全量 ≈ 3.3× 当前），需重算预算 |
+| 5 | 加 epoch / 加步数 | ❌ 已证无效（§16.5） | 不推荐 |
+
+选模型的硬规则：每轮结束只认 **ladder 双向 ≥5000 sets 且用新种子块**；胜出才把它的终态当作下一轮的 `baseline.test.state_file`（卫冕者），并同时重置 `best_perf`。
+
+### 16.8 代码评审（10-11）与第 4 轮配方
+
+**评审范围**：全部本地修改（train.py / train_grp.py / player.py / ladder.py / 三份 config / 11 个新工具），含对真实牌谱的回放验证。结果与修复见 [MEMORY.md §16.17](../../memory/MEMORY.md)；对训练侧最重要的三条：
+
+1. **三个自写工具的供托计分错**（只取首局 scores、不扣立直宣言的 1000）→ 每人分数高估 1000×立直次数 → 排名偏高频立直者（实测 **11~13% 半庄名次错**）。已按 `libriichi/src/stat.rs::from_game` 权威口径重写（每局 `start_kyoku` 重置 + `reach_accepted` −1000 + hora/ryukyoku 的 deltas 含其余供托；排名不含终局残供补齐）。**校验方式：用修好的 `check_selection_stats.py` 复算 `runs/selection_r2/r3`，必须与 Rust Stat（TB 里的 avg_rank/avg_pt）**逐位一致**：实测 2.5055/+0.158 与 2.4560/+3.60 ✓**。
+2. **白名单 v1 因此有偏** → 已重建 v2（阈值 +2.45；与 v1 相比 **53/400 人进出**）；文件名 `player_ratings_2022_2026H1_v2.csv` / `top_players_400_v2.txt`，旧版存 `_v1` 备查；第 4 轮起用 v2。
+3. round2/round3 缺失的 `best.pth` 已补（各自 `mortal.pth` 的副本），配置里的 `[1v3.challenger]` 不再悬空。
+
+> ⚠ 两个口径变更提醒：① `holdout_metrics.py` 已修 worker 分片与 `--seed`（**换 seed 就换抽样**，与修复前的绝对值不可跨版比较）；② `paired_selection_diff.py` / `check_selection_stats.py` 的旧输出（曾报 Δ=+4.52±2.07）作废；三个工具的逻辑已收敛到 `tools/mjai_score.py`，修复后配对法复算 r2/r3 为 Δ=+3.44±2.08（但仍是"被反复使用的选择块"，只作参考）。
+>
+> 附加：`agg_ladder.py --logs-root` 可对现有牌谱做**按 set 的 block bootstrap** 复核。对 R3 的 20,000 局实测：ρ≈+0.18、bootstrap SE 0.515 < 解析 0.595 → **解析口径偏保守**，δ≈0 结论不变。
+
+### 16.9 第 4 轮（在跑）：augmentation
+
+唯一实验变量 = `enable_augmentation = true` + `augmented_first = true`（席位视角增强；冒烟验证：同一文件增强前后**样本数不变、obs 张量不同** → ×2 来自两遍遍历）。基础设施：白名单 v2 + 新 `file_index`；暖启自 `round2/mortal.pth`（424k）。
+
+| 项 | 值 |
+|---|---|
+| 配置 | `mortal/config.round4.toml`（`tools/training/make_round4_cfg.sh` 派生） |
+| 预算 | `max_train_steps = 645000`（+221k 步 ≈ 0.91 遍增强样本；v2 池 1 遍 ≈ 244k 步） |
+| 链式脚本 | `mortal/run_round4.sh`：env_check → 暖启 → 训练 645k → 双向各 5×500 sets（新种子 80000+/90000+）→ agg_ladder 汇总 |
+| 会话/日志 | tmux `r4_chain`；`logs/round4_chain.log`、`logs/main_r4_train.log`、`logs/ladder_r4/` |
+| ETA | 训练 ≈ 9.2 h（至 10-11 18:45 UTC 前后）+ 判定 ≈ 29 min |
+| 判进 | δ > 0 且超 ±0.6 pt（5000 sets 的 2σ）→ 增强有效；否则下一轮试 top200 / gamma<1 / 扩窗+重训 GRP |
 
 ---
 

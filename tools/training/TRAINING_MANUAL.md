@@ -1210,6 +1210,8 @@ bash mortal/run_r2_ladder.sh          # 已写成脚本，内含完整 env 重�
 | 启动 | 10-10 05:34，tmux 会话 `train_r3`，日志 `logs/main_r3_train.log`，看板 `runs/main_r3` |
 | 实测 | 6.7 it/s（与第 2 轮一致）→ 10-10 15:56 已到预算并正常退出（见 §16.5） |
 | 判定基准 | ⚠ ladder 必须 **vs round2 终态 424k**（不是 vs 第 1 轮）；且 epoch 2 属重复数据，holdout top1 上涨不算变强证据 |
+
+**→ 10-11 续章见 §16.10**（恢复后触发 NaN 崩坏，已加三重防护，并从 500k 干净快照以 fp32 重启）
 | 启动命令 | `bash mortal/launch_round3.sh`（内含“每次跑前重置全部环境变量”的写法） |
 
 > 坑（本次踩过）：`launch_round3.sh` 里的前置自检用了 base 环境的 `python`（无 torch）→ `set -e` 下脚本在启动前就退出。脚本里**所有 python 调用都必须用绝对路径的解释器** `$PY`，不能依赖已经激活的 conda 环境（tmux 新会话不会继承）。
@@ -1262,6 +1264,37 @@ bash mortal/run_r2_ladder.sh          # 已写成脚本，内含完整 env 重�
 > ⚠ 两个口径变更提醒：① `holdout_metrics.py` 已修 worker 分片与 `--seed`（**换 seed 就换抽样**，与修复前的绝对值不可跨版比较）；② `paired_selection_diff.py` / `check_selection_stats.py` 的旧输出（曾报 Δ=+4.52±2.07）作废；三个工具的逻辑已收敛到 `tools/mjai_score.py`，修复后配对法复算 r2/r3 为 Δ=+3.44±2.08（但仍是"被反复使用的选择块"，只作参考）。
 >
 > 附加：`agg_ladder.py --logs-root` 可对现有牌谱做**按 set 的 block bootstrap** 复核。对 R3 的 20,000 局实测：ρ≈+0.18、bootstrap SE 0.515 < 解析 0.595 → **解析口径偏保守**，δ≈0 结论不变。
+
+### 16.10 第 4 轮 NaN 事故与三重防护（10-11）
+
+一句话：**恢复续跑后 1000 步内 AMP+BN 污染导致全状态 NaN**；训练崩在 TB 的 histogram 上，链条又带着 NaN 模型去判定跑了 12 分钟。完整时间线与扫描数据见 [MEMORY.md §16.20](../../memory/MEMORY.md)。
+
+已固化的防护（后续轮次自动继承，因为都改在 train.py / 链脚本模板里）：
+
+| 防护 | 位置 | 行为 |
+|---|---|---|
+| finite 守卫 | `mortal/train.py` 存盘段 | 参数或本周期 loss 非有限 → `logging.error` + `SystemExit(1)`，**不覆盖 checkpoint**，并提示回滚到 `mortal_step_*.pth` |
+| histogram 守卫 | 同上 | 先过滤非有限值再 `add_histogram`，为空则跳过 → NaN 不再打崩训练进程 |
+| 退出码守卫 | `mortal/run_round4.sh`（后续轮同型） | 训练非 0 退出即打印回滚指引并 `exit`，**不进判定** |
+
+标准恢复动作（本次实际执行）：
+
+```bash
+cd /mnt/data8/mortal/Mortal/mortal
+# 1) 找最新干净快照（finite 检查；best.pth 优先，因为它带最新 best_perf 与 baseline 标识）
+python -c "
+import torch
+for f in ['checkpoints/round4/best.pth','checkpoints/round4/mortal_step_000500000.pth']:
+    s=torch.load(f,map_location='cpu',weights_only=True)
+    bad=sum(1 for m in ('mortal','current_dqn','aux_net') for k,v in s[m].items() if not torch.isfinite(v).all())
+    print(f, s['steps'], '非有限张量', bad)
+"
+# 2) 回滚 + 关 AMP（config 里 enable_amp=false）后重跑同一链脚本
+cp checkpoints/round4/best.pth checkpoints/round4/mortal.pth
+tmux new -d -s r4_fix 'bash run_round4.sh >> logs/round4_resume.log 2>&1'
+```
+
+吞吐代价（fp32）：GPU2 显存 2.7→4.7 GB、利用率 94%；实测 it/s 出来后再更新 §14.5 与本节（原 AMP 6.7 it/s → 145k 步约 6 h；若 fp32 掉到 ~4.5 it/s 则约 9 h）。
 
 ### 16.9 第 4 轮（在跑）：augmentation
 

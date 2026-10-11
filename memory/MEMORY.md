@@ -883,6 +883,8 @@ __pycache__
 24. ⚠️ **正在运行的 bash 脚本不能被编辑**：bash 是**按字节偏移增量读取**脚本的，改动后它会从错位处继续读 → 轻则报 `$'\xxx' : command not found`（偏移落在多字节汉字中间），重则**把已执行过的命令再跑一遍**（10-11 真踩：patch `run_round4.sh` 后它重跑了 `train.py` 行，冒出幽灵训练进程）。正确做法：先停会话再改脚本，或永不编辑已启动的脚本（用新文件/新版本号）。
 25. ⚠️ **`pkill -f "<模式>"` 会匹配到执行它的 shell 自己**：只要命令行里含同一字符串就会被自杀（输出截断、后续命令不执行）。改用 `pgrep -f "[t]rain.py"`（方括号断字）拿 PID 再 `kill`。
 26. ⚠️ **SIGINT 停训后 DataLoader worker 会变孤儿进程**：主进程退出不回收到它们（PPID 变 1，继续占 CPU/文件句柄），必须再按 PID 补一刀，并 `pgrep` 确认归零后才算停干净（GPU 显存会随主进程释放，所以只看显存会漏掉）。
+27. ⚠️ **AMP 下 BatchNorm 的 running stats 会在前向就被污染，救不回来**：一次 fp16 溢出后，GradScaler 只能跳过参数更新，但 BN 的 running_mean/var 已在那次前向里被写坏 → 前向从此 NaN，并连带把权重与优化器状态全部拉坏（10-11 实测扫描：Brain 572 个非有限张量、其中 162 个是 BN buffer，优化器状态 820 个）。发作是**数据顺序相关**的（重启后洗牌变了，于是在续跑后 1000 步内就中了），所以"上一段没事"不代表安全。处置：`control.enable_amp = false`（ENV 手册 FAQ 的既定兜底）+ train.py 存盘前的 finite 守卫（见 §16.20）。
+28. ⚠️ **两处"次生灾害"要把链条关紧**：① TB 的 `add_histogram` 遇全 NaN 会抛 `ValueError: The histogram is empty` **直接打死训练进程**（看着像"训练自己挂了"）；② 链式脚本不校验训练退出码，就会**带着 NaN 模型继续跑判定**（实测浪费 5 卡 ≈12 min，结论 avg_rank 3.92 / avg_pt −125 全是垃圾）。已修：histogram 先过滤非有限值；链脚本 `train_code=$?` 非 0 即跳过判定并退出。
 
 ---
 
@@ -1321,6 +1323,45 @@ tmux new -d -s tb "cd $PWD && export LD_LIBRARY_PATH=/mnt/data8/miniconda3/envs/
 1. **运行中的 bash 脚本不能编辑**：「按字节偏移增量读取」→ 我 patch `run_round4.sh` 后它从错位处重读，把 `$PY -u train.py` 又执行了一遍（幽灵进程 247719 跑了 50 s，被后续清理 SIGTERM 掉；未到存盘点、未污染任何产物）。以后要么先停会话再改脚本，要么用独立的新脚本文件。
 2. `pkill -f "python -u train.py"` 会匹配到执行它的 shell 自己（命令行里含同串）→ 输出被截断；改用 `pgrep -f "[t]rain.py"` 拿 PID 再 kill。
 3. SIGINT 停训后 DataLoader worker 会变**孤儿进程**（父进程退出不回收到它们），需再按 PID 补一刀；确认 `pgrep` 为 0 再收工。
+
+> ⚠ 后续：按本单恢复后 ≈3 分钟即触发 **NaN 崩坏事故**，复盘与三重防护见 §16.20。
+
+---
+
+### 16.20 第 4 轮 NaN 崩坏事故复盘与三重防护（10-11 15:49–16:21）
+
+**起因**（也正是"TB 上 r3/r4 的 loss 为什么看着杂乱无章"）：三层原因，第三层是事故。
+
+| 层 | 原因 | 实测 |
+|---|---|---|
+| ① 显示口径 | 各轮 step 是**暖启延续**的：r2 画 201k–424k、r3 画 **425k–650k**、r4 又从 **425k** 起 → 同一段 x 轴叠着两条互不对应的曲线 | 三轮 dqn_loss 全在 0.356~0.384 窄带内 |
+| ② 噪声本底 | `loss/*` 是每 1000 步一个**窗口均值**，目标是单样本 MC 回报 → 抖动与轮次间真实差异同量级 | 逐点 mean\|Δ\|≈0.0033、max\|Δ\|≈0.0115 |
+| ③ **NaN 事故** | 542k 步起 dqn/cql/next_rank 全 NaN，TB 表现为断线掉落 | 见下方时间线 |
+
+**事故时间线（UTC）**：
+
+| 时刻 | 事件 |
+|---|---|
+| 14:42 | 重启前最后存盘 541,000 步，dqn_loss=0.3706（有限）✅ |
+| 15:49 | 按 §16.19 交接单恢复：预检全过 → 跳过暖启 → 从 541k 续训 |
+| 15:53 | **542,000 步起 loss 全 NaN**（恢复后头 1000 步内发作；重启前那 117k 步一直健康） |
+| ~16:00 | `add_histogram` 遇全 NaN 抛 ValueError → 训练进程崩；链未校验退出码，自动进判定 |
+| 16:10–16:12 | NaN 模型判定跑出 avg_rank **3.92** / avg_pt **−125**（局局第 4 名），已掐停 |
+| 16:13 | 扫描定污染范围：Brain 572 个非有限张量（含 162 个 BN buffer）+ DQN/Aux 权重 + 优化器 820 个 |
+
+**根因**：AMP(fp16) 偶发溢出 + **BN running stats 在前向即被污染**（GradScaler 只跳参数更新、救不了 buffer）→ 前向永久 NaN → 权重与优化器随后全坏。触发与**数据顺序**有关（重启后洗牌变了），所以"之前几十万步都没事"不等于安全。
+
+**损失**：41k 步（541k→500k，≈1.7 h）+ 一次被浪费的判定（5 卡 ≈12 min）。**能救回来靠的是 `snapshot_every=50000`**：`best.pth`(500k) 与 `mortal_step_000500000.pth` 扫描均 0 非有限张量 ✅。
+
+**已实施的三重防护**：
+
+1. **finite 守卫**（`train.py` 存盘段）：三个模型 state_dict 与本周期 loss 累加值若非有限 → `logging.error` 并 `SystemExit(1)`，**绝不覆盖 checkpoint**（这次正是被 NaN 反复覆盖了 `mortal.pth`）。自检：坏 state 抓到 572 个，两个干净快照放行 0 个。
+2. **histogram 守卫**（同文件）：先过滤非有限值再 `add_histogram`，为空则跳过 → NaN 不再打崩训练进程。
+3. **退出码守卫**（`run_round4.sh`）：`train_code=$?` 非 0 → 打印回滚指引并退出，**不带坏模型进判定**。
+
+**恢复与当前状态**：`cp checkpoints/round4/best.pth checkpoints/round4/mortal.pth`（500k，含 500k 评测后的 best_perf 与 baseline 标识）→ 16:21 重启链条（会话 `r4_fix`），实况 `loaded: 12:47:49` → `total steps: 500,000` → GPU2 94%、4.7 GB。按决策 **`enable_amp = false`**（fp32）；剩 145k 步，实测吞吐出来后再更新 ETA（见 MANUAL §16.10 末）。取证文件与 NaN 判定残留目录已清理。
+
+> **TB 看图正确姿势**：① 左侧只勾一个 run（或分轮看）；② 记住 step 跨轮延续，**同 x 不一定同义**；③ 要看趋势就调大 smoothing，或直接看 50k 一次的 `test_play/avg_pt` 与 `holdout_metrics.py` 的 top1（比逐 1000 步的 loss 曲线可靠得多）。
 
 ---
 

@@ -321,9 +321,36 @@ def train():
                     writer.add_scalar('loss/cql_loss', stats['cql_loss'] / save_every, steps)
                 writer.add_scalar('loss/next_rank_loss', stats['next_rank_loss'] / save_every, steps)
                 writer.add_scalar('hparam/lr', scheduler.get_last_lr()[0], steps)
-                writer.add_histogram('q_predicted', all_q_1d, steps)
-                writer.add_histogram('q_target', all_q_target_1d, steps)
+                # 非有限值会让 TB 的 histogram 抛 ValueError 直接打死训练进程 → 先过滤再记
+                for tag, arr in (('q_predicted', all_q_1d), ('q_target', all_q_target_1d)):
+                    finite_arr = torch.as_tensor(arr)
+                    finite_arr = finite_arr[torch.isfinite(finite_arr)].numpy()
+                    if finite_arr.size:
+                        writer.add_histogram(tag, finite_arr, steps)
                 writer.flush()
+
+                # ---- NaN/Inf 守卫（在清零 stats 与覆盖 checkpoint 之前）----
+                # AMP 下 BatchNorm 的 running stats 在前向就会被污染，GradScaler 只能跳过
+                # 参数更新、救不了 buffer；继续跑只会把坏状态写进所有产物。宁可停下来让人接手。
+                nonfinite = [
+                    f'{mn}.{k}'
+                    for mn, mod in (('mortal', mortal), ('dqn', dqn), ('aux', aux_net))
+                    for k, v in mod.state_dict().items()
+                    if not torch.isfinite(v).all()
+                ]
+                nonfinite += [
+                    f'loss_accum.{k}'
+                    for k, v in stats.items()
+                    if torch.is_tensor(v) and not torch.isfinite(v).all()
+                ]
+                if nonfinite:
+                    logging.error(
+                        f'non-finite state at step {steps:,}: refusing to overwrite '
+                        f'{state_file} ({len(nonfinite)} tensors, e.g. {nonfinite[:6]}); '
+                        f'可回滚到 {path.dirname(state_file)}/mortal_step_*.pth 中的干净快照'
+                    )
+                    writer.flush()
+                    raise SystemExit(1)
 
                 for k in stats:
                     stats[k] = 0

@@ -1314,6 +1314,8 @@ tmux new -d -s tb "cd $PWD && export LD_LIBRARY_PATH=/mnt/data8/miniconda3/envs/
 
 预计：续训 104k 步 ≈ 4.4 h，判定 ≈ 29 min → **重启后约 5 h 出第 4 轮结论**（`logs/ladder_r4/` 与 `round4_chain`-style 汇总日志）。训练日志用追加模式，历史 09:25–14:44 的记录保留在同文件上半段。
 
+> ✅ **已恢复（10-11 15:49，重启后 ≈41 min）**：`r4_resume` 会话按本单启动，实锤——env_check 全过 → 提示“round4/mortal.pth 已存在，直接续训”（跳过暖启拷贝）→ `loaded: 2026-10-11 14:42:21` → `device: cuda:0 (Quadro RTX 8000)` → `total steps: 541,000`；**无 `resetting best_perf` 行（baseline 标识匹配，best 记录 {2.4545, +4.5675} 正确保留）**；训练日志追加标记行已见“14:44 幽灵进程”之后，历史完整。看板 `tb` 已重启（HTTP 200）。预计 20:15 UTC 前后到 645k，20:45 前后出判定结论。
+
 **本次真踩的三个坑（已写进 §14 坑位索引）**：
 
 1. **运行中的 bash 脚本不能编辑**：「按字节偏移增量读取」→ 我 patch `run_round4.sh` 后它从错位处重读，把 `$PY -u train.py` 又执行了一遍（幽灵进程 247719 跑了 50 s，被后续清理 SIGTERM 掉；未到存盘点、未污染任何产物）。以后要么先停会话再改脚本，要么用独立的新脚本文件。

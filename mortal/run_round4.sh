@@ -31,7 +31,9 @@ else
 fi
 
 echo "==== 2) 训练（max_train_steps=645000，到点自停）$(date) ===="
-$PY -u train.py > logs/main_r4_train.log 2>&1
+# 追加写：重启/续跑时保留历史日志（> 会覆盖）
+echo "---- $(date '+%F %T') 训练进程启动（若为续跑，历史见本文件上半段）----" >> logs/main_r4_train.log
+$PY -u train.py >> logs/main_r4_train.log 2>&1
 echo "训练进程结束 $(date)"
 tr '\r' '\n' < logs/main_r4_train.log | grep -aE 'training budget reached|Traceback|Error|device:|file list size|resetting best_perf' | tail -6
 

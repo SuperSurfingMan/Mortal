@@ -880,6 +880,9 @@ __pycache__
 21. ⚠️ **`ladder.py` 并发必须传独立的日志目录**：它开头就 `shutil.rmtree(log_dir)`，原本硬编码 `runs/ladder` → 多卡并行跑时后启动的任务会把己在跑的任务牌谱删掉（表现为结果文件缺失/统计错乱）。已加第 5 个位置参数 `log_dir`；用法 `python ladder.py <chal> <cham> <seed_start> <sets> <自己的日志目录>`
 22. ⚠️ **离线模式一个 epoch 就退出，与 `max_train_steps` 无关**：第 2 轮预算 450k 但只跑到 424.8k 就“静默正常退出”（无报错、无 `training budget reached`，日志末尾只有一行 `ResourceWarning: Implicitly cleaning up <TemporaryDirectory>`）。想跑更长必须提 `num_epochs`（或用 `ladder` 定量核实确实跑完了数据）。另注意：`DataLoader` 全轮只产生一个不满批（碎片在缓冲里拼接），所以进度条停在半周期是“数据吃完”的正常特征，不是被人为中断
 23. ⚠️ **`LD_LIBRARY_PATH` 的作用域被旧手册写大了**：实测 `import libriichi`、GPU 前向+AMP、牌谱解码在最小环境（只有 PATH/HOME）全部正常；但 `target/release/validate_logs` 与 `stat` 链接了 `libpython3.12.so.1.0`，不给 `LD_LIBRARY_PATH=$CONDA_PREFIX/lib` 会 `error while loading shared libraries`（退出码 **127**）→ **只有跑 Rust CLI 时才是必需项**
+24. ⚠️ **正在运行的 bash 脚本不能被编辑**：bash 是**按字节偏移增量读取**脚本的，改动后它会从错位处继续读 → 轻则报 `$'\xxx' : command not found`（偏移落在多字节汉字中间），重则**把已执行过的命令再跑一遍**（10-11 真踩：patch `run_round4.sh` 后它重跑了 `train.py` 行，冒出幽灵训练进程）。正确做法：先停会话再改脚本，或永不编辑已启动的脚本（用新文件/新版本号）。
+25. ⚠️ **`pkill -f "<模式>"` 会匹配到执行它的 shell 自己**：只要命令行里含同一字符串就会被自杀（输出截断、后续命令不执行）。改用 `pgrep -f "[t]rain.py"`（方括号断字）拿 PID 再 `kill`。
+26. ⚠️ **SIGINT 停训后 DataLoader worker 会变孤儿进程**：主进程退出不回收到它们（PPID 变 1，继续占 CPU/文件句柄），必须再按 PID 补一刀，并 `pgrep` 确认归零后才算停干净（GPU 显存会随主进程释放，所以只看显存会漏掉）。
 
 ---
 
@@ -1285,6 +1288,37 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"   # 训练可省
 - 启动实锤：预检全绿（env_check）→ 暖启拷贝 → **`resetting best_perf {1.0,90.0} → {4.0,-135.0}, reason: 旧 state 未记录当时的卫冕者`（新补丁首次实战生效）** → `device: cuda:0 (Quadro RTX 8000)` → `loaded 400 players` → `file list size: 492,810`（与覆盖度预估一字不差）→ `total steps: 424,000`
 - 判定与训练在**同一会话链式执行**（`mortal/run_round4.sh`）：训练到点自停 → 双向各 5×500 sets（新种子块 80000+/90000+）→ `agg_ladder.py` 汇总；预计 ≈9.2 h + 29 min
 - 监控：`tail -f mortal/logs/round4_chain.log`（链）与 `mortal/logs/main_r4_train.log`（训练）；看板 `runs/main_r4`
+
+---
+
+### 16.19 重启交接（10-11 14:50，计划内主机重启）
+
+**停点与状态**：
+
+| 项 | 值 |
+|---|---|
+| 第 4 轮训练 | **541,000 / 645,000 步**（已存盘：`round4/mortal.pth`，含完整 optimizer/scheduler/steps，验证可读） |
+| best 记录 | `round4/best.pth` = 500k 评测态（avg_rank 2.4545 / avg_pt +4.5675，同批固定 500 sets；best_perf 与 baseline 标识已在 state 内） |
+| 快照 | `mortal_step_000450000.pth`、`mortal_step_000500000.pth` |
+| git | HEAD `3f830ab` + tag `round3-complete`；本交接文档将随下一小提交入库 |
+| 停机方式 | SIGINT 优雅停训（train.py 捕获退出）；孤儿 DataLoader worker 已按 PID 清理；GPU 已释放（0–21 MiB）；`tb`/`r4_chain` 会话已关闭 |
+| 备用恢复点 | 若 `mortal.pth` 意外损坏：`cp round4/best.pth round4/mortal.pth` 即可从 500k 续训（含完整优化器状态） |
+
+**重启后一条命令恢复**（会自动：预检 → 直接续训（检测到 state 存在，跳过暖启拷贝）→ 到 645k 自停 → 双向判定（新种子 80000+/90000+）→ 汇总）：
+
+```bash
+cd /mnt/data8/mortal/Mortal/mortal
+tmux new -d -s r4_resume 'bash run_round4.sh >> logs/round4_resume.log 2>&1'
+tmux new -d -s tb "cd $PWD && export LD_LIBRARY_PATH=/mnt/data8/miniconda3/envs/mortal/lib && /mnt/data8/miniconda3/envs/mortal/bin/python -m tensorboard.main --logdir runs --host 127.0.0.1 --port 6006 > logs/tensorboard.log 2>&1"
+```
+
+预计：续训 104k 步 ≈ 4.4 h，判定 ≈ 29 min → **重启后约 5 h 出第 4 轮结论**（`logs/ladder_r4/` 与 `round4_chain`-style 汇总日志）。训练日志用追加模式，历史 09:25–14:44 的记录保留在同文件上半段。
+
+**本次真踩的三个坑（已写进 §14 坑位索引）**：
+
+1. **运行中的 bash 脚本不能编辑**：「按字节偏移增量读取」→ 我 patch `run_round4.sh` 后它从错位处重读，把 `$PY -u train.py` 又执行了一遍（幽灵进程 247719 跑了 50 s，被后续清理 SIGTERM 掉；未到存盘点、未污染任何产物）。以后要么先停会话再改脚本，要么用独立的新脚本文件。
+2. `pkill -f "python -u train.py"` 会匹配到执行它的 shell 自己（命令行里含同串）→ 输出被截断；改用 `pgrep -f "[t]rain.py"` 拿 PID 再 kill。
+3. SIGINT 停训后 DataLoader worker 会变**孤儿进程**（父进程退出不回收到它们），需再按 PID 补一刀；确认 `pgrep` 为 0 再收工。
 
 ---
 

@@ -885,6 +885,7 @@ __pycache__
 26. ⚠️ **SIGINT 停训后 DataLoader worker 会变孤儿进程**：主进程退出不回收到它们（PPID 变 1，继续占 CPU/文件句柄），必须再按 PID 补一刀，并 `pgrep` 确认归零后才算停干净（GPU 显存会随主进程释放，所以只看显存会漏掉）。
 27. ⚠️ **AMP 下 BatchNorm 的 running stats 会在前向就被污染，救不回来**：一次 fp16 溢出后，GradScaler 只能跳过参数更新，但 BN 的 running_mean/var 已在那次前向里被写坏 → 前向从此 NaN，并连带把权重与优化器状态全部拉坏（10-11 实测扫描：Brain 572 个非有限张量、其中 162 个是 BN buffer，优化器状态 820 个）。发作是**数据顺序相关**的（重启后洗牌变了，于是在续跑后 1000 步内就中了），所以"上一段没事"不代表安全。处置：`control.enable_amp = false`（ENV 手册 FAQ 的既定兜底）+ train.py 存盘前的 finite 守卫（见 §16.20）。
 28. ⚠️ **两处"次生灾害"要把链条关紧**：① TB 的 `add_histogram` 遇全 NaN 会抛 `ValueError: The histogram is empty` **直接打死训练进程**（看着像"训练自己挂了"）；② 链式脚本不校验训练退出码，就会**带着 NaN 模型继续跑判定**（实测浪费 5 卡 ≈12 min，结论 avg_rank 3.92 / avg_pt −125 全是垃圾）。已修：histogram 先过滤非有限值；链脚本 `train_code=$?` 非 0 即跳过判定并退出。
+29. ⚠️ **同一个 TB run 目录会混入多段进程的事件文件**：每次启动（含崩溃后重启、暖启重跑）都新建一个 `events.out.tfevents.*` 写入同一 `tensorboard_dir`，于是同一 step 出现多个合法点（曲线锯齿/重复），而 NaN 段的记录**无法从已写入的事件文件里抹掉**（append-only）。`runs/main_r4` 就一度混了 4 个文件（09:25 AMP 段、14:44 幽灵段、15:50 NaN 段、16:21 fp32 段）。做法：把坏段/空段文件移到 TB logdir 之外归档（本机移到 `logs/tb_archive/…`，72 KB 取证保留），刷新即可看清；判读曲线时记住 500k–541k 是两次经过。
 
 ---
 
@@ -1392,6 +1393,44 @@ tmux new -d -s tb "cd $PWD && export LD_LIBRARY_PATH=/mnt/data8/miniconda3/envs/
 
 **运维侧要点（本轮实测）**：fp32（`enable_amp=false`）稳态 **4.24 it/s**，比 AMP 的 6.7 it/s 慢 36%；GPU 显存 2.7→5.2 GB、利用率 91–94%（瓶颈已从 CPU 管道转到 GPU）。三重防护本轮全程未触发（16:21 之后 0 条 non-finite）。TB 的 `runs/main_r4` 已把 NaN 段与空幽灵段的事件文件移到 `logs/tb_archive/main_r4_nan_and_ghost/`（保留取证），因此该 run 现在只剩 AMP 段 + fp32 段，500k–541k 区间每个 step 有两个合法点（两次经过），别当成抖动。
 
+**判定分块明细**（挑战者侧 avg_pt，每块 500 sets = 2000 半庄；A=新当挑战者，B=旧当挑战者）：
+
+| 块 | seed | 1st/2nd/3rd/4th | avg_pt | 块 | seed | 1st/2nd/3rd/4th | avg_pt |
+|---|---|---|---|---|---|---|---|
+| A_80000 | 80000 | [530,479,481,510] | +0.20 | B_90000 | 90000 | [490,508,519,483] | +0.88 |
+| A_80500 | 80500 | [526,477,491,506] | +0.25 | B_90500 | 90500 | [501,519,494,486] | +1.42 |
+| A_81000 | 81000 | [518,496,493,493] | +1.19 | B_91000 | 91000 | [483,522,500,495] | +0.07 |
+| A_81500 | 81500 | [512,485,496,507] | −0.27 | B_91500 | 91500 | [472,541,492,495] | +0.00 |
+| A_82000 | 82000 | [483,527,514,476] | +1.46 | B_92000 | 92000 | [474,521,508,497] | −0.49 |
+
+A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个方向都近乎对称地散在 0 附近，是“等强度”的典型形态（对比 R2 判定当时 A +2.9 / B −2.9 的反对称形态）。
+
+**本轮终态资产**：`checkpoints/round4/` = `mortal.pth`(645k) + `best.pth`(500k) + `step_450k/500k/550k/600k`；判定牌谱 `logs/ladder_r4/`（10 个任务、20,000 局、807 MB）；曲线 `runs/main_r4`；TB 取证归档 `logs/tb_archive/main_r4_nan_and_ghost/`（NaN 段 + 空幽灵段事件文件，72 KB）。
+
+---
+
+### 16.22 第 5 轮方案（已定稿待批准，未开工）
+
+**唯一变量 = 收紧名单到 top200**，其余全部回到 R2/R4 已验证的配置。理由：R3/R4 已把“增加同分布样本量”这条路否掉，剩下未试的增益来源只有**换信息源**，而名单收紧是与 R2 的 +2.86 同源（数据质量）、且成本最低的一条。
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| 名单 | `dataset/index/top_players_200_v2.txt`（阈值 avg_pt ≥ +3.9，**v2 口径**） | 由 `build_whitelist.sh` 改 `--top 200` 产出，尚未生成 |
+| 数据量（v2 实测） | 命中 279,713 文件（34.4%）/ 席位 **334,907** / 样本 ≈57 M / **1 epoch ≈ 111k 步** | 席位才是决定量（`load_events` 只保留名单内座位） |
+| augmentation | **改回 false** | R4 实测无增益，不带着无用变量进下一轮 |
+| 暖启 | `checkpoints/round4/mortal.pth`（645k，0 非有限张量） | 现役最强；与 424k/650k 统计等价，选它因未见月 top1 最高 |
+| 预算 | `max_train_steps = 756000`（645k + 111k = 恰好一整遍新池） | fp32 ≈ 7.3 h；若重开 AMP ≈ 4.6 h |
+| 索引 | 新名 `indexes/main_r5_whitelist_top200_v2.pth` | **名单变了必须换名**（§14 坑位） |
+| 卫冕者/判定 | `[baseline.test]` 仍用 round1-200k（趋势连续）；ladder **vs round4/645k**，新种子块 **100000+/110000+**，双向各 5×500 sets | 判进 δ > 0 且超 ±0.6 pt |
+| 链脚本 | 待创建 `run_round5.sh`（沿用 R4 的 env 重置 + 三重防护 + 退出码守卫） | 配 `make_round5_cfg.sh` 派生 |
+
+**两个待你拍板的选项**：
+
+1. **AMP 开还是关**？关掉（当前）稳但 4.24 it/s；开 AMP 6.7 it/s 省 40% 时间，风险已被 finite 守卫框住（最坏 ≤1000 步 + 一次明确停等；这条谱系累计 ≈77 万步只出过 1 次 NaN）。
+2. **要不要并行**？4 张 P100 全闲。可同时跑第二路线 `env.gamma = 0.995`（跨局信用分配）做对照，各自独立判定；代价是 CPU 争用让双方慢约 20–30%。
+
+若不批准 top200，后备顺序：② gamma<1 跨局信用 → ③ 扩窗 2019+ 并同步重训 GRP → ④ GRP 目标形式改造（真实点数差监督，当前 7 维输入已到信息量上限）。
+
 ---
 
 ## 17. 进展总纲（10-01→10-11 系统性汇总）
@@ -1413,6 +1452,8 @@ tmux new -d -s tb "cd $PWD && export LD_LIBRARY_PATH=/mnt/data8/miniconda3/envs/
 | 10-09 | 工具与数据选择落地 | 玩家强度榜 + 白名单 top400；holdout_metrics / ladder / bench_pipe；git 基线；**第 2 轮开跑** |
 | 10-10 | GRP 两假设 + 第 2 轮完成 | 加步数无效、加容量有效（grp_h128）；第 2 轮 424,847 步因 `num_epochs=1` 静默退出 |
 | 10-11 | 双向判定与第 3 轮收尾 | 第 2 轮 δ=+2.86 显著；第 3 轮（epoch 2）δ=−0.03 无增益；best_perf 重置已实现并验证 |
+| 10-11 | 代码评审 + 第 4 轮启动 | 修 4 个真 bug（供托计分/白名单 v2/best.pth 悬空/holdout worker）+ 实现两条建议（block bootstrap、一次性令牌）；R4=augmentation 起跑 |
+| 10-12 | **主机重启 + NaN 事故 + R4 终局** | 重启后 1000 步内 AMP/BN 污染致全状态 NaN → 三重防护 + fp32 回滚 500k 重跑 → 645k 完成；判定 δ=+0.10±0.59 **无增益** |
 
 ### 17.2 模型谱系与强度账（全部用 ladder 双向同牌山 ≥5000 sets 判定）
 
@@ -1433,7 +1474,8 @@ tmux new -d -s tb "cd $PWD && export LD_LIBRARY_PATH=/mnt/data8/miniconda3/envs/
 | 单局量 | 10.6 局/半庄；全座位 678 样本/文件；仅白名单座位 234.8 样本/文件 |
 | epoch 换算 | 白名单池 1 epoch ≈ **220,268 步**（R2 实测 224,847 = 102%，验证了估算链） |
 | 吞吐 | GPU 上限 8.88 it/s；管道 nw2/rayon4=3.12 → nw8/rayon8=**7.48** it/s（瓶颈在 CPU） |
-| 判定精度 | 单半庄顺位点 std ≈ 88 → 500 sets：SE(δ)≈±1.9；5000 sets：SE(δ)≈±0.59；需 `sets ≥ 当前 × (2SE/δ)²` |
+| 吞吐（fp32） | `enable_amp=false` 稳态 **4.24 it/s**（比 AMP -36%）、显存 5.2 GB、GPU 利用率 91–94% → 瓶颈已从 CPU 管道移到 GPU |
+| 判定精度 | 单半庄 std≈88 → 500 sets SE(δ)≈±1.9；5000 sets 解析 SE≈±0.59、**block bootstrap SE≈±0.51**（ρ≈+0.18，解析法偏保守）；需 `sets ≥ 当前 × (2SE/δ)²` |
 | 评测代价 | 500 sets（2000 局）≈ 14 分/卡；5 卡两波 5000 sets ≈ **29 分** |
 | GRP | val loss 平台在 30k 步；h128/l3 把 nll_last 1.2780→1.2361，但 **delta_pt std 恒≈0.70** → 受 7 维输入的信息量限制 |
 | 行为对照 | 与人类凤凰卓同口径：立直 0.1794 vs 0.1769、副露 0.4566 vs 0.4826、**流局 10.9% vs 15.3%（弃和不足）** |
@@ -1477,8 +1519,9 @@ tmux new -d -s tb "cd $PWD && export LD_LIBRARY_PATH=/mnt/data8/miniconda3/envs/
 | `dataset/mjai/houou4/` | 2,630,640 局 mjai（训练直接读） | 16 GB |
 | `dataset/tenhou_hf/` | 18 个 HF 年度原包 | 17 GB |
 | `dataset/raw/`、`dataset/index/` | 2026 自建 mjlog；清单 CSV + **强度榜 CSV/top400** | 1.2 GB / 197 MB |
-| `mortal/checkpoints/` | R1 快照、R2、R3、grp×3、随机 baseline | 2.2 GB |
-| `mortal/logs/ladder_r2`、`ladder_r3` | 两次 20,000 局判定牌谱（可事后重算） | 0.8 + 0.8 GB |
+| `mortal/checkpoints/` | R1 快照、R2、R3、**R4**、grp×3、随机 baseline | 3.2 GB |
+| `mortal/logs/ladder_r2`、`ladder_r3`、`ladder_r4` | 三次 20,000 局判定牌谱（可事后重算/bootstrap） | 0.81 + 0.82 + 0.79 GB |
+| `mortal/logs/tb_archive/` | TB 坏段事件文件取证归档 | 72 KB |
 | `mortal/indexes/` | `main_r2_whitelist_v1.pth`（480,414）等文件表 | 248 MB |
 | 本地 git | 分支 `main`，基线 `33e63bc`、`5a1867f`，tag `round1-complete`；**无远端** | 4.4 MB |
 
@@ -1497,6 +1540,7 @@ tmux new -d -s tb "cd $PWD && export LD_LIBRARY_PATH=/mnt/data8/miniconda3/envs/
 | 类型 | 事项 |
 |---|---|
 | 已判定 | **第 4 轮 augmentation = 无增益**（δ=+0.10±0.59，bootstrap CI[−0.90,+1.07]）；“增样本量”路线两条尝试（R3/R4）均否 → **第 5 轮按 top200 → gamma<1 → 扩窗+重训 GRP 的顺序换信息源** |
+| **待批准** | 第 5 轮 = 收紧名单 top200（唯一变量，`enable_augmentation` 改回 false，预算 +111k → 756k；详见 §16.22）+ 两个选项：AMP 开/关、是否并行跑 gamma<1 |
 | 可做未做 | akochan 外部锚点（需 JRE，本机无）；上游 `git diff` 校准补丁清单（**服务器无外网**，curl 超时）；git 无远端→推不出去；checkpoint 无异地备份；固定种子块轮换（代码层可改为每轮不同 `seed_start`）；GRP 目标形式改造（真实点数差监督）；`agg_ladder` 的 SE 按 set 做 block bootstrap 复核 |
 | 文档对账 | §16.11 四项（尤其本机手册的 §4.x 代码修改章节与本节 §17.4 的逐条比对）；本地 `.md` 仍无法从服务器读取（无盘映射），需上传后才能真合并 |
 

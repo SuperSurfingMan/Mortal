@@ -425,7 +425,12 @@ impl Gameplay {
         self.actions.push(label as i64);
         self.masks.push(mask);
         self.at_kyoku.push(ctx.kyoku_idx as u8);
-        // only discard and kan will discount
+        // apply_gamma 标记「消耗一个巡目、因而参与 gamma 折扣」的动作：打牌(0..=36)与立直(37)。
+        // 注意（2026-10-12 实测核对）：判据就是 `label <= 37`，所以 42（杠）、43（和了）、
+        // 44（九种九牌）、45（pass）以及鸣牌(38..=41)都**不**折扣 —— 旧注释写的
+        // "only discard and kan" 与实现不符（见 tools/training/inspect_gamma_semantics.py）。
+        // 折扣视界也只在**当前一局内**（train.py 的 steps_to_done 在局边界处归零），
+        // 因此 gamma<1 只影响同局内较早动作的目标值，不做跨局信用分配。
         self.apply_gamma.push(label <= 37);
         self.at_turns.push(ctx.state.at_turn());
         self.shantens.push(ctx.state.shanten());

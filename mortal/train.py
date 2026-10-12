@@ -1,3 +1,116 @@
+# ---- file_index 的 manifest 机制（2026-10-12）--------------------------------
+# 背景：旧版索引只存 file_list，train.py 发现文件存在就直接复用 → 换白名单、扩 globs、
+# 修数据后若沿用旧索引名，会**静默**使用过期的文件集合（MEMORY §14 把它列为坑位，但只靠
+# 人肉纪律保证）。manifest 记录「这份文件表是在什么条件下构建的」，加载时逐项比对，
+# 不一致就自动重建（重建 813k 文件约 1~2 分钟，代价远小于拿错数据集训一整轮）。
+#
+# 与数据修复的配合：`tools/tenhou_data/repair_names.py` 把 2026 缺 names 的牌谱补回后，
+# 把 `dataset.data_version` 改成新值（如 'names-fix-v1'）即可让所有旧索引自动失效。
+FILE_INDEX_VERSION = 2          # 1 = 仅 file_list（旧格式）；2 = 带 manifest
+_INDEX_MANIFEST_KEYS = (        # 只比对**会改变文件集合**的键；纯记录项不参与比对
+    'index_version',
+    'globs',
+    'player_names_files',
+    'excludes_files',
+    'data_version',
+)
+
+
+def _sha256_of_file(p):
+    import hashlib
+    h = hashlib.sha256()
+    with open(p, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def build_index_manifest(config, player_names_set, enable_augmentation=False, augmented_first=False):
+    """记录 file_index 的构建条件（供下次启动校验）。"""
+    from datetime import datetime
+    ds = config['dataset']
+    names_files = {}
+    for fn in ds.get('player_names_files', []):
+        try:
+            names_files[fn] = _sha256_of_file(fn)
+        except OSError as exc:
+            names_files[fn] = f'ERROR:{type(exc).__name__}'
+    try:
+        import libriichi
+        libriichi_version = getattr(libriichi, '__version__', '')
+    except Exception:
+        libriichi_version = ''
+    return {
+        # --- 参与比对（会改变文件集合）---
+        'index_version': FILE_INDEX_VERSION,
+        'globs': list(ds['globs']),
+        'player_names_files': names_files,
+        'excludes_files': {},          # 预留：excludes 尚未接入主训练
+        'data_version': ds.get('data_version', ''),
+        # --- 仅记录，不参与比对 ---
+        'player_names_count': len(player_names_set),
+        'enable_augmentation': bool(enable_augmentation),
+        'augmented_first': bool(augmented_first),
+        'libriichi_version': libriichi_version,
+        'built_at': datetime.now().isoformat(timespec='seconds'),
+    }
+
+
+def manifest_matches(saved, current):
+    """索引里的 manifest 是否与当前配置一致（None/旧格式一律视为不一致）。"""
+    if not isinstance(saved, dict):
+        return False
+    return all(saved.get(k) == current.get(k) for k in _INDEX_MANIFEST_KEYS)
+
+
+def manifest_diff(saved, current):
+    """给出参与比对键的差异摘要（写日志用）。"""
+    if not isinstance(saved, dict):
+        return '旧格式索引（无 manifest）'
+    diffs = []
+    for k in _INDEX_MANIFEST_KEYS:
+        a, b = saved.get(k), current.get(k)
+        if a == b:
+            continue
+        if k == 'player_names_files' and isinstance(a, dict) and isinstance(b, dict):
+            changed = sorted(fn for fn in set(a) | set(b) if a.get(fn) != b.get(fn))
+            diffs.append(f'{k}: {changed}')
+        else:
+            diffs.append(f'{k}: {a!r} -> {b!r}')
+    return '; '.join(diffs) if diffs else '(无差异)'
+
+
+# ---- 训练目标（奖励口径）一致性守卫（2026-10-12）------------------------------
+# 奖励定义写进 checkpoint 的 config 里，但它决定 dqn_loss 的目标值：续训时若只改配置不改
+# state_file，会把"两种目标"混进同一条损失曲线（例如 rank_pt → delta_points、改 pts、改 gamma）。
+# 这里只告警不中止（对照组实验可能故意如此），让日志里能看见。
+_ENV_REWARD_KEYS = ('gamma', 'pts', 'reward_mode', 'reward_scale')
+_ENV_REWARD_DEFAULTS = {'reward_mode': 'rank_pt', 'reward_scale': 1.0}
+
+
+def env_reward_diff(saved_env, current_env):
+    """比较 checkpoint 记录的 env 与当前配置的奖励相关键；无差异返回 ''。"""
+    diffs = []
+    for k in _ENV_REWARD_KEYS:
+        default = _ENV_REWARD_DEFAULTS.get(k)
+        a = saved_env.get(k, default) if isinstance(saved_env, dict) else default
+        b = current_env.get(k, default) if isinstance(current_env, dict) else default
+        if k == 'reward_scale':
+            try:
+                a = float(a) if a is not None else None
+                b = float(b) if b is not None else None
+            except (TypeError, ValueError):
+                pass
+        if a != b:
+            diffs.append(f'{k}: {a!r} -> {b!r}')
+    return '; '.join(diffs)
+
+
+def optimizer_reset_required(saved_token, current_token):
+    """一次性判断是否跳过旧 optimizer/scheduler（用于奖励目标切换的干净暖启）。"""
+    return current_token is not False and current_token != saved_token
+
+
 def train():
     import prelude
 
@@ -45,6 +158,14 @@ def train():
     assert snapshot_every % save_every == 0
     assert max_train_steps == 0 or max_train_steps % save_every == 0
 
+    seed = config['control'].get('seed')
+    data_generator = None
+    if seed is not None:
+        random.seed(seed)
+        torch.manual_seed(seed)
+        data_generator = torch.Generator().manual_seed(int(seed))
+        logging.info(f'training seed: {seed}')
+
     device = torch.device(config['control']['device'])
     torch.backends.cudnn.benchmark = config['control']['enable_cudnn_benchmark']
     enable_amp = config['control']['enable_amp']
@@ -52,12 +173,18 @@ def train():
 
     pts = config['env']['pts']
     gamma = config['env']['gamma']
+    # 奖励口径（2026-10-12，对应 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
+    # 默认 'rank_pt' 保持历史行为；'delta_points' 用每局真实分数差（点），配 reward_scale 归一化。
+    reward_mode = config['env'].get('reward_mode', 'rank_pt')
+    reward_scale = float(config['env'].get('reward_scale', 1.0))
     file_batch_size = config['dataset']['file_batch_size']
     reserve_ratio = config['dataset']['reserve_ratio']
     num_workers = config['dataset']['num_workers']
     num_epochs = config['dataset']['num_epochs']
     enable_augmentation = config['dataset']['enable_augmentation']
     augmented_first = config['dataset']['augmented_first']
+    # 与部署侧 quick-eval 的 kan-select 口径对照用（默认 True = GameplayLoader 默认，等价历史行为）
+    always_include_kan_select = bool(config['dataset'].get('always_include_kan_select', True))
     eps = config['optim']['eps']
     betas = config['optim']['betas']
     weight_decay = config['optim']['weight_decay']
@@ -73,6 +200,11 @@ def train():
 
     logging.info(f'version: {version}')
     logging.info(f'obs shape: {obs_shape(version)}')
+    logging.info(
+        f'env: gamma={gamma} reward_mode={reward_mode} reward_scale={reward_scale} '
+        f'pts={pts if reward_mode == "rank_pt" else "(unused in delta_points)"} '
+        f'kan_select={always_include_kan_select}'
+    )
     logging.info(f'mortal params: {parameter_count(mortal):,}')
     logging.info(f'dqn params: {parameter_count(dqn):,}')
     logging.info(f'aux params: {parameter_count(aux_net):,}')
@@ -126,15 +258,27 @@ def train():
         mortal.load_state_dict(state['mortal'])
         dqn.load_state_dict(state['current_dqn'])
         aux_net.load_state_dict(state['aux_net'])
+        saved_baseline = state.get('best_perf_baseline')
+        saved_token = state.get('best_perf_reset_token', False)
+        reset_optimizer_token = config['control'].get('reset_optimizer', False)
+        reset_optimizer = optimizer_reset_required(
+            state.get('optimizer_reset_token', False), reset_optimizer_token)
         if not online or state['config']['control']['online']:
-            optimizer.load_state_dict(state['optimizer'])
-            scheduler.load_state_dict(state['scheduler'])
-        scaler.load_state_dict(state['scaler'])
+            if reset_optimizer:
+                logging.warning(
+                    f'跳过 checkpoint optimizer/scheduler（control.reset_optimizer={reset_optimizer_token!r}；'
+                    '仅继承模型权重，避免不同奖励目标的动量混用）'
+                )
+            else:
+                optimizer.load_state_dict(state['optimizer'])
+                scheduler.load_state_dict(state['scheduler'])
+        if reset_optimizer:
+            scaler = GradScaler(device.type, enabled=enable_amp)
+        else:
+            scaler.load_state_dict(state['scaler'])
         best_perf = state['best_perf']
         steps = state['steps']
 
-        saved_baseline = state.get('best_perf_baseline')
-        saved_token = state.get('best_perf_reset_token', False)
         if reset_token is not False and reset_token != saved_token:
             reason = (f'config 里 control.reset_best_perf={reset_token!r} 与上次记录 '
                       f'{saved_token!r} 不同（一次性生效）')
@@ -147,6 +291,18 @@ def train():
         if reason:
             logging.info(f'resetting best_perf {best_perf} → {init_best_perf}, reason: {reason}')
             best_perf = dict(init_best_perf)
+
+        env_diff = env_reward_diff(state.get('config', {}).get('env', {}), config['env'])
+        if env_diff:
+            if reset_optimizer:
+                logging.warning(
+                    f'env 奖励口径与 checkpoint 记录不同（本次只继承模型权重，已重置优化器状态）: {env_diff}'
+                )
+            else:
+                logging.warning(
+                    f'env 奖励口径与 checkpoint 记录不同（续训会把两种目标混进同一条损失）: {env_diff}'
+                    '；若要做净对照，请另建 state_file 或从同一父代重新暖启'
+                )
 
     if not online and max_train_steps > 0 and steps >= max_train_steps:
         logging.info('training budget already reached')
@@ -193,26 +349,67 @@ def train():
             logging.info(f'loaded {len(player_names):,} players')
 
             file_index = config['dataset']['file_index']
+            manifest = build_index_manifest(
+                config, player_names_set,
+                enable_augmentation = enable_augmentation,
+                augmented_first = augmented_first,
+            )
+            file_list = None
             if path.exists(file_index):
-                index = torch.load(file_index, weights_only=True)
-                file_list = index['file_list']
-            else:
+                index = None
+                try:
+                    index = torch.load(file_index, weights_only=True)
+                except Exception as exc:
+                    logging.warning(f'file index 不可读（将重建）: {file_index} ({exc})')
+                if index is not None:
+                    saved = index.get('manifest') if isinstance(index, dict) else None
+                    if manifest_matches(saved, manifest):
+                        file_list = index['file_list']
+                        logging.info(
+                            f'file index manifest 校验通过，复用 {file_index}'
+                            f'（{len(file_list):,} 文件，建于 {saved.get("built_at", "?")}）'
+                        )
+                    else:
+                        logging.warning(
+                            f'file index 与当前配置不一致 → 弃用并重建: {file_index}'
+                            f'（{manifest_diff(saved, manifest)}）'
+                        )
+            if file_list is None:
                 logging.info('building file index...')
                 file_list = []
                 for pat in config['dataset']['globs']:
                     file_list.extend(glob(pat, recursive=True))
+                names_coverage = None
                 if len(player_names_set) > 0:
                     filtered = []
+                    n_with_names = n_without_names = 0
                     for filename in tqdm(file_list, unit='file'):
                         with gzip.open(filename, 'rt') as f:
                             start = json.loads(next(f))
-                            # 自建 2026 牌谱的 start_game 只有 rules、没有 names，
-                            # 用 .get 避免 KeyError；这类文件在白名单模式下自然会被排除
-                            if not set(start.get('names', [])).isdisjoint(player_names_set):
+                            # 自建 2026 牌谱（未修复 names 的旧树）的 start_game 只有 rules、
+                            # 没有 names，用 .get 避免 KeyError；这类文件在白名单模式下会被排除。
+                            # 修复版数据见 tools/tenhou_data/repair_names.py（写入 names 后用
+                            # tools/tenhou_data/verify_names.py 验收命中率）。
+                            names = start.get('names') or []
+                            if any(names):
+                                n_with_names += 1
+                            else:
+                                n_without_names += 1
+                            if not set(names).isdisjoint(player_names_set):
                                 filtered.append(filename)
                     file_list = filtered
+                    # names 覆盖率是"白名单模式下能取到多少数据"的关键诊断量：
+                    # 无 names 的文件永远 0 席位（曾让 2026 的 13 万局静默失效）
+                    names_coverage = {'with_names': n_with_names, 'without_names': n_without_names}
                 file_list.sort(reverse=True)
-                torch.save({'file_list': file_list}, file_index)
+                manifest['n_files'] = len(file_list)
+                manifest['names_coverage'] = names_coverage
+                path.dirname(file_index) and os.makedirs(path.dirname(file_index), exist_ok=True)
+                torch.save({'file_list': file_list, 'manifest': manifest}, file_index)
+                logging.info(
+                    f'file index 已写入 {file_index}（n_files={len(file_list):,}'
+                    + (f', names_coverage={names_coverage}' if names_coverage else '') + '）'
+                )
         logging.info(f'file list size: {len(file_list):,}')
 
         before_next_test_play = (test_every - steps % test_every) % test_every
@@ -230,7 +427,11 @@ def train():
             num_epochs = num_epochs,
             enable_augmentation = enable_augmentation,
             augmented_first = augmented_first,
+            reward_mode = reward_mode,
+            reward_scale = reward_scale,
+            always_include_kan_select = always_include_kan_select,
         )
+        logging.info(f'reward: {file_data.reward_desc()}')
         data_loader = iter(DataLoader(
             dataset = file_data,
             batch_size = batch_size,
@@ -238,6 +439,7 @@ def train():
             num_workers = num_workers,
             pin_memory = True,
             worker_init_fn = worker_init_fn,
+            generator = data_generator,
         ))
 
         remaining_obs = []
@@ -373,6 +575,7 @@ def train():
                     'best_perf_baseline': champion_baseline,
                     # 上次生效的一次性令牌：同值的 reset_best_perf 不会重复触发重置
                     'best_perf_reset_token': reset_token,
+                    'optimizer_reset_token': config['control'].get('reset_optimizer', False),
                     'config': config,
                 }
                 torch.save(state, state_file)

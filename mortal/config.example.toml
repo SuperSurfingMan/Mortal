@@ -20,6 +20,10 @@ opt_step_every = 1
 save_every = 400
 test_every = 20000
 submit_every = 400
+# 可选：固定训练主进程与 DataLoader worker 的随机顺序，便于消融复现
+seed = 20261012
+# 可选：奖励目标切换时使用一次性令牌，只继承模型权重并跳过旧 optimizer/scheduler/scaler
+# reset_optimizer = 'reward-ablation-v1'
 
 # using env `TRAIN_PLAY_PROFILE`
 [train_play.default]
@@ -37,6 +41,10 @@ log_dir = '/path/to/test_play'
 [dataset]
 globs = ['/path/to/dataset/**/*.json.gz']
 file_index = '/path/to/file_index.pth'
+# 可选：数据内容的人工版本号（如 'names-fix-v1'）。file_index 的 manifest 会记录
+# globs / 名单文件 sha256 / 本字段；任一变化都会让旧索引自动失效重建，避免静默复用
+# 过期文件表（2026-10-12 加的机制，见 train.py 顶部 FILE_INDEX_VERSION）。
+data_version = ''
 file_batch_size = 15
 reserve_ratio = 0.0
 num_workers = 1
@@ -48,6 +56,12 @@ augmented_first = false
 [env]
 gamma = 1
 pts = [6.0, 4.0, 2.0, 0.0]
+# 奖励口径（2026-10-12 加，见 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
+#   'rank_pt'      GRP 预测顺位概率 × pts 的每局期望点差（默认，等价于历史行为）
+#   'delta_points' 每局**真实分数差**（点，来自 grp.feature 各家分数 + 终局分），与顺位无关，
+#                  量级约 ±1e4 → 通常要配 reward_scale 归一到与 rank_pt 相近的尺度
+reward_mode = 'rank_pt'
+reward_scale = 1.0
 
 [resnet]
 conv_channels = 192

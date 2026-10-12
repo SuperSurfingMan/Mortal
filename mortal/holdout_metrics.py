@@ -11,18 +11,22 @@
 """
 import argparse
 import glob
+import hashlib
 import random
 import torch
 from torch.utils.data import DataLoader
 from config import config
 from model import Brain, DQN
 from dataloader import FileDatasetsIter, worker_init_fn
+from train import env_reward_diff
 
 ROOT = '/mnt/data8/mortal/Mortal/dataset/mjai/houou4'
 DEVICE = torch.device(config['control']['device'])
 
 
 def collect(month, n_batch, bs, seed, workers):
+    random.seed(seed)
+    generator = torch.Generator().manual_seed(seed)
     files = sorted(glob.glob(f'{ROOT}/{month}/*.json.gz'))
     if not files:
         raise SystemExit(f'没有文件: {ROOT}/{month}')
@@ -42,10 +46,14 @@ def collect(month, n_batch, bs, seed, workers):
         num_epochs = 1,
         enable_augmentation = False,
         augmented_first = False,
+        # 必须与训练同口径，否则 q_target 不可比（2026-10-12 加）
+        reward_mode = config['env'].get('reward_mode', 'rank_pt'),
+        reward_scale = config['env'].get('reward_scale', 1.0),
+        always_include_kan_select = bool(config['dataset'].get('always_include_kan_select', True)),
     )
     it = iter(DataLoader(ds, batch_size = bs, drop_last = True,
                          num_workers = workers, pin_memory = True,
-                         worker_init_fn = worker_init_fn))
+                         worker_init_fn = worker_init_fn, generator = generator))
     batches = []
     while len(batches) < n_batch:
         obs, actions, masks, std, kr, ranks = next(it)
@@ -54,7 +62,17 @@ def collect(month, n_batch, bs, seed, workers):
         q_target = (config['env']['gamma'] ** std.to(torch.int64)
                     * kr.to(torch.float64)).to(torch.float32)
         batches.append((obs, actions, masks, q_target))
-    return batches
+
+    # 同一 seed 不仅应选到同一批文件，也应得到同一 worker 迭代顺序；把动作和目标
+    # 的多重批次摘要打印出来，跨 checkpoint/进程复用时可直接核对。
+    sample_digest = hashlib.sha256()
+    target_digest = hashlib.sha256()
+    sample_digest.update('\\n'.join(files).encode('utf-8'))
+    for obs, actions, masks, q_target in batches:
+        for tensor in (obs, actions, masks):
+            sample_digest.update(tensor.contiguous().numpy().tobytes())
+        target_digest.update(q_target.contiguous().numpy().tobytes())
+    return batches, sample_digest.hexdigest()[:16], target_digest.hexdigest()[:16]
 
 
 def evaluate(name, ckpt, batches, bs):
@@ -112,9 +130,15 @@ def main():
     args = ap.parse_args()
     bs = config['control']['batch_size']
     workers = args.workers if args.workers is not None else config['dataset']['num_workers']
-    batches = collect(args.month, args.n, bs, args.seed, workers)
+    batches, sample_digest, target_digest = collect(args.month, args.n, bs, args.seed, workers)
     print(f'holdout={args.month} seed={args.seed} batches={len(batches)} x bs={bs} '
           f'= {len(batches) * bs:,} 样本（同一批数据用于所有 checkpoint；换 seed 会换抽样）', flush = True)
+    print(f'holdout_sample_digest={sample_digest} holdout_target_digest={target_digest}', flush = True)
+    print(f'env: gamma={config["env"]["gamma"]} '
+          f'reward_mode={config["env"].get("reward_mode", "rank_pt")} '
+          f'reward_scale={config["env"].get("reward_scale", 1.0)} '
+          f'pts={config["env"]["pts"]}'
+          '（q_target 由当前配置决定而非 checkpoint，跨配置比较旧 ckpt 时务必固定这里的口径）', flush = True)
     for ckpt in args.ckpts:
         evaluate(ckpt.split('/')[-1], ckpt, batches, bs)
 

@@ -21,8 +21,22 @@ class FileDatasetsIter(IterableDataset):
         num_epochs = 1,
         enable_augmentation = False,
         augmented_first = False,
+        reward_mode = 'rank_pt',
+        reward_scale = 1.0,
+        always_include_kan_select = True,
     ):
+        """reward_mode（2026-10-12 加，对应 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
+
+          'rank_pt'      —— GRP 预测的顺位概率 × pts 的每局期望点差（默认，等价历史行为）
+          'delta_points' —— 每局**真实分数差**（由 grp.feature 各家分数与终局分算得，单位：点），
+                            与顺位无关；量级约 ±1e4，通常配 reward_scale（如 1e-3）归一化，
+                            以免 CQL 项与 lr 的相对尺度被打乱。
+
+        always_include_kan_select：对齐 libriichi GameplayLoader 的默认值（True）。部署侧
+        quick-eval 只在多候选杠时才请求 kan-select 状态，改成 False 可复现部署侧口径（用于回放对照）。
+        """
         super().__init__()
+        assert reward_mode in ('rank_pt', 'delta_points'), f'未知 reward_mode: {reward_mode}'
         self.version = version
         self.file_list = file_list
         self.pts = pts
@@ -34,7 +48,16 @@ class FileDatasetsIter(IterableDataset):
         self.num_epochs = num_epochs
         self.enable_augmentation = enable_augmentation
         self.augmented_first = augmented_first
+        self.reward_mode = reward_mode
+        self.reward_scale = reward_scale
+        self.always_include_kan_select = always_include_kan_select
         self.iterator = None
+
+    def reward_desc(self):
+        """一行描述当前奖励口径（训练/评测必须一致，故打日志用同一来源）。"""
+        if self.reward_mode == 'delta_points':
+            return f'delta_points(real score diff, scale={self.reward_scale})'
+        return f'rank_pt(pts={self.pts}, scale={self.reward_scale})'
 
     def build_iter(self):
         # do not put it in __init__, it won't work on Windows
@@ -58,6 +81,7 @@ class FileDatasetsIter(IterableDataset):
             player_names = self.player_names,
             excludes = self.excludes,
             augmented = augmented,
+            always_include_kan_select = self.always_include_kan_select,
         )
         self.buffer = []
 
@@ -99,10 +123,16 @@ class FileDatasetsIter(IterableDataset):
 
                 grp_feature = grp.take_feature()
                 rank_by_player = grp.take_rank_by_player()
-                kyoku_rewards = self.reward_calc.calc_delta_pt(player_id, grp_feature, rank_by_player)
+                final_scores = grp.take_final_scores()
+                if self.reward_mode == 'delta_points':
+                    # 每局真实分数差（点）：seq = [各局起始分…, 终局分]，相邻相减
+                    kyoku_rewards = self.reward_calc.calc_delta_points(player_id, grp_feature, final_scores)
+                else:
+                    kyoku_rewards = self.reward_calc.calc_delta_pt(player_id, grp_feature, rank_by_player)
+                if self.reward_scale != 1.0:
+                    kyoku_rewards = kyoku_rewards * self.reward_scale
                 assert len(kyoku_rewards) >= at_kyoku[-1] + 1 # usually they are equal, unless there is no action in the last kyoku
 
-                final_scores = grp.take_final_scores()
                 scores_seq = np.concatenate((grp_feature[:, 3:] * 1e4, [final_scores]))
                 rank_by_player_seq = (-scores_seq).argsort(-1, kind='stable').argsort(-1, kind='stable')
                 player_ranks = rank_by_player_seq[:, player_id]
@@ -132,6 +162,11 @@ class FileDatasetsIter(IterableDataset):
 
 def worker_init_fn(*args, **kwargs):
     worker_info = torch.utils.data.get_worker_info()
+    # DataLoader 会为每个 worker 分配确定的 torch seed；同步 Python/NumPy 随机源，
+    # 使 load_files() 内的 shuffle 在固定训练/holdout seed 下可复现。
+    worker_seed = torch.initial_seed() % (2 ** 32)
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
     dataset = worker_info.dataset
     per_worker = int(np.ceil(len(dataset.file_list) / worker_info.num_workers))
     start = worker_info.id * per_worker

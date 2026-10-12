@@ -71,6 +71,9 @@ def main() -> None:
     ap.add_argument('--out', default='dataset/index/player_ratings.csv')
     ap.add_argument('--names-out', default='')
     ap.add_argument('--top', type=int, default=300, help='写进 names-out 的人数')
+    ap.add_argument('--names-out-extra', default='',
+                    help='可选：再导出一份更短名单（如 top200），名单是同一排序的前缀')
+    ap.add_argument('--top-extra', type=int, default=0, help='names-out-extra 的人数')
     ap.add_argument('--min-games', type=int, default=300)
     ap.add_argument('--min-avg-pt', type=float, default=-1e9,
                     help='入选名单的最低平均顺位点（比如 8.0 只要明显长期正分的人）')
@@ -135,13 +138,17 @@ def main() -> None:
     elig = [r for r in rows if r[1] >= args.min_games and r[3] >= args.min_avg_pt]
     print(f'满足 min_games>={args.min_games} 的玩家: {len(elig):,} 位；'
           f'top1 平均顺位点 {elig[0][3]:.2f}（{elig[0][0]}, {elig[0][1]} 局）' if elig else '无', flush=True)
-    if args.names_out and elig:
-        take = elig[:args.top]
-        os.makedirs(os.path.dirname(os.path.abspath(args.names_out)), exist_ok=True)
-        with open(args.names_out, 'w', encoding='utf-8') as f:
+    def write_names(path_out: str, take) -> None:
+        os.makedirs(os.path.dirname(os.path.abspath(path_out)), exist_ok=True)
+        with open(path_out, 'w', encoding='utf-8') as f:
             for name, n, _, _ in take:
                 f.write(f'{name}\n')
-        print(f'已写名单 {args.names_out}（{len(take)} 人，阈值 avg_pt>={take[-1][3]:.2f}）', flush=True)
+        print(f'已写名单 {path_out}（{len(take)} 人，阈值 avg_pt>={take[-1][3]:.2f}）', flush=True)
+
+    if args.names_out and elig:
+        write_names(args.names_out, elig[:args.top])
+    if args.names_out_extra and args.top_extra > 0 and elig:
+        write_names(args.names_out_extra, elig[:args.top_extra])
 
 
 if __name__ == '__main__':

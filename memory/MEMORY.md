@@ -806,7 +806,51 @@ __pycache__
   6. 10-09 复盘：随机 baseline 导致 `test_play` 指标饱和（avg_rank≈1.00、1 位率 99.9%）；补做 snapshot 配对对抗与未见月离线指标 → **50k/150k/200k 强度持平**；数据管道实测为瓶颈（3.12 it/s vs GPU 8.88 it/s）
 - **产出**：详见 [§16](#16-服务器实跑现状2026-10-0710-09-远程同步) 与 [TRAINING_MANUAL.md](../tools/training/TRAINING_MANUAL.md) §14
 
+### 会话 15：数据侧 P0 落地——修复 2026 牌谱 names + file_index manifest（2026-10-12，本机）
+- **背景**：`memory/NEXT_STEPS_ANALYSIS_20261012.md` §2.1/§2.2 定的两条 P0。起因是白名单训练对自建 2026 的 13 万局**完全不产出样本**：jansou 的 `dump_mjai` 不写 `start_game.names`，而 Rust `StartGame.names` 是 `#[serde(default)]` → 缺字段静默变 4 个空串 → `GameplayLoader` 按座位过滤时永远匹配不上（**不报错**）。
+- **坑 1（信息其实没丢）**：原始 `dataset/raw/mjlog/<log_id>.xml.gz` 的 `<UN>` 保留 `n0~n3`（另有 dan/rate/sx）→ 可恢复。
+- **坑 2（差点白干，见 §14-30）**：`<UN>` 的 `n0~n3` 是 **URL 百分号编码**的玩家名（值长 45~63、纯 ASCII）。首轮实现直接把原值写进 `start_game.names`：`validate_logs` 全绿、索引照建、训练不报错，但白名单命中率 **0%**（结构合法、语义全废）。靠"抽样比对白名单命中率"才发现；`unquote` 后立刻正常。
+- **产出工具**：
+  - `tools/tenhou_data/repair_names.py`——从原始 mjlog 恢复 names（自动 unquote + `%XX` 残留告警），写入**独立补丁树** `dataset/mjai/houou4_names/`（不动旧树，R1~R4 可复现）；除首行外逐字节保留、gzip `mtime=0` 确定性、可断点续跑；报告写 `dataset/index/repair_names_report.json`。
+  - `tools/tenhou_data/verify_names.py`——验收工具：names 覆盖率 / 席位 / 白名单与榜单池**命中率** / `%XX` 残留。**凡牌谱字段修复都必须跑它**（`validate_logs` 查不出语义错误）。
+  - `tools/training/test_file_index_manifest.{py,sh}`——manifest 单测（16 项）+ 端到端回归（E1~E5 五条路径）。
+- **实测结果**：
+  - 修复 130,407 文件 / 1.92 min / 607.6 MiB / `suspicious_names=0`；`target/release/validate_logs` 全量 **16 s 无告警**。
+  - `GameplayLoader` 同一份牌谱：旧树 **0 席位** → 补丁树 4 席位 584 样本；v2 白名单模式命中 3/4 家、725 样本。
+  - `verify_names`：2 万抽样（v2 白名单）座位命中 **20.66%** / 文件命中 **60.60%**；**全量 130,407 文件复核（v3 白名单）**：带 names **100%**、521,628 席位中白名单命中 **130,415 席（25.00%）** / **89,317 文件（68.49%）**、榜单池命中 **99.36%**（即 2026 席位玩家几乎全部可在 HF 2022-2025 玩家池中找到）；旧树对照全 **0%**。
+  - 强度榜 v3 重建（HF 2022-2025 + 补丁树 202601-202608，813,145 文件，3.1 min，**失败 0**）：玩家池 4,883→**5,356**、合格（≥400 局且 avg_pt≥2）472→**501**；top400 门槛 +2.45→**+2.57** 且名单 **69 人进出**；top200 门槛 **+3.98**。
+  - 新池覆盖度：**有 names 的文件 813,145（100%）**；top400 席位 735,249→**789,454（+7.4%）** / 样本≈134M / **262k 步每 epoch**；top200 席位 334,907→**344,068** / **114k 步**；top100 席位 119,452 / 40k 步。
+- **file_index manifest（train.py）**：索引由 `{file_list}` 升级为 `{file_list, manifest}`（`FILE_INDEX_VERSION=2`）。manifest 分两类：**参与比对**（`index_version / globs / player_names_files(sha256) / excludes_files / data_version`）与**仅记录**（`player_names_count / enable_augmentation / augmented_first / libriichi_version / built_at / n_files / names_coverage`）。加载时不一致 → warning + 自动重建；旧格式与损坏索引同样重建；新增可选配置 `dataset.data_version`（改它即可让全部旧索引失效）。
+- **新增产物**：`dataset/mjai/houou4_names/`（补丁树 607.6 MiB）、`dataset/index/player_ratings_2022_2026H1_v3.csv`、`top_players_{400,200}_v3.txt`、`dataset/index/repair_names_report.json`。
+- **未做（留给下一轮拍板）**：把 `data_version` 写进新配置；R5 用哪套名单（建议 v3 系列——榜单已含 2026；top200/top400 对照设计见分析文档 §2.3）。
+
+### 会话 16：模型侧 P0 落地——奖励口径可切换 + gamma 语义验证 + 判定执行参数固化（2026-10-12，本机）
+- **背景**：`memory/NEXT_STEPS_ANALYSIS_20261012.md` §3.1 / §3.2 / §3.5 三条模型侧 P0。
+- **① 奖励口径（§3.1）**：训练目标一直是 `env.pts=[6,4,2,0]`（等间距顺位点），而最终判定用天凤点 `[90,45,0,-135]`（第 4 名重罚）→ 模型被训成"2、3 名差不多"，与 ladder 口径不一致。
+  - `dataloader.py` 新增 `reward_mode`（`'rank_pt'` 默认＝历史行为；`'delta_points'`＝每局**真实分数差**，复用此前从未被调用的 `RewardCalculator.calc_delta_points`）与 `reward_scale`（归一化，避免换口径后 CQL 权重失衡），并新增 `always_include_kan_select` 直通 GameplayLoader（默认 True＝历史行为）。
+  - `train.py` 从 `env.reward_mode`/`env.reward_scale` 读取、启动即打印口径、并新增**续训目标守卫**：`state['config']['env']` 与当前 `env` 的 `gamma/pts/reward_mode/reward_scale` 不一致时显式告警（否则会把两种目标混进同一条损失曲线；旧 ckpt 缺键按默认处理，不误报）。
+  - `holdout_metrics.py` 同步同一口径并在表头打印，避免"用新配置比旧 ckpt"的静默不可比。
+- **② gamma 语义（§3.2）**：新增 `tools/training/inspect_gamma_semantics.py`，在真实牌谱上验三条不变量（200 文件 / 54,526 动作样本）：`apply_gamma == (label <= 37)`、`dones` 只在局边界、**折扣视界 = 当前局内**。实测结论：只有打牌(0-36) 与立直(37) 参与折扣，**杠(42，样本中 171 次) 不折扣**（与 `add_entry` 旧注释 "only discard and kan" 不符）；每局最后一条动作 `steps_to_done=0` 不被折扣，下一局从 0 重启 → **`gamma<1` 只打折当前局内较早的动作，不含任何后续局信息，"跨局信用分配"的说法不成立**（`gameplay.rs` 注释已改写为实测口径，见 §14-31）。
+- **③ 判定执行参数固化（§3.5）**：`ladder.py` 此前硬编码 `enable_amp=False / guard=True`，配置里的 `[1v3.*]` 对它无效，判定结果也不带执行口径 → 事后无法回答"这局是用什么跑的"。
+  - 现优先级 **CLI > 配置 `[1v3.ladder]` > 历史默认**；默认值刻意等于 R2~R4 判定口径（保证旧结论可比）；若 `[1v3.challenger/champion]` 的值与生效值不同会**打印告警**（不再静默）；双侧强制同参数。
+  - 输出新增 `exec_cfg` / `challenger_ckpt` / `champion_ckpt` 行（含 **sha256 前 16 位、steps、resnet、mtime**）并写 `<log_dir>/run_meta.json`（含完整结果）；`raw rankings` / `seed_start` 行格式未变，`agg_ladder.py` 仍兼容。
+- **验证**：`tools/training/test_reward_modes.py` 全过——`Grp::final_scores` 独立重算 **12/12 座位逐位一致**、`calc_delta_points` 与独立重算最大误差 **7.3e-12**、两模式样本数一致（2304）、`delta_points` 取值全为 100 的整数倍、`reward_scale` 精确等比（多重集比较，注意 `load_files` 每轮 `random.shuffle`）、非法 mode 被拦、续训守卫 6 例；`test_file_index_manifest.sh` 复跑 U+E1~**E6**（新增 E6：续训改 pts → 恰好 1 条告警）全过；`ladder.py` 2-set 冒烟通过（两处 `[1v3.*].enable_amp=True` 不一致告警如预期）。
+- **未做**：§3.3（Q 校准 / IQL，P1）、§3.4（AMP 重开评估，P1）；**真正的跨局 credit assignment** 需数据侧显式提供"下一局状态 + 未来回报"并引入 target network，属独立框架改动，不在本次范围。
+
 ---
+
+### 会话 17：奖励对齐消融已准备并启动（2026-10-12，本机）
+- **先修正的工程问题**：`test_file_index_manifest.sh` 改为 `set -euo pipefail` 并不再吞掉单测失败；`holdout_metrics.py` 增加固定 `torch.Generator`、worker seed 同步与 `holdout_sample_digest`/`holdout_target_digest`（真实 `202609`、2 批冒烟输出正常）；训练新增可选 `control.seed`；`train.py` 增加 `control.reset_optimizer` 一次性令牌，奖励目标切换时只继承模型权重并跳过旧 optimizer/scheduler/scaler。
+- **回归结果**：`test_reward_modes.py`（奖励公式/接线/续训守卫/reset）全过；`inspect_gamma_semantics.py --n-files 200` 全过（800 gameplays / 133,065 动作）；`test_file_index_manifest.sh` U+E1~E6 全过；`py_compile`、`bash -n`、`git diff --check`、lint diagnostics 均通过。
+- **新增工具**：`build_file_index.py`（预构建带 manifest 的共享索引）、`prepare_reward_ablation.py`（生成三组隔离 TOML/父 checkpoint/`experiment.json`）、`run_reward_ablation.sh`（三 GPU 并行训练入口）、`finish_reward_ablation.sh`（训练完成后自动 holdout + 双向 ladder + block bootstrap 收尾）。
+- **实验定义**（严格固定 R4 v2 数据池，不混入 v3/修复树）：父代 `checkpoints/round4/mortal.pth`，645,000 步，sha256=`47417e67ac2eeb61dd6d10cd708491bbd3d2b24c929686af55bdef5694fd4590`；原 R4 globs（HF 2022-2025 + 原始 `202601-202608`）、`top_players_400_v2`、`enable_augmentation=true`、`augmented_first=true`；共享索引 `indexes/reward_ablation_r4_v2.pth` 有 492,810 个文件，`with_names=699,715`、`without_names=113,430`。
+- 三组均 `max_train_steps=756,000`（新增 111,000）、`seed=20261012`、fp32、相同模型/GRP/CQL/辅助损失；仅奖励不同：A=`rank_pt` + `[6,4,2,0]`；B=`rank_pt` + `[2,1,0,-3]`；C=`delta_points` + `reward_scale=1e-3`。三组首次启动均确认跳过父代 optimizer/scheduler/scaler。
+- 当前三组仍在 tmux `reward_ablation` 中运行，GPU 为 0/1/3；日志暂未出现 `non-finite`、Traceback 或异常退出。元数据在 `mortal/reward_ablation/experiment.json`，分组日志为 `train.log`，共享日志为 `launcher.log`。
+- **中途诊断（13:15 UTC，A=652k / B=651k / C=653k，各仅训 6~8k/111k 步）**：
+  - ✅ 评测基础设施验证通过：三组 `holdout_sample_digest` **完全一致**（`0e3d3cce0b7bad83`），`holdout_target_digest` **各不相同**（A=`7e60085d…` / B=`de072bcf…` / C=`c953c84c…`——奖励口径确实在管线中生效）。
+  - 早期指标（12 批 × 512，202609）：A top1=0.8182 / R2=−0.54；B top1=0.8201 / R2=−0.84（⚠ B 的目标尺度不同，dqn_loss/R2 **不可跨组比**）；**C top1=0.8019 / R2=+0.06 —— R2 首次转正**（此前所有模型均为负），但 top1 略降。方向符合"从模仿人类转向预测分数变化"的预期；agari_top1 三组均 90/90（guard 完好）。
+  - ⚠ 运行中的进程用的是**修改前**的 `train.py`（Python 模块启动时已加载），因此 B/C 日志里 env 告警仍显示旧文案；实际上 optimizer reset **已生效**（"跳过 checkpoint optimizer/scheduler"告警在位）。修改后的代码只影响后续新进程（如 finish 脚本调用的 ladder/holdout）。
+- **后续**：三组各到 756k 后，训练完成后由 `finish_reward_ablation.sh` 自动执行：同一 holdout month/seed，核对相同 `holdout_sample_digest`（记录各组 `holdout_target_digest`）；再用全新种子块 100000+/110000+ 双向各 5×500 sets；只按 block bootstrap CI 判读，未完成前不把 holdout 视为强度结论。
 
 ## 13. 待办与下一步
 
@@ -835,7 +879,7 @@ __pycache__
 | **P0** | 提高吞吐 | `num_workers` 2→4～8、`RAYON_NUM_THREADS` 4→8（实测管道 3.12→7.48 it/s，而 GPU 上限 8.88 it/s）；内存 251 GB 充足，`file_batch_size` 可提到 15～20 |
 | **P0** | 备份与可复现 | `git init` + 提交代码补丁 + scp 回本机；checkpoint 异盘备份；`.gitignore` 补 `dataset/`、`mortal/runs/`、`mortal/logs/` |
 | **P1** | ~~把 GRP 训收敛~~ → **加大 GRP 容量** | 10-09 续训实验已推翻“未收敛”判断：30k→42k 步 val loss 仅在 2.453~2.457 噪声带内抹（best 2.45495→2.45207）→ **步数已到平台期**。改做容量实验（h64/l2 → h128/l3，从零 60k 步），用 `tools/training/grp_quality_probe.py` 的同口径指标（hit_last / mae_rank / nll_last）判胜负；胜出才替换奖励模型 |
-| **P1** | 重设离线轮方案 | 只改“信息增量”源：高手白名单 `player_names_files`（已实现：牌谱无段位字段 → 用长期成绩自证，见 §16.12）、`enable_augmentation=true`、`gamma<1`（现 1 → 单局 MC 方差大、无跨局信用分配）、长程 LR 衰减、扩大时间窗（全量 2.63 M 或 2019+） |
+| **P1** | 重设离线轮方案 | 只改“信息增量”源：高手白名单 `player_names_files`（已实现：牌谱无段位字段 → 用长期成绩自证，见 §16.12）、`enable_augmentation=true`、~~`gamma<1` 做跨局信用分配~~（⚠ **10-12 更正**：gamma<1 只影响当前局内较早动作的折扣，**不是**跨局信用分配，见 §14-31；已实测）、长程 LR 衰减、扩大时间窗（全量 2.63 M 或 2019+） |
 | **P1** | 多卡并行实验 | 离线模式无数据并行，但可 5 张卡各跑一组对照配方，再用 ladder 选优 |
 | **P2** | 外部强度锚点 | akochan（需装 JRE + `AKOCHAN_DIR`/`AKOCHAN_TACTICS`，`[1v3.akochan] enabled=true`）；人类牌谱不能当 arena 对手（mjai 日志无 `seed`，无法复现牌山） |
 | **P2** | 在线自博弈（M5） | 仅在评测可信后开；`online=true` + `freeze_bn.mortal=true`；已知卡死 bug 靠子进程规避；P100×4 可当 client 集群 |
@@ -886,6 +930,9 @@ __pycache__
 27. ⚠️ **AMP 下 BatchNorm 的 running stats 会在前向就被污染，救不回来**：一次 fp16 溢出后，GradScaler 只能跳过参数更新，但 BN 的 running_mean/var 已在那次前向里被写坏 → 前向从此 NaN，并连带把权重与优化器状态全部拉坏（10-11 实测扫描：Brain 572 个非有限张量、其中 162 个是 BN buffer，优化器状态 820 个）。发作是**数据顺序相关**的（重启后洗牌变了，于是在续跑后 1000 步内就中了），所以"上一段没事"不代表安全。处置：`control.enable_amp = false`（ENV 手册 FAQ 的既定兜底）+ train.py 存盘前的 finite 守卫（见 §16.20）。
 28. ⚠️ **两处"次生灾害"要把链条关紧**：① TB 的 `add_histogram` 遇全 NaN 会抛 `ValueError: The histogram is empty` **直接打死训练进程**（看着像"训练自己挂了"）；② 链式脚本不校验训练退出码，就会**带着 NaN 模型继续跑判定**（实测浪费 5 卡 ≈12 min，结论 avg_rank 3.92 / avg_pt −125 全是垃圾）。已修：histogram 先过滤非有限值；链脚本 `train_code=$?` 非 0 即跳过判定并退出。
 29. ⚠️ **同一个 TB run 目录会混入多段进程的事件文件**：每次启动（含崩溃后重启、暖启重跑）都新建一个 `events.out.tfevents.*` 写入同一 `tensorboard_dir`，于是同一 step 出现多个合法点（曲线锯齿/重复），而 NaN 段的记录**无法从已写入的事件文件里抹掉**（append-only）。`runs/main_r4` 就一度混了 4 个文件（09:25 AMP 段、14:44 幽灵段、15:50 NaN 段、16:21 fp32 段）。做法：把坏段/空段文件移到 TB logdir 之外归档（本机移到 `logs/tb_archive/…`，72 KB 取证保留），刷新即可看清；判读曲线时记住 500k–541k 是两次经过。
+30. ⚠️ **「结构合法但语义全错」的数据修复最危险（10-12 实测踩到）**：`<UN>` 的 `n0~n3` 是 **URL 百分号编码**的玩家名（值长 45~63、纯 ASCII），直接写成 mjai `start_game.names` 后，`validate_logs` **全绿**、索引照常构建、训练不报错，但白名单命中率 **0%** —— 等于把整棵树变废，而且没有任何自动信号。**教训**：牌谱字段修复/重建必须做「与已知玩家池/白名单的命中率」验收（`tools/tenhou_data/verify_names.py`），结构校验（validate_logs）只看事件流合法性，查不出语义错误。相关：① 缺 names 时 Rust 侧 `#[serde(default)]` 会把 `names` 静默变 4 个空串，不报错只是不产样本；② `validate_logs <DIR>` 的 glob 含 `**/*.json`，别把报告类 json 写进数据树（会被当牌谱解析报错）。
+
+31. ⚠️ **`gamma<1` 不是跨局信用分配（10-12 实测更正，此前 §13bis/§16.16/§16.22 的说法有误）**：`steps_to_done` 在**局边界归零**（`dataloader.py`：`if not dones[i]` 才累加），奖励取 `kyoku_rewards[at_kyoku[i]]`（仅当前局）→ `gamma**steps_to_done` 只在**当前局内**给较早动作打折，且每局最后一条动作 `steps_to_done=0` 不被折扣。实测（`tools/training/inspect_gamma_semantics.py`，200 文件 / 54,526 样本）：参与折扣的只有**打牌(0-36) 与立直(37)**（判据 `label <= 37`）；**鸣牌(38-41)、杠(42)、和了(43)、九种九牌(44)、pass(45) 都不折扣** —— 与 `add_entry` 旧注释 "only discard and kan" 不符（注释已改）。**若做真跨局 credit assignment**，需数据侧显式给出"下一局状态 + 未来回报"并引入 target network，属独立框架改动。
 
 ---
 
@@ -1266,7 +1313,7 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"   # 训练可省
 
 - 已证实有效的只有**数据选择（白名单 top400）+ 更好的奖励模型**这一次跳跃（+2.86 pt）；**单纯同一池反复过数据无效**。
 - GPU 已全部空闲（10-10 15:56 至今日），磁盘 3.5 TB 可用；`checkpoints` 2.2 GB、`logs/ladder_r3` 815 MB（牌谱保留可事后重算）。
-- 下一轮候选（仍保持单变量）：① 收紧名单 top200（更强但数据更少，已备好强度榜 CSV 可直接切）；② `enable_augmentation=true`（样本×2 且不引入重复）；③ `gamma<1` 做跨局信用分配；④ 扩大时间窗到 2019+ 并同步重训 GRP。按 §16 的教训，**“多加一个 epoch”这类重复数据的做法应排最后**。
+- 下一轮候选（仍保持单变量）：① 收紧名单 top200（更强但数据更少，已备好强度榜 CSV 可直接切）；② `enable_augmentation=true`（样本×2 且不引入重复）；③ ~~`gamma<1` 做跨局信用分配~~ → **10-12 更正：gamma<1 只在当前局内打折，不是跨局信用分配（实测见 §14-31）；该位置改由"奖励口径对齐"补上（`env.reward_mode`/`pts` 可切换，见 §12 会话 16）**；④ 扩大时间窗到 2019+ 并同步重训 GRP。按 §16 的教训，**“多加一个 epoch”这类重复数据的做法应排最后**。
 
 ---
 
@@ -1429,7 +1476,7 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 1. **AMP 开还是关**？关掉（当前）稳但 4.24 it/s；开 AMP 6.7 it/s 省 40% 时间，风险已被 finite 守卫框住（最坏 ≤1000 步 + 一次明确停等；这条谱系累计 ≈77 万步只出过 1 次 NaN）。
 2. **要不要并行**？4 张 P100 全闲。可同时跑第二路线 `env.gamma = 0.995`（跨局信用分配）做对照，各自独立判定；代价是 CPU 争用让双方慢约 20–30%。
 
-若不批准 top200，后备顺序：② gamma<1 跨局信用 → ③ 扩窗 2019+ 并同步重训 GRP → ④ GRP 目标形式改造（真实点数差监督，当前 7 维输入已到信息量上限）。
+若不批准 top200，后备顺序：② ~~gamma<1 跨局信用~~ → **奖励口径对齐（`env.reward_mode='delta_points'` 或 `pts=[2,1,0,-3]`；10-12 已实现，见 §12 会话 16）** → ③ 扩窗 2019+ 并同步重训 GRP → ④ GRP 目标形式改造（真实点数差监督，当前 7 维输入已到信息量上限）。
 
 ---
 
@@ -1485,10 +1532,13 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 
 | 文件 | 修改 | 状态 |
 |---|---|---|
-| `mortal/train.py` | ① `max_train_steps` 预算自停；② `snapshot_every` 编号快照；③ 索引构建改 `start.get('names', [])` 防 KeyError；④ **`best_perf` 重置机制**：新增 `state['best_perf_baseline']` 记录当时的卫冕者，加载时若（手动 `control.reset_best_perf` / 旧 state 无记录 / 卫冕者已更换）则重置为哨兵 `{4.0, −135.0}` | ①②③ 已跑过三轮；④ **10-11 四路测试通过**（`tools/training/test_bestperf_reset.sh`） |
+| `mortal/train.py` | ① `max_train_steps` 预算自停；② `snapshot_every` 编号快照；③ 索引构建改 `start.get('names', [])` 防 KeyError；④ **`best_perf` 重置机制**：新增 `state['best_perf_baseline']` 记录当时的卫冕者，加载时若（手动 `control.reset_best_perf` / 旧 state 无记录 / 卫冕者已更换）则重置为哨兵 `{4.0, −135.0}`；⑤ **10-12 `file_index` manifest**（`FILE_INDEX_VERSION=2`，比对 globs/名单 sha256/data_version，不一致自动重建）；⑥ **10-12 奖励口径**（读 `env.reward_mode`/`reward_scale`/`dataset.always_include_kan_select`）+ **续训目标守卫**（`env_reward_diff` 告警） | ①②③ 已跑过三轮；④ **10-11 四路测试通过**；⑤⑥ **10-12 回归通过**（`test_file_index_manifest.sh` U+E1~E6、`test_reward_modes.py` D 段） |
+| `mortal/dataloader.py` | **10-12**：新增 `reward_mode`（`rank_pt`/`delta_points`）、`reward_scale`、`always_include_kan_select` 三个参数与 `reward_desc()`；`delta_points` 复用此前从未接线的 `RewardCalculator.calc_delta_points` | ✅ `test_reward_modes.py` 全过（独立重算误差 7.3e-12） |
+| `mortal/holdout_metrics.py` | **10-12**：与训练同奖励口径（新增三个参数的透传）并在表头打印 env 口径 | ✅ |
+| `libriichi/src/dataset/gameplay.rs` | **10-12**：`add_entry` 的 `apply_gamma` 注释改为实测口径（打牌+立直折扣；杠/鸣牌/和了/pass 不折扣；视界只在当前局内）——**仅注释，无行为变更，无需重编 .so** | ✅ 见 §14-31 |
 | `mortal/train_grp.py` | `grp.control.max_train_steps`、`grp_best.pth` 按 val loss 取优、固定验证抽样种子、`est. %` 日志 | ✅ 已用（grp_h128 即此产物） |
 | `mortal/player.py` | `enable_amp` / `enable_rule_based_agari_guard` 从 `[test_play]` 读；固定评测种子块 | ✅（固定块现在只用于同轮趋势，见 §17.7-坑 2） |
-| `mortal/ladder.py` | 第 5 个参数 `log_dir`（并发必传） | ✅ 已用于 10-10/10-11 两次 5000 sets 判定 |
+| `mortal/ladder.py` | 第 5 个参数 `log_dir`（并发必传）；**10-12**：执行参数改为 `CLI > [1v3.ladder] > 历史默认`、双侧强制一致、与 `[1v3.*]` 不一致时告警、输出 `exec_cfg`/两侧 ckpt sha256+steps 并写 `run_meta.json` | ✅ 已用于 10-10/10-11/10-12 三次判定；10-12 2-set 冒烟通过 |
 | 配置 | `config.offline.toml`（R1）→ `config.round2.toml` → `config.round3.toml`（由 `make_round3_cfg.sh` 派生） | 共存，R1 产物不变 |
 | `.gitignore` | 补 `dataset/`、`mortal/{runs,logs,indexes}/` 等；**故意不忽略 `memory/`、`tools/`**（它们是本项目唯一文档） | ✅ |
 
@@ -1511,12 +1561,19 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | `mortal/run_round4.sh` | **端到端链**：env_check → 暖启 → 训练 → 双向判定 → 汇总（单 tmux 会话） |
 | `tools/training/smoke_round4_augmentation.py` | 启前冒烟：验白名单生效 + 增强样本确实不同（样本数守恒） |
 | `mortal/launch_round3.sh` / `run_r2_ladder.sh` / `run_ladder_r3.sh` |  tmux 长跑入口，**内建完整 env 重置** |
+| `tools/tenhou_data/repair_names.py` | **10-12 新增**：从原始 mjlog 恢复 2026 缺失的 `start_game.names`（自动 unquote 百分号编码），写独立补丁树；报告落 `dataset/index/` |
+| `tools/tenhou_data/verify_names.py` | **10-12 新增**：names 覆盖率 / 席位 / 白名单与榜单池**命中率**验收（防"结构合法但语义全错"，见 §14-30） |
+| `tools/training/test_file_index_manifest.{py,sh}` | **10-12 新增**：file_index manifest 单测（17 项）+ 端到端回归（E1~E6：构建/复用/换 data_version/旧格式/损坏/续训改奖励口径告警） |
+| `tools/training/test_reward_modes.py` | **10-12 新增**：奖励口径验证——独立重算 `Grp::final_scores` 与每局真实分数差核对 `delta_points`、回归 `rank_pt`、检查 `reward_scale` 缩放与非法模式拦截、`env_reward_diff` 单测 |
+| `tools/training/inspect_gamma_semantics.py` | **10-12 新增**：在真实牌谱上验证 `apply_gamma`/`dones`/`steps_to_done` 语义（折扣判据、局边界归零、折扣视界=当前局内），并打印动作×折扣分布与局内折扣示例 |
+| `tools/player_stats/build_whitelist.sh` | **10-12 更新为 v3 口径**：glob 改为「HF 2022-2025 + `houou4_names/20260[1-8]`」，产出 `_v3` 榜单与 top400/top200 名单（v2 产物保留） |
 
 ### 17.6 数据与产物台账
 
 | 路径 | 内容 | 体量 |
 |---|---|---|
-| `dataset/mjai/houou4/` | 2,630,640 局 mjai（训练直接读） | 16 GB |
+| `dataset/mjai/houou4/` | 2,630,640 局 mjai（训练直接读）；⚠ **2026 部分仍无 names**，白名单模式下 0 席位，勿直接用 | 16 GB |
+| `dataset/mjai/houou4_names/` | **10-12 新增**：2026（202601~202610，130,407 文件）补 names 的**补丁树**；训练需与旧树并列 glob（见下） | 607.6 MiB |
 | `dataset/tenhou_hf/` | 18 个 HF 年度原包 | 17 GB |
 | `dataset/raw/`、`dataset/index/` | 2026 自建 mjlog；清单 CSV + **强度榜 CSV/top400** | 1.2 GB / 197 MB |
 | `mortal/checkpoints/` | R1 快照、R2、R3、**R4**、grp×3、随机 baseline | 3.2 GB |
@@ -1540,6 +1597,7 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | 类型 | 事项 |
 |---|---|
 | 已判定 | **第 4 轮 augmentation = 无增益**（δ=+0.10±0.59，bootstrap CI[−0.90,+1.07]）；“增样本量”路线两条尝试（R3/R4）均否 → **第 5 轮按 top200 → gamma<1 → 扩窗+重训 GRP 的顺序换信息源** |
+| **已完成（10-12）** | 数据侧 P0 两条（分析文档 §2.1/§2.2，详见 §12 会话 15）：① 2026 缺失 names 已修复到**补丁树** `dataset/mjai/houou4_names/`（13 万文件；validate_logs 全绿；白名单命中 20.7% 座位 / 60.6% 文件），强度榜重建为 **v3**（top400 席位 789,454 / 262k 步每 epoch；top200 席位 344,068 / 114k 步）；② `file_index` 升级为带 **manifest 校验**（`FILE_INDEX_VERSION=2` + 可选 `dataset.data_version`），回归测试 E1~E6 全过。**模型侧 P0 三条**（详见 §12 会话 16）：③ 奖励口径可切换（`env.reward_mode` = `rank_pt`/`delta_points` + `reward_scale`）并加**续训目标守卫**；④ gamma 语义实测更正（`gamma<1` **不是**跨局信用分配，见 §14-31）；⑤ `ladder.py` 执行参数改为可配置+显式记录（`[1v3.ladder]`/CLI、`run_meta.json`、ckpt sha256） |
 | **待批准** | 第 5 轮 = 收紧名单 top200（唯一变量，`enable_augmentation` 改回 false，预算 +111k → 756k；详见 §16.22）+ 两个选项：AMP 开/关、是否并行跑 gamma<1 |
 | 可做未做 | akochan 外部锚点（需 JRE，本机无）；上游 `git diff` 校准补丁清单（**服务器无外网**，curl 超时）；git 无远端→推不出去；checkpoint 无异地备份；固定种子块轮换（代码层可改为每轮不同 `seed_start`）；GRP 目标形式改造（真实点数差监督）；`agg_ladder` 的 SE 按 set 做 block bootstrap 复核 |
 | 文档对账 | §16.11 四项（尤其本机手册的 §4.x 代码修改章节与本节 §17.4 的逐条比对）；本地 `.md` 仍无法从服务器读取（无盘映射），需上传后才能真合并 |

@@ -1294,9 +1294,9 @@ cp checkpoints/round4/best.pth checkpoints/round4/mortal.pth
 tmux new -d -s r4_fix 'bash run_round4.sh >> logs/round4_resume.log 2>&1'
 ```
 
-吞吐代价（fp32）：GPU2 显存 2.7→4.7 GB、利用率 94%；实测 it/s 出来后再更新 §14.5 与本节（原 AMP 6.7 it/s → 145k 步约 6 h；若 fp32 掉到 ~4.5 it/s 则约 9 h）。
+吞吐代价（fp32 实测）：**4.24 it/s**（AMP 为 6.7，-36%）、GPU 显存 2.7→5.2 GB、利用率 91–94%（瓶颈已从 CPU 管道移到 GPU）。三重防护本轮全程未触发（16:21 之后 0 条 non-finite）。
 
-### 16.9 第 4 轮（在跑）：augmentation
+### 16.9 第 4 轮（已完成）：augmentation —— 判定无增益
 
 唯一实验变量 = `enable_augmentation = true` + `augmented_first = true`（席位视角增强；冒烟验证：同一文件增强前后**样本数不变、obs 张量不同** → ×2 来自两遍遍历）。基础设施：白名单 v2 + 新 `file_index`；暖启自 `round2/mortal.pth`（424k）。
 
@@ -1306,8 +1306,8 @@ tmux new -d -s r4_fix 'bash run_round4.sh >> logs/round4_resume.log 2>&1'
 | 预算 | `max_train_steps = 645000`（+221k 步 ≈ 0.91 遍增强样本；v2 池 1 遍 ≈ 244k 步） |
 | 链式脚本 | `mortal/run_round4.sh`：env_check → 暖启 → 训练 645k → 双向各 5×500 sets（新种子 80000+/90000+）→ agg_ladder 汇总 |
 | 会话/日志 | tmux `r4_chain`；`logs/round4_chain.log`、`logs/main_r4_train.log`、`logs/ladder_r4/` |
-| ETA | 训练 ≈ 9.2 h（至 10-11 18:45 UTC 前后）+ 判定 ≈ 29 min |
-| 判进 | δ > 0 且超 ±0.6 pt（5000 sets 的 2σ）→ 增强有效；否则下一轮试 top200 / gamma<1 / 扩窗+重训 GRP |
+| 实际耗时 | 累计 18.8 h 墙钟（AMP 段 6.1 h → NaN 事故 → fp32 段 4.24 it/s 重跑 10h）；训练 10-12 02:11 到预算、判定 02:39 完成 |
+| **判进结果** | δ = **+0.10 ± 0.59 pt**（t=0.16，95%CI[−1.07,+1.26]；block bootstrap SE 0.508、CI[−0.90,+1.07]）→ **未过 2σ，augmentation 无增益** |
 
 ---
 

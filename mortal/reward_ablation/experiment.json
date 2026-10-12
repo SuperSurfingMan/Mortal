@@ -1,0 +1,60 @@
+{
+  "created_at": "2026-10-12T12:01:41",
+  "parent": "/mnt/data8/mortal/Mortal/mortal/checkpoints/round4/mortal.pth",
+  "parent_sha256": "47417e67ac2eeb61dd6d10cd708491bbd3d2b24c929686af55bdef5694fd4590",
+  "parent_steps": 645000,
+  "max_train_steps": 756000,
+  "additional_steps": 111000,
+  "data_pool": "R4 v2: HF 2022-2025 + original 202601-202608, top_players_400_v2, augmentation=true",
+  "seed": 20261012,
+  "variants": {
+    "A_rank_pt": {
+      "label": "现状等间距顺位奖励",
+      "config": "/mnt/data8/mortal/Mortal/mortal/reward_ablation/A_rank_pt/config.toml",
+      "state_file": "/mnt/data8/mortal/Mortal/mortal/checkpoints/reward_ablation/A_rank_pt/mortal.pth",
+      "state_sha256": "47417e67ac2eeb61dd6d10cd708491bbd3d2b24c929686af55bdef5694fd4590",
+      "env": {
+        "reward_mode": "rank_pt",
+        "reward_scale": 1.0,
+        "pts": [
+          6.0,
+          4.0,
+          2.0,
+          0.0
+        ]
+      }
+    },
+    "B_rank_pt_aligned": {
+      "label": "对齐天凤顺位奖励",
+      "config": "/mnt/data8/mortal/Mortal/mortal/reward_ablation/B_rank_pt_aligned/config.toml",
+      "state_file": "/mnt/data8/mortal/Mortal/mortal/checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth",
+      "state_sha256": "47417e67ac2eeb61dd6d10cd708491bbd3d2b24c929686af55bdef5694fd4590",
+      "env": {
+        "reward_mode": "rank_pt",
+        "reward_scale": 1.0,
+        "pts": [
+          2.0,
+          1.0,
+          0.0,
+          -3.0
+        ]
+      }
+    },
+    "C_delta_points": {
+      "label": "真实分数差奖励",
+      "config": "/mnt/data8/mortal/Mortal/mortal/reward_ablation/C_delta_points/config.toml",
+      "state_file": "/mnt/data8/mortal/Mortal/mortal/checkpoints/reward_ablation/C_delta_points/mortal.pth",
+      "state_sha256": "47417e67ac2eeb61dd6d10cd708491bbd3d2b24c929686af55bdef5694fd4590",
+      "env": {
+        "reward_mode": "delta_points",
+        "reward_scale": 0.001,
+        "pts": [
+          6.0,
+          4.0,
+          2.0,
+          0.0
+        ]
+      }
+    }
+  }
+}

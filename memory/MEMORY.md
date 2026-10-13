@@ -845,12 +845,36 @@ __pycache__
 - **新增工具**：`build_file_index.py`（预构建带 manifest 的共享索引）、`prepare_reward_ablation.py`（生成三组隔离 TOML/父 checkpoint/`experiment.json`）、`run_reward_ablation.sh`（三 GPU 并行训练入口）、`finish_reward_ablation.sh`（训练完成后自动 holdout + 双向 ladder + block bootstrap 收尾）。
 - **实验定义**（严格固定 R4 v2 数据池，不混入 v3/修复树）：父代 `checkpoints/round4/mortal.pth`，645,000 步，sha256=`47417e67ac2eeb61dd6d10cd708491bbd3d2b24c929686af55bdef5694fd4590`；原 R4 globs（HF 2022-2025 + 原始 `202601-202608`）、`top_players_400_v2`、`enable_augmentation=true`、`augmented_first=true`；共享索引 `indexes/reward_ablation_r4_v2.pth` 有 492,810 个文件，`with_names=699,715`、`without_names=113,430`。
 - 三组均 `max_train_steps=756,000`（新增 111,000）、`seed=20261012`、fp32、相同模型/GRP/CQL/辅助损失；仅奖励不同：A=`rank_pt` + `[6,4,2,0]`；B=`rank_pt` + `[2,1,0,-3]`；C=`delta_points` + `reward_scale=1e-3`。三组首次启动均确认跳过父代 optimizer/scheduler/scaler。
-- 当前三组仍在 tmux `reward_ablation` 中运行，GPU 为 0/1/3；日志暂未出现 `non-finite`、Traceback 或异常退出。元数据在 `mortal/reward_ablation/experiment.json`，分组日志为 `train.log`，共享日志为 `launcher.log`。
+- 三组训练与收尾链均已完成（终局判定见会话 18）；元数据在 `mortal/reward_ablation/experiment.json`，分组日志为 `train.log`/`holdout_202609.log`/`ladder_summary.log`，共享日志为 `launcher.log`/`finish.log`。
 - **中途诊断（13:15 UTC，A=652k / B=651k / C=653k，各仅训 6~8k/111k 步）**：
   - ✅ 评测基础设施验证通过：三组 `holdout_sample_digest` **完全一致**（`0e3d3cce0b7bad83`），`holdout_target_digest` **各不相同**（A=`7e60085d…` / B=`de072bcf…` / C=`c953c84c…`——奖励口径确实在管线中生效）。
   - 早期指标（12 批 × 512，202609）：A top1=0.8182 / R2=−0.54；B top1=0.8201 / R2=−0.84（⚠ B 的目标尺度不同，dqn_loss/R2 **不可跨组比**）；**C top1=0.8019 / R2=+0.06 —— R2 首次转正**（此前所有模型均为负），但 top1 略降。方向符合"从模仿人类转向预测分数变化"的预期；agari_top1 三组均 90/90（guard 完好）。
   - ⚠ 运行中的进程用的是**修改前**的 `train.py`（Python 模块启动时已加载），因此 B/C 日志里 env 告警仍显示旧文案；实际上 optimizer reset **已生效**（"跳过 checkpoint optimizer/scheduler"告警在位）。修改后的代码只影响后续新进程（如 finish 脚本调用的 ladder/holdout）。
 - **后续**：三组各到 756k 后，训练完成后由 `finish_reward_ablation.sh` 自动执行：同一 holdout month/seed，核对相同 `holdout_sample_digest`（记录各组 `holdout_target_digest`）；再用全新种子块 100000+/110000+ 双向各 5×500 sets；只按 block bootstrap CI 判读，未完成前不把 holdout 视为强度结论。
+
+### 会话 18：奖励消融终局判定（10-13 05:46 UTC）——C 显著变弱，B 方向性正向但未达显著
+
+**训练完成情况**：A/C 于 00:02/00:04 到 756k，B 于 04:17 到 756k，三组退出码均 0、0 非有限张量；`finish_reward_ablation.sh` 自动完成三组 holdout + 双向 ladder（新种子 100000+/110000+，各 5×500 sets）+ block bootstrap，05:46:45 收尾。
+
+**强度判定（vs 父代 round4/645k，双向同牌山 ≥5000 sets）**：
+
+| 组 | 变量 | δ (pt/半庄) | 解析 95%CI | bootstrap 95%CI | 判读 |
+|---|---|---|---|---|---|
+| A | `rank_pt` `[6,4,2,0]`（现状，控制组） | **−0.04** | [−1.20, +1.13] | [−1.03, +1.02] | 无结论（与父代等价） |
+| B | `rank_pt` `[2,1,0,-3]`（对齐天凤） | **+0.18** | [−0.98, +1.34] | [−0.85, +1.19] | 无结论，**方向正向** |
+| C | `delta_points` scale=1e-3（真实分数差） | **−5.61** | [−6.79, −4.44] | [−6.67, −4.55] | **显著变弱**（t=−9.38） |
+
+C 组分块明细：A 方向（C 当挑战者）5 块 avg_pt 全负（−3.62~−8.26），B 方向（父代当挑战者）5 块全正（+2.95~+5.83）——反对称形态是"确实变弱"的典型特征（对比 R2 有效时的 A +2.9/B −2.9）。
+
+**终态 holdout（202609，24 批×512，三组 `sample_digest` 一致）**：A top1=0.8179/R2=−0.65；B top1=0.8158/R2=−1.01；C top1=0.7960/R2=**+0.01**。⚠ C 的 R2 虽首次转正，但**没有转化为对局强度**——"Q 能拟合分数差"与"会打牌"是两回事，这是本轮最重要的认知。
+
+**结论与影响**：
+1. **C（真实分数差奖励）被决定性否掉**（−5.6 pt）。推测主因：① 分数差方差约为顺位奖励的 40 倍（var_t 22.2 vs 0.54），`cql.min_q_weight=5` 的相对权重被稀释；② 每局分数差被对手行为主导（噪声大），而顺位聚合整局信息更稳；③ scale=1e-3 归一化后目标范围 ±16 仍为 rank_pt（±3.2）的 5 倍。
+2. **A 确认平台期第三次**（同奖励 +111k 步 + 重置优化器 = 无变化），与 R3/R4 一起封死"同分布增量训练"路线。
+3. **B 是唯一正向信号但未达显著**（+0.18，需 44 倍 sets 才能到 2σ）。理论依据充分（训练目标与判定口径一致）且 CI 下界 −0.85 证明无实害——**建议后续轮次采用 B 口径作为新基线**。
+4. 分析文档 §6 推测 2（奖励对齐是否改善 ladder）标记为"方向正向未证实"；推测 4（GRP 换成真实分数差监督）**已被本轮间接否掉**。
+
+**下一轮候选**（按优先级）：① **R5 = B 奖励 + top200_v3 名单**（B 组本身即" B 奖励+top400"的现成控制组，天然单变量对比；top200 席位 344,068 ≈114k 步/遍）；② 若 R5 仍无增益 → IQL/Bellman 带 next state 目标；③ 扩窗 2019+（需 GRP 重训 + 数据审计）。
 
 ## 13. 待办与下一步
 

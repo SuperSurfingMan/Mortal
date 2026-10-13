@@ -876,6 +876,15 @@ C 组分块明细：A 方向（C 当挑战者）5 块 avg_pt 全负（−3.62~�
 
 **下一轮候选**（按优先级）：① **R5 = B 奖励 + top200_v3 名单**（B 组本身即" B 奖励+top400"的现成控制组，天然单变量对比；top200 席位 344,068 ≈114k 步/遍）；② 若 R5 仍无增益 → IQL/Bellman 带 next state 目标；③ 扩窗 2019+（需 GRP 重训 + 数据审计）。
 
+### 会话 19：第 5 轮启动（10-13 06:01 UTC）——B 口径 + top200_v3 收紧名单
+
+- **设计**：唯一实质变量 = 数据选择从 `top_players_400_v2` 收紧到 `top_players_200_v3`（v3 榜单已含 names 修复后的 2026 玩家）。其余全部继承 B 组：`pts=[2,1,0,-3]`、`rank_pt`、augmentation=true、fp32、同 GRP/CQL/aux、optimizer 不重置（同奖励口径，与 R2→R3→R4 一致）。
+- **数据管线**（names 修复后的第一次实战）：globs = HF 2022-2025 原树 + 修复补丁树 `houou4_names/20260[1-8]`；file_index `indexes/main_r5_top200_v3.pth`：命中 **293,416 文件**、`with_names=813,145 / without_names=0`（旧管线下 2026 的 113,430 文件全部无 names、0 席位——修复前后对比的直接证据）。
+- **父代与预算**：`reward_ablation/B_rank_pt_aligned/mortal.pth`（756k）；`max_train_steps=870,000`（+114k ≈ top200 增强样本一遍）。启动实锤：`loaded: 04:17:53` → `total steps: 756,000` → `reward: rank_pt(pts=[2.0,1.0,0.0,-3.0])` → 无 optimizer reset 告警、无 env 告警 → GPU0 100%（2.67 batch/s）。
+- **判定**：R5(870k) vs B 组(756k)，双向各 5×500 sets，**新种子块 120000+/130000+**（不与奖励消融的 100000+/110000+ 重复）；`run_round5.sh` 链式执行（预检→暖启→训练→判定→block bootstrap 汇总）。
+- **预计**：训练 ≈11.8 h（约 18:00 UTC 完成）+ 判定 ≈45 min。判进标准不变：bootstrap 95%CI 下界 > 0。
+- **若 R5 仍无增益**：按分析文档顺序转 IQL/Bellman（需 next state + target network）或扩窗 2019+（需 GRP 重训 + 数据审计）。
+
 ## 13. 待办与下一步
 
 | # | 事项 | 说明 |

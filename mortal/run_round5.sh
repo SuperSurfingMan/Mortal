@@ -14,8 +14,8 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export RAYON_NUM_THREADS=8
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0                    # P100 #0
-export CHECK_GPU_NAME='P100'                     # env_check 反验选卡
+export CUDA_VISIBLE_DEVICES=2                    # RTX 8000（PCI 序）——实测 fp32 4.28 it/s vs P100 2.48
+export CHECK_GPU_NAME='RTX 8000'                 # env_check 反验选卡
 
 cd $ROOT/mortal
 mkdir -p checkpoints/round5 runs logs

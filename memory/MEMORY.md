@@ -882,7 +882,8 @@ C 组分块明细：A 方向（C 当挑战者）5 块 avg_pt 全负（−3.62~�
 - **数据管线**（names 修复后的第一次实战）：globs = HF 2022-2025 原树 + 修复补丁树 `houou4_names/20260[1-8]`；file_index `indexes/main_r5_top200_v3.pth`：命中 **293,416 文件**、`with_names=813,145 / without_names=0`（旧管线下 2026 的 113,430 文件全部无 names、0 席位——修复前后对比的直接证据）。
 - **父代与预算**：`reward_ablation/B_rank_pt_aligned/mortal.pth`（756k）；`max_train_steps=870,000`（+114k ≈ top200 增强样本一遍）。启动实锤：`loaded: 04:17:53` → `total steps: 756,000` → `reward: rank_pt(pts=[2.0,1.0,0.0,-3.0])` → 无 optimizer reset 告警、无 env 告警 → GPU0 100%（2.67 batch/s）。
 - **判定**：R5(870k) vs B 组(756k)，双向各 5×500 sets，**新种子块 120000+/130000+**（不与奖励消融的 100000+/110000+ 重复）；`run_round5.sh` 链式执行（预检→暖启→训练→判定→block bootstrap 汇总）。
-- **预计**：训练 ≈11.8 h（约 18:00 UTC 完成）+ 判定 ≈45 min。判进标准不变：bootstrap 95%CI 下界 > 0。
+- **选卡修正（06:11 UTC，重要）**：R5 首次启动时误选 GPU 0（P100），实测 fp32 **2.48 batch/s**；换回 GPU 2（RTX 8000）实测 **4.36 batch/s**，**快 1.76×**，训练时长从 12.8 h 降到 7.3 h。已停掉 P100 那次（仅跑 11 分钟、无存盘、无污染）并清理残留后重启。**教训：主训练轮次一律用 `CUDA_VISIBLE_DEVICES=2`（RTX 8000）**——P100 是 Pascal 架构（FP32 ~9.3 TFLOPS）、RTX 8000 是 Turing（~13 TFLOPS），本模型 192×40 fp32 直接吃 GPU 算力（§16.21 已记 R4 的 4.24 it/s 实测）。选卡不能随手挑，估算时间时也要用对卡的基线，否则“每轮约 7 h”的既有预期会被无声拉长一倍以上。
+- **预计**：训练 ≈7.3 h（约 13:40 UTC 完成）+ 判定 ≈45 min。判进标准不变：bootstrap 95%CI 下界 > 0。
 - **若 R5 仍无增益**：按分析文档顺序转 IQL/Bellman（需 next state + target network）或扩窗 2019+（需 GRP 重训 + 数据审计）。
 
 ## 13. 待办与下一步
@@ -966,6 +967,8 @@ C 组分块明细：A 方向（C 当挑战者）5 块 avg_pt 全负（−3.62~�
 30. ⚠️ **「结构合法但语义全错」的数据修复最危险（10-12 实测踩到）**：`<UN>` 的 `n0~n3` 是 **URL 百分号编码**的玩家名（值长 45~63、纯 ASCII），直接写成 mjai `start_game.names` 后，`validate_logs` **全绿**、索引照常构建、训练不报错，但白名单命中率 **0%** —— 等于把整棵树变废，而且没有任何自动信号。**教训**：牌谱字段修复/重建必须做「与已知玩家池/白名单的命中率」验收（`tools/tenhou_data/verify_names.py`），结构校验（validate_logs）只看事件流合法性，查不出语义错误。相关：① 缺 names 时 Rust 侧 `#[serde(default)]` 会把 `names` 静默变 4 个空串，不报错只是不产样本；② `validate_logs <DIR>` 的 glob 含 `**/*.json`，别把报告类 json 写进数据树（会被当牌谱解析报错）。
 
 31. ⚠️ **`gamma<1` 不是跨局信用分配（10-12 实测更正，此前 §13bis/§16.16/§16.22 的说法有误）**：`steps_to_done` 在**局边界归零**（`dataloader.py`：`if not dones[i]` 才累加），奖励取 `kyoku_rewards[at_kyoku[i]]`（仅当前局）→ `gamma**steps_to_done` 只在**当前局内**给较早动作打折，且每局最后一条动作 `steps_to_done=0` 不被折扣。实测（`tools/training/inspect_gamma_semantics.py`，200 文件 / 54,526 样本）：参与折扣的只有**打牌(0-36) 与立直(37)**（判据 `label <= 37`）；**鸣牌(38-41)、杠(42)、和了(43)、九种九牌(44)、pass(45) 都不折扣** —— 与 `add_entry` 旧注释 "only discard and kan" 不符（注释已改）。**若做真跨局 credit assignment**，需数据侧显式给出"下一局状态 + 未来回报"并引入 target network，属独立框架改动。
+32. ⚠️ **主训练必须用 GPU 2（RTX 8000），别随手挑 P100（10-13 实测踩到）**：本模型 192×40 fp32 直接吃 GPU 算力，实测 P100 **2.48 batch/s** vs RTX 8000 **4.36 batch/s**（R4/R5 同配方复核一致，差 1.76×）。R5 首次启动误选 GPU 0，按 P100 速率估要 12.8 h，换卡后 7.3 h——**凭空多花 5.5 h**，而且会让"每轮约 7 h"的既有时间基线被无声拉长一倍。硬件原因：P100 是 Pascal（FP32 ~9.3 TFLOPS）、RTX 8000 是 Turing（~13 TFLOPS）。**做法**：所有 `run_roundN.sh` 固定 `CUDA_VISIBLE_DEVICES=2` + `CHECK_GPU_NAME='RTX 8000'`（env_check 会反验）；估算训练时长一律引用 RTX 8000 的实测基线；P100 留给并行 ladder 判定（那阶段吃 GPU 但每卡只跑 500 sets，不敏感）。
+
 
 ---
 

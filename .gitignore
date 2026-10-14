@@ -41,3 +41,10 @@ mortal/reward_ablation/*/train.log
 mortal/reward_ablation/*/holdout_*.log
 mortal/reward_ablation/*/ladder/
 mortal/reward_ablation/*/ladder_summary.log
+
+# ---- 本项目追加（2026-10-14）：IQL/Bellman Stage A 训练链运行期产物 ----
+# 配置与链脚本在 mortal/ 顶层（config.iql_a*.toml / run_iql_a*.sh），需要入库；
+# iql_a/ 与 iql_a_smoke/ 目录内全部是训练日志/holdout/判定牌谱等运行期产物，一律排除
+#（checkpoint 在 mortal/checkpoints/ 已被上面规则覆盖）。
+mortal/iql_a/
+mortal/iql_a_smoke/

@@ -1,0 +1,174 @@
+# IQL/Bellman 改造 Stage A 冒烟配置（2026-10-14，对应计划 S-A1）
+# 目的：验证 credit_mode='game' 的训练端接线（dataloader 后缀和 → train.py 目标），2k 步内确认：
+#   ① 续训目标守卫对 credit_mode 变化告警（暖启自 B 组，期望恰好 1 条 credit_mode 差异告警）
+#   ② 无 non-finite；③ dqn_loss/cql_loss 量级与 B 口径同起步；④ test_play 正常跑完。
+# 与正式 config.iql_a.toml 的差异：max_train_steps=758000（=756k 暖启 + 2k 冒烟步）、
+#   test_every/snapshot_every=2000（保证冒烟窗口内触发一次 test_play 与快照）、
+#   独立 ckpt/TB/test_play 命名空间 + smoke 专属 reset 令牌。
+# 数据侧完全复用 B 组索引（globs/names/data_version 与 reward_ablation_r4_v2 一致 → manifest 校验
+#   通过直接复用，不重建），确保冒烟与正式跑的是同一批文件。
+
+[control]
+version = 4
+online = false
+state_file = "checkpoints/iql_a_smoke/mortal.pth"    # 启动前从 B 组 756k 暖启（脚本负责拷贝）
+best_state_file = "checkpoints/iql_a_smoke/best.pth"
+tensorboard_dir = "runs/iql_a_smoke"
+device = "cuda:0"                # 物理卡由 CUDA_VISIBLE_DEVICES 指定（冒烟用 GPU2 RTX 8000）
+enable_cudnn_benchmark = true
+enable_amp = false               # 与正式一致：fp32
+enable_compile = false
+batch_size = 512
+opt_step_every = 1
+save_every = 1000
+test_every = 2000                # 冒烟窗口内必触发一次 test_play（758000 % 2000 == 0）
+submit_every = 1000
+max_train_steps = 758000         # ★ 暖启自带 steps=756000 → 实际只训练 2k 步
+snapshot_every = 2000
+seed = 20261014
+reset_best_perf = "iql-a-smoke-v1"
+reset_optimizer = "iql-a-smoke-v1"
+
+[test_play]
+games = 256                      # 冒烟：每次 test_play 只打 64 局
+log_dir = "runs/iql_a_smoke/test_play"
+enable_amp = false
+enable_rule_based_agari_guard = true
+
+[dataset]
+# 与 B 组（reward_ablation/B_rank_pt_aligned）完全一致 → manifest 校验通过，索引直接复用
+globs = [ "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202[2-5]??/**/*.json.gz", "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/20260[1-8]/**/*.json.gz",]
+player_names_files = [ "../dataset/index/top_players_400_v2.txt",]
+file_index = "indexes/reward_ablation_r4_v2.pth"
+file_batch_size = 16
+reserve_ratio = 0.0
+num_workers = 8
+num_epochs = 1
+enable_augmentation = true
+augmented_first = true
+data_version = "reward-ablation-r4-v2"
+
+[env]
+gamma = 1
+pts = [ 2.0, 1.0, 0.0, -3.0,]    # B 口径
+reward_mode = "rank_pt"
+reward_scale = 1.0
+credit_mode = "game"             # ★ 冒烟目标：game 口径端到端（守卫应报 1 条差异）
+
+[resnet]
+conv_channels = 192
+num_blocks = 40
+
+[cql]
+min_q_weight = 5
+
+[aux]
+next_rank_weight = 0.2
+
+[freeze_bn]
+mortal = false
+
+[optim]
+eps = 1e-8
+betas = [ 0.9, 0.999,]
+weight_decay = 0.1
+max_grad_norm = 5.0
+
+[online]
+history_window = 50
+enable_compile = false
+
+[1v3]
+seed_key = -1
+games_per_iter = 2000
+iters = 500
+log_dir = "runs/iql_a_smoke/ladder"
+
+[1v3.challenger]
+device = "cuda:0"
+name = "mortal"
+state_file = "checkpoints/iql_a_smoke/mortal.pth"
+stochastic_latent = false
+enable_compile = false
+enable_amp = true
+enable_rule_based_agari_guard = true
+
+[1v3.champion]
+device = "cuda:0"
+name = "baseline"
+state_file = "checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth"
+stochastic_latent = false
+enable_compile = false
+enable_amp = true
+enable_rule_based_agari_guard = true
+
+[1v3.akochan]
+enabled = false
+dir = "/path/to/akochan"
+tactics = "/path/to/tactics.json"
+
+[1v3.ladder]
+device = "cuda:0"
+enable_amp = false
+enable_rule_based_agari_guard = true
+
+[grp]
+state_file = "checkpoints/grp_h128.pth"
+
+[grp.network]
+hidden_size = 128
+num_layers = 3
+
+[grp.control]
+device = "cuda:0"
+enable_cudnn_benchmark = true
+tensorboard_dir = "runs/grp_v2"
+batch_size = 512
+save_every = 2000
+val_steps = 200
+max_train_steps = 60000
+
+[grp.dataset]
+train_globs = [ "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202[2-5]??/**/*.json.gz", "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/20260[1-8]/**/*.json.gz",]
+val_globs = [ "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202609/**/*.json.gz",]
+file_index = "indexes/grp_recent_v1.pth"
+file_batch_size = 50
+
+[grp.optim]
+lr = 0.0001
+
+[train_play.default]
+games = 800
+log_dir = "runs/train_play"
+boltzmann_epsilon = 0.005
+boltzmann_temp = 0.05
+top_p = 1.0
+repeats = 1
+
+[optim.scheduler]
+peak = 0.0001
+final = 0.0001
+warm_up_steps = 2000
+max_steps = 2000                 # 暖启后恒定 1e-4（与 B/hp_ablation 分支一致）
+
+[baseline.train]
+device = "cuda:0"
+enable_compile = false
+state_file = "checkpoints/mortal_step_000200000.pth"
+
+[baseline.test]
+device = "cuda:0"
+enable_compile = false
+state_file = "checkpoints/mortal_step_000200000.pth"   # 与 B 一致，best_perf 可比
+
+[online.remote]
+host = "127.0.0.1"
+port = 5000
+
+[online.server]
+buffer_dir = "/path/to/buffer"
+drain_dir = "/path/to/drain"
+sample_reuse_rate = 0
+sample_reuse_threshold = 0
+capacity = 1600
+force_sequential = false

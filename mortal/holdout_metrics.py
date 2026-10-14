@@ -27,6 +27,9 @@ DEVICE = torch.device(config['control']['device'])
 def collect(month, n_batch, bs, seed, workers):
     random.seed(seed)
     generator = torch.Generator().manual_seed(seed)
+    # credit_mode/gamma 必须与训练同口径，否则 q_target 不可比（2026-10-14 加，Stage A）
+    credit_mode = config['env'].get('credit_mode', 'kyoku')
+    gamma = config['env']['gamma']
     files = sorted(glob.glob(f'{ROOT}/{month}/*.json.gz'))
     if not files:
         raise SystemExit(f'没有文件: {ROOT}/{month}')
@@ -49,6 +52,8 @@ def collect(month, n_batch, bs, seed, workers):
         # 必须与训练同口径，否则 q_target 不可比（2026-10-12 加）
         reward_mode = config['env'].get('reward_mode', 'rank_pt'),
         reward_scale = config['env'].get('reward_scale', 1.0),
+        credit_mode = credit_mode,
+        gamma = gamma,
         always_include_kan_select = bool(config['dataset'].get('always_include_kan_select', True)),
     )
     it = iter(DataLoader(ds, batch_size = bs, drop_last = True,
@@ -59,8 +64,12 @@ def collect(month, n_batch, bs, seed, workers):
         obs, actions, masks, std, kr, ranks = next(it)
         if obs.shape[0] != bs:
             continue
-        q_target = (config['env']['gamma'] ** std.to(torch.int64)
-                    * kr.to(torch.float64)).to(torch.float32)
+        if credit_mode == 'game':
+            # 'game' 模式：dataloader 已给出跨局折扣回报，不再乘局内 γ^steps_to_done
+            q_target = kr.to(torch.float32)
+        else:
+            q_target = (gamma ** std.to(torch.int64)
+                        * kr.to(torch.float64)).to(torch.float32)
         batches.append((obs, actions, masks, q_target))
 
     # 同一 seed 不仅应选到同一批文件，也应得到同一 worker 迭代顺序；把动作和目标
@@ -137,6 +146,7 @@ def main():
     print(f'env: gamma={config["env"]["gamma"]} '
           f'reward_mode={config["env"].get("reward_mode", "rank_pt")} '
           f'reward_scale={config["env"].get("reward_scale", 1.0)} '
+          f'credit_mode={config["env"].get("credit_mode", "kyoku")} '
           f'pts={config["env"]["pts"]}'
           '（q_target 由当前配置决定而非 checkpoint，跨配置比较旧 ckpt 时务必固定这里的口径）', flush = True)
     for ckpt in args.ckpts:

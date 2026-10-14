@@ -23,6 +23,8 @@ class FileDatasetsIter(IterableDataset):
         augmented_first = False,
         reward_mode = 'rank_pt',
         reward_scale = 1.0,
+        credit_mode = 'kyoku',
+        gamma = 1.0,
         always_include_kan_select = True,
     ):
         """reward_mode（2026-10-12 加，对应 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
@@ -32,11 +34,20 @@ class FileDatasetsIter(IterableDataset):
                             与顺位无关；量级约 ±1e4，通常配 reward_scale（如 1e-3）归一化，
                             以免 CQL 项与 lr 的相对尺度被打乱。
 
+        credit_mode（2026-10-14 加，IQL/Bellman 改造 Stage A，见 memory/IQL_BELLMAN_DESIGN）：
+
+          'kyoku' —— 现状：样本只携带**本局**的奖励 r_k（train.py 里再乘 γ^steps_to_done），
+                     未来局的收益被完全丢弃（无跨局信用分配）。
+          'game'  —— 跨局折扣回报：样本携带 kyoku_returns[k] = Σ_{j≥k} γ^(j−k) · r_j，
+                     γ 取 env.gamma（跨局折扣，γ=1 时闭式为 pts[final_rank] − E_grp[pts|第 k 局开始]，
+                     GRP 中途期望自动成为控制变量）。train.py 在此模式下不再乘 γ^steps_to_done。
+
         always_include_kan_select：对齐 libriichi GameplayLoader 的默认值（True）。部署侧
         quick-eval 只在多候选杠时才请求 kan-select 状态，改成 False 可复现部署侧口径（用于回放对照）。
         """
         super().__init__()
         assert reward_mode in ('rank_pt', 'delta_points'), f'未知 reward_mode: {reward_mode}'
+        assert credit_mode in ('kyoku', 'game'), f'未知 credit_mode: {credit_mode}'
         self.version = version
         self.file_list = file_list
         self.pts = pts
@@ -50,14 +61,20 @@ class FileDatasetsIter(IterableDataset):
         self.augmented_first = augmented_first
         self.reward_mode = reward_mode
         self.reward_scale = reward_scale
+        self.credit_mode = credit_mode
+        self.gamma = float(gamma)
         self.always_include_kan_select = always_include_kan_select
         self.iterator = None
 
     def reward_desc(self):
         """一行描述当前奖励口径（训练/评测必须一致，故打日志用同一来源）。"""
         if self.reward_mode == 'delta_points':
-            return f'delta_points(real score diff, scale={self.reward_scale})'
-        return f'rank_pt(pts={self.pts}, scale={self.reward_scale})'
+            desc = f'delta_points(real score diff, scale={self.reward_scale})'
+        else:
+            desc = f'rank_pt(pts={self.pts}, scale={self.reward_scale})'
+        if self.credit_mode == 'game':
+            desc += f', credit=game(discounted suffix sum, gamma={self.gamma})'
+        return desc
 
     def build_iter(self):
         # do not put it in __init__, it won't work on Windows
@@ -131,6 +148,19 @@ class FileDatasetsIter(IterableDataset):
                     kyoku_rewards = self.reward_calc.calc_delta_pt(player_id, grp_feature, rank_by_player)
                 if self.reward_scale != 1.0:
                     kyoku_rewards = kyoku_rewards * self.reward_scale
+
+                if self.credit_mode == 'game':
+                    # 跨局信用分配（Stage A）：沿局轴做折扣后缀和，把未来所有局的回报折现回
+                    # 当前决策点。γ=1 时闭式为 pts[final_rank] − E_grp[pts|第 k 局开始]：逐局 r_j
+                    # telescope 求和使 GRP 中间项精确抵消（无双重计入），终局处 GRP 期望收敛为
+                    # one-hot，最后一局无需任何终端特判。注意 reward_scale 在此之前生效（线性缩放
+                    # 与后缀和可交换）。
+                    returns = np.zeros_like(kyoku_rewards)
+                    acc = 0.0
+                    for k in range(len(kyoku_rewards) - 1, -1, -1):
+                        acc = kyoku_rewards[k] + self.gamma * acc
+                        returns[k] = acc
+                    kyoku_rewards = returns
                 assert len(kyoku_rewards) >= at_kyoku[-1] + 1 # usually they are equal, unless there is no action in the last kyoku
 
                 scores_seq = np.concatenate((grp_feature[:, 3:] * 1e4, [final_scores]))

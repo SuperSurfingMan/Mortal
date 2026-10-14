@@ -84,8 +84,8 @@ def manifest_diff(saved, current):
 # 奖励定义写进 checkpoint 的 config 里，但它决定 dqn_loss 的目标值：续训时若只改配置不改
 # state_file，会把"两种目标"混进同一条损失曲线（例如 rank_pt → delta_points、改 pts、改 gamma）。
 # 这里只告警不中止（对照组实验可能故意如此），让日志里能看见。
-_ENV_REWARD_KEYS = ('gamma', 'pts', 'reward_mode', 'reward_scale')
-_ENV_REWARD_DEFAULTS = {'reward_mode': 'rank_pt', 'reward_scale': 1.0}
+_ENV_REWARD_KEYS = ('gamma', 'pts', 'reward_mode', 'reward_scale', 'credit_mode')
+_ENV_REWARD_DEFAULTS = {'reward_mode': 'rank_pt', 'reward_scale': 1.0, 'credit_mode': 'kyoku'}
 
 
 def env_reward_diff(saved_env, current_env):
@@ -177,6 +177,10 @@ def train():
     # 默认 'rank_pt' 保持历史行为；'delta_points' 用每局真实分数差（点），配 reward_scale 归一化。
     reward_mode = config['env'].get('reward_mode', 'rank_pt')
     reward_scale = float(config['env'].get('reward_scale', 1.0))
+    # 信用分配口径（2026-10-14，IQL/Bellman 改造 Stage A）：'kyoku' = 现状（只学本局奖励，
+    # train_batch 里乘 γ^steps_to_done）；'game' = 跨局折扣回报（dataloader 已做后缀和，
+    # 此处不再乘 γ^steps_to_done）。γ 在 'game' 模式下语义迁移为跨局折扣。
+    credit_mode = config['env'].get('credit_mode', 'kyoku')
     file_batch_size = config['dataset']['file_batch_size']
     reserve_ratio = config['dataset']['reserve_ratio']
     num_workers = config['dataset']['num_workers']
@@ -202,6 +206,7 @@ def train():
     logging.info(f'obs shape: {obs_shape(version)}')
     logging.info(
         f'env: gamma={gamma} reward_mode={reward_mode} reward_scale={reward_scale} '
+        f'credit_mode={credit_mode} '
         f'pts={pts if reward_mode == "rank_pt" else "(unused in delta_points)"} '
         f'kan_select={always_include_kan_select}'
     )
@@ -429,6 +434,8 @@ def train():
             augmented_first = augmented_first,
             reward_mode = reward_mode,
             reward_scale = reward_scale,
+            credit_mode = credit_mode,
+            gamma = gamma,
             always_include_kan_select = always_include_kan_select,
         )
         logging.info(f'reward: {file_data.reward_desc()}')
@@ -464,8 +471,13 @@ def train():
             player_ranks = player_ranks.to(dtype=torch.int64, device=device)
             assert masks[range(batch_size), actions].all()
 
-            q_target_mc = gamma ** steps_to_done * kyoku_rewards
-            q_target_mc = q_target_mc.to(torch.float32)
+            if credit_mode == 'game':
+                # 'game' 模式：dataloader 已把跨局折扣回报（后缀和）放进 kyoku_rewards，
+                # γ^steps_to_done 的局内折扣不再适用（γ 的语义已迁移为跨局折扣）。
+                q_target_mc = kyoku_rewards.to(torch.float32)
+            else:
+                q_target_mc = gamma ** steps_to_done * kyoku_rewards
+                q_target_mc = q_target_mc.to(torch.float32)
 
             with torch.autocast(device.type, enabled=enable_amp):
                 phi = mortal(obs)

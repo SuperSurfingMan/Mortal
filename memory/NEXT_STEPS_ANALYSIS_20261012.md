@@ -241,11 +241,13 @@ MEMORY §16.22 的 top200 方案本身成本合理，本机用 v2 榜单复核�
 现状：DQN 回归单样本 MC 奖励，**无 next obs、无 target network、无 Bellman bootstrap**（[`train.py:265`](/mnt/data8/mortal/Mortal/mortal/train.py:265)）。holdout 显示 `R²` 为负（Q 回归还不如常数预测），但人类动作 top1 仍在升——"更像人"而非"更能赢"。
 
 **建议顺序**：
-1. 固定数据 → 奖励形式对照（3.1）；
-2. 小扫 `cql.min_q_weight`（1 / 5 / 10），看 Q 幅度与 ladder 是否同步改善；
-3. 验证 `aux.next_rank_weight=0.2` 的真实贡献（消融 0 vs 0.2）；
-4. 仍无增益再考虑 IQL / advantage-weighted regression / 带 next state 的离线 Bellman；
+1. 固定数据 → 奖励形式对照（3.1）；→ **✅ 已测（10-13）**：B 口径 +0.18 采纳为基线、C 真实分数差 −5.61 关。
+2. 小扫 `cql.min_q_weight`（1 / 5 / 10），看 Q 幅度与 ladder 是否同步改善；→ **✅ 已测（10-14 hp_ablation）：无效**。cql=1 δ=+0.05（CI[−0.97,+1.06]）、cql=5（B）+0.18、cql=10 δ=−0.07（CI[−1.09,+0.99]），三点全跨 0；var_q/dqn_loss 随权重升高但未转化为强度。
+3. 验证 `aux.next_rank_weight=0.2` 的真实贡献（消融 0 vs 0.2）；→ **✅ 已测（10-14）：无结论**。aux=0 δ=+0.59（解析 t=0.99、bootstrap CI[−0.42,+1.61]），与 B 统计等价，未达显著。
+4. 仍无增益再考虑 IQL / advantage-weighted regression / 带 next state 的离线 Bellman；→ **← 便宜超参检查已排除“只是超参没扫对”这一替代解释，瓶颈确在目标形式（MC 单样本回归），下一步即此项。**
 5. **暂不建议**把 `192×40` 再扩大，也不建议只把步数推到 1M（R3 已证明重复数据无效）。
+
+> **hp_ablation 便宜前置实验（10-14）小结**：三条分支均从 round4/645k 同 B 配方暖启、只改一个旋钮，双向各 5×500 sets、新种子块 140000/150000，vs 父代均无统计结论（含控制组 B）。→ **超参（cql/aux）不是瓶颈**，支持直接上 ② IQL/Bellman。详情见 MEMORY §12 会话 21 / §16.24。
 
 旁证（✅ 实测 holdout_r4.log）：424k→645k 的 top1 0.8052→0.8112，但 ladder δ≈0，说明 top1 与强度已解耦，不能当进度信号。
 

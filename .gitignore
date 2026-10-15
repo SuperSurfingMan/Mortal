@@ -48,3 +48,10 @@ mortal/reward_ablation/*/ladder_summary.log
 #（checkpoint 在 mortal/checkpoints/ 已被上面规则覆盖）。
 mortal/iql_a/
 mortal/iql_a_smoke/
+
+# ---- 本项目追加（2026-10-15）：IQL/Bellman Stage B 训练链运行期产物 ----
+# 同 Stage A 约定：config.iql_b*.toml / run_iql_b*.sh 在 mortal/ 顶层需入库；
+# iql_b/ 与 iql_b_smoke/ 内全部是运行期产物（train.log/env_check.log/tmux.log/
+# holdout/ladder 判定牌谱/ladder_summary），一律排除。
+mortal/iql_b/
+mortal/iql_b_smoke/

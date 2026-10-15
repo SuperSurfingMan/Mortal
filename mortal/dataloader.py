@@ -25,6 +25,7 @@ class FileDatasetsIter(IterableDataset):
         reward_scale = 1.0,
         credit_mode = 'kyoku',
         gamma = 1.0,
+        objective = 'cql_mc',
         always_include_kan_select = True,
     ):
         """reward_mode（2026-10-12 加，对应 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
@@ -44,10 +45,24 @@ class FileDatasetsIter(IterableDataset):
 
         always_include_kan_select：对齐 libriichi GameplayLoader 的默认值（True）。部署侧
         quick-eval 只在多候选杠时才请求 kan-select 状态，改成 False 可复现部署侧口径（用于回放对照）。
+
+        objective（2026-10-15 加，IQL Stage B）：
+
+          'cql_mc' —— 现状：MC/CQL 回归（条目 [obs, actions, masks, steps_to_done, r, ranks]），
+                      credit_mode 决定 r 是本局奖励还是跨局后缀和。
+          'iql'    —— 真 IQL：条目 [obs, actions, masks, next_obs, terminal, r_t, ranks]。
+                      next_obs = 下一决策点 obs（同局 obs[i+1]；跨局自然落到下一局首个决策点），
+                      最后一条样本 terminal=True（next_obs 用自身占位，训练端丢弃 bootstrap 项）；
+                      r_t 仅局边界非零（= kyoku 口径 r_k），**不做后缀和**——未来回报由 V(s')
+                      bootstrap 接管。此模式下 credit_mode 被强制视为 'kyoku'。
         """
         super().__init__()
         assert reward_mode in ('rank_pt', 'delta_points'), f'未知 reward_mode: {reward_mode}'
         assert credit_mode in ('kyoku', 'game'), f'未知 credit_mode: {credit_mode}'
+        assert objective in ('cql_mc', 'iql'), f'未知 objective: {objective}'
+        if objective == 'iql' and credit_mode != 'kyoku':
+            # iql 的未来回报由 bootstrap 接管，后缀和会双重计入（守卫而非静默改写）
+            raise AssertionError("objective='iql' 要求 credit_mode='kyoku'（后缀和会与 bootstrap 双重计入）")
         self.version = version
         self.file_list = file_list
         self.pts = pts
@@ -63,6 +78,7 @@ class FileDatasetsIter(IterableDataset):
         self.reward_scale = reward_scale
         self.credit_mode = credit_mode
         self.gamma = float(gamma)
+        self.objective = objective
         self.always_include_kan_select = always_include_kan_select
         self.iterator = None
 
@@ -72,7 +88,9 @@ class FileDatasetsIter(IterableDataset):
             desc = f'delta_points(real score diff, scale={self.reward_scale})'
         else:
             desc = f'rank_pt(pts={self.pts}, scale={self.reward_scale})'
-        if self.credit_mode == 'game':
+        if self.objective == 'iql':
+            desc += ', objective=iql(next_obs bootstrap, r_t=kyoku boundary only)'
+        elif self.credit_mode == 'game':
             desc += f', credit=game(discounted suffix sum, gamma={self.gamma})'
         return desc
 
@@ -172,18 +190,39 @@ class FileDatasetsIter(IterableDataset):
                     if not dones[i]:
                         steps_to_done[i] = steps_to_done[i + 1] + int(apply_gamma[i])
 
-                for i in range(game_size):
-                    entry = [
-                        obs[i],
-                        actions[i],
-                        masks[i],
-                        steps_to_done[i],
-                        kyoku_rewards[at_kyoku[i]],
-                        player_ranks[at_kyoku[i] + 1],
-                    ]
-                    if self.oracle:
-                        entry.insert(1, invisible_obs[i])
-                    self.buffer.append(entry)
+                if self.objective == 'iql':
+                    # Stage B（真 IQL）：next 决策点 = 整场 obs 序列的 i+1（局内续接、跨局自然落到
+                    # 下一局首个决策点，因为 obs/at_kyoku 序列跨局连续）；最后一条样本 terminal=True。
+                    for i in range(game_size):
+                        if i + 1 < game_size:
+                            next_i, terminal_i = i + 1, False
+                        else:
+                            next_i, terminal_i = i, True   # 占位：训练端按 terminal 丢弃 bootstrap 项
+                        entry = [
+                            obs[i],
+                            actions[i],
+                            masks[i],
+                            obs[next_i],
+                            terminal_i,
+                            kyoku_rewards[at_kyoku[i]],
+                            player_ranks[at_kyoku[i] + 1],
+                        ]
+                        if self.oracle:
+                            entry.insert(1, invisible_obs[i])
+                        self.buffer.append(entry)
+                else:
+                    for i in range(game_size):
+                        entry = [
+                            obs[i],
+                            actions[i],
+                            masks[i],
+                            steps_to_done[i],
+                            kyoku_rewards[at_kyoku[i]],
+                            player_ranks[at_kyoku[i] + 1],
+                        ]
+                        if self.oracle:
+                            entry.insert(1, invisible_obs[i])
+                        self.buffer.append(entry)
 
     def __iter__(self):
         if self.iterator is None:

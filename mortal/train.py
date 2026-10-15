@@ -136,7 +136,7 @@ def train():
     from player import TestPlayer
     from dataloader import FileDatasetsIter, worker_init_fn
     from lr_scheduler import LinearWarmUpCosineAnnealingLR
-    from model import Brain, DQN, AuxNet
+    from model import Brain, DQN, AuxNet, VHead
     from libriichi.consts import obs_shape
     from config import config
 
@@ -151,6 +151,14 @@ def train():
     test_games = config['test_play']['games']
     min_q_weight = config['cql']['min_q_weight']
     next_rank_weight = config['aux']['next_rank_weight']
+    # 训练目标族（2026-10-15，IQL Stage B）：'cql_mc' = 现状（MC/CQL 回归，默认，与 env.credit_mode
+    # 搭配）；'iql' = 真 IQL（next_obs bootstrap + expectile V + AWR 政策提取，CQL 关闭）。
+    # 两键解耦：iql 模式下忽略 credit_mode（未来回报由 V(s') bootstrap 接管）。
+    objective = config['control'].get('objective', 'cql_mc')
+    assert objective in ('cql_mc', 'iql'), f'未知 objective: {objective}'
+    iql_tau = float(config['control'].get('iql_tau', 0.7))      # expectile 分位
+    iql_beta = float(config['control'].get('iql_beta', 3.0))    # AWR 优势温度
+    ema_decay = float(config['control'].get('ema_decay', 0.995))
     assert save_every % opt_step_every == 0
     assert test_every % save_every == 0
     max_train_steps = config['control'].get('max_train_steps', 0)
@@ -197,7 +205,12 @@ def train():
     mortal = Brain(version=version, **config['resnet']).to(device)
     dqn = DQN(version=version).to(device)
     aux_net = AuxNet((4,)).to(device)
-    all_models = (mortal, dqn, aux_net)
+    if objective == 'iql':
+        v_net = VHead().to(device)
+        all_models = (mortal, dqn, aux_net, v_net)
+    else:
+        v_net = None
+        all_models = (mortal, dqn, aux_net)
     if enable_compile:
         for m in all_models:
             m.compile()
@@ -206,13 +219,20 @@ def train():
     logging.info(f'obs shape: {obs_shape(version)}')
     logging.info(
         f'env: gamma={gamma} reward_mode={reward_mode} reward_scale={reward_scale} '
-        f'credit_mode={credit_mode} '
+        f'credit_mode={credit_mode} objective={objective} '
         f'pts={pts if reward_mode == "rank_pt" else "(unused in delta_points)"} '
         f'kan_select={always_include_kan_select}'
     )
+    if objective == 'iql':
+        logging.info(
+            f'iql: per-step gamma={gamma} tau={iql_tau} beta={iql_beta} ema_decay={ema_decay} '
+            '(Q̄ 用 EMA 网络；CQL 关闭；未来回报由 V(s\') bootstrap 接管)'
+        )
     logging.info(f'mortal params: {parameter_count(mortal):,}')
     logging.info(f'dqn params: {parameter_count(dqn):,}')
     logging.info(f'aux params: {parameter_count(aux_net):,}')
+    if objective == 'iql':
+        logging.info(f'v_net params: {parameter_count(v_net):,}')
 
     mortal.freeze_bn(config['freeze_bn']['mortal'])
 
@@ -254,10 +274,12 @@ def train():
     reset_token = config['control'].get('reset_best_perf', False)
 
     steps = 0
+    loaded_state = None
     state_file = config['control']['state_file']
     best_state_file = config['control']['best_state_file']
     if path.exists(state_file):
         state = torch.load(state_file, weights_only=True, map_location=device)
+        loaded_state = state
         timestamp = datetime.fromtimestamp(state['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
         logging.info(f'loaded: {timestamp}')
         mortal.load_state_dict(state['mortal'])
@@ -309,6 +331,25 @@ def train():
                     '；若要做净对照，请另建 state_file 或从同一父代重新暖启'
                 )
 
+    # EMA target 网络与 VHead 恢复（iql 专属；放在 online 权重加载之后，保证 EMA 初始=online）
+    ema_mortal = ema_dqn = None
+    if objective == 'iql':
+        ema_mortal = Brain(version=version, **config['resnet']).to(device)
+        ema_dqn = DQN(version=version).to(device)
+        saved = loaded_state if isinstance(loaded_state, dict) else {}
+        if 'v_net' in saved and 'ema_mortal' in saved and 'ema_dqn' in saved:
+            v_net.load_state_dict(saved['v_net'])
+            ema_mortal.load_state_dict(saved['ema_mortal'])
+            ema_dqn.load_state_dict(saved['ema_dqn'])
+            logging.info('iql: 已从 checkpoint 恢复 v_net 与 EMA target 网络')
+        else:
+            ema_mortal.load_state_dict(mortal.state_dict())
+            ema_dqn.load_state_dict(dqn.state_dict())
+            logging.warning(
+                'iql: 父代 ckpt 缺 v_net/EMA target 键 → VHead 随机初始化、EMA=online 复制'
+                '（首次从 cql_mc 暖启时属预期，恰好 1 条）'
+            )
+
     if not online and max_train_steps > 0 and steps >= max_train_steps:
         logging.info('training budget already reached')
         return
@@ -327,11 +368,19 @@ def train():
         logging.info('param has been submitted')
 
     writer = SummaryWriter(config['control']['tensorboard_dir'])
-    stats = {
-        'dqn_loss': 0,
-        'cql_loss': 0,
-        'next_rank_loss': 0,
-    }
+    if objective == 'iql':
+        stats = {
+            'q_loss': 0,
+            'v_loss': 0,
+            'awr_loss': 0,
+            'next_rank_loss': 0,
+        }
+    else:
+        stats = {
+            'dqn_loss': 0,
+            'cql_loss': 0,
+            'next_rank_loss': 0,
+        }
     all_q = torch.zeros((save_every, batch_size), device=device, dtype=torch.float32)
     all_q_target = torch.zeros((save_every, batch_size), device=device, dtype=torch.float32)
     idx = 0
@@ -436,6 +485,7 @@ def train():
             reward_scale = reward_scale,
             credit_mode = credit_mode,
             gamma = gamma,
+            objective = objective,
             always_include_kan_select = always_include_kan_select,
         )
         logging.info(f'reward: {file_data.reward_desc()}')
@@ -449,59 +499,108 @@ def train():
             generator = data_generator,
         ))
 
-        remaining_obs = []
-        remaining_actions = []
-        remaining_masks = []
-        remaining_steps_to_done = []
-        remaining_kyoku_rewards = []
-        remaining_player_ranks = []
+        remaining = []      # 每元素 = 一个不满批的字段元组（字段数由 objective 决定）
         remaining_bs = 0
         pb = tqdm(total=save_every, desc='TRAIN', initial=steps % save_every)
 
-        def train_batch(obs, actions, masks, steps_to_done, kyoku_rewards, player_ranks):
+        def train_batch(obs, actions, masks, *rest):
             nonlocal steps
             nonlocal idx
             nonlocal pb
 
+            if objective == 'iql':
+                next_obs, terminal, r_t, player_ranks = rest
+            else:
+                steps_to_done, kyoku_rewards, player_ranks = rest
+
             obs = obs.to(dtype=torch.float32, device=device)
             actions = actions.to(dtype=torch.int64, device=device)
             masks = masks.to(dtype=torch.bool, device=device)
-            steps_to_done = steps_to_done.to(dtype=torch.int64, device=device)
-            kyoku_rewards = kyoku_rewards.to(dtype=torch.float64, device=device)
             player_ranks = player_ranks.to(dtype=torch.int64, device=device)
             assert masks[range(batch_size), actions].all()
 
-            if credit_mode == 'game':
-                # 'game' 模式：dataloader 已把跨局折扣回报（后缀和）放进 kyoku_rewards，
-                # γ^steps_to_done 的局内折扣不再适用（γ 的语义已迁移为跨局折扣）。
-                q_target_mc = kyoku_rewards.to(torch.float32)
+            if objective == 'iql':
+                # Stage B（真 IQL）：next_obs bootstrap + expectile V + AWR 政策提取（CQL 关闭）。
+                # 目标端全部 stopgrad：L_Q 的 V(s')、L_V 的 Q̄（EMA 网络）、L_AWR 的优势权重 w。
+                # EMA/next 前向都套 no_grad：省激活内存，且避免 EMA/next 侧的反向图。
+                # 注：EMA 与 online 均处 train 模式（BN 用批统计，与 online Q 的归一化口径一致；
+                # EMA 的 BN buffer 每步都会被 online 覆盖，自身统计无意义）。
+                next_obs = next_obs.to(dtype=torch.float32, device=device)
+                terminal = terminal.to(dtype=torch.bool, device=device)
+                r_t = r_t.to(dtype=torch.float32, device=device)
+
+                with torch.autocast(device.type, enabled=enable_amp):
+                    phi = mortal(obs)
+                    with torch.no_grad():
+                        v_next = v_net(mortal(next_obs)).squeeze(-1)
+                    q_target_mc = torch.where(terminal, r_t, r_t + gamma * v_next)
+
+                    q_out = dqn(phi, masks)
+                    q = q_out[range(batch_size), actions]
+                    q_loss = 0.5 * mse(q, q_target_mc)
+
+                    with torch.no_grad():
+                        q_bar = ema_dqn(ema_mortal(obs), masks)
+                    v = v_net(phi).squeeze(-1)
+                    diff = torch.where(masks, q_bar - v.unsqueeze(-1), torch.zeros_like(q_bar))
+                    tau_w = torch.where(diff < 0, 1.0 - iql_tau, torch.full_like(diff, iql_tau))
+                    v_loss = (tau_w * diff ** 2)[masks].mean()
+
+                    with torch.no_grad():
+                        w = torch.exp((q.detach() - v.detach()) / iql_beta)
+                        w = w / w.mean().clamp_min(1e-8)
+                    awr_loss = -(w * q_out.log_softmax(dim=-1)[range(batch_size), actions]).mean()
+
+                    next_rank_logits, = aux_net(phi)
+                    next_rank_loss = ce(next_rank_logits, player_ranks)
+
+                    loss = sum((
+                        q_loss,
+                        v_loss,
+                        awr_loss,
+                        next_rank_loss * next_rank_weight,
+                    ))
             else:
-                q_target_mc = gamma ** steps_to_done * kyoku_rewards
-                q_target_mc = q_target_mc.to(torch.float32)
+                steps_to_done = steps_to_done.to(dtype=torch.int64, device=device)
+                kyoku_rewards = kyoku_rewards.to(dtype=torch.float64, device=device)
 
-            with torch.autocast(device.type, enabled=enable_amp):
-                phi = mortal(obs)
-                q_out = dqn(phi, masks)
-                q = q_out[range(batch_size), actions]
-                dqn_loss = 0.5 * mse(q, q_target_mc)
-                cql_loss = 0
-                if not online:
-                    cql_loss = q_out.logsumexp(-1).mean() - q.mean()
+                if credit_mode == 'game':
+                    # 'game' 模式：dataloader 已把跨局折扣回报（后缀和）放进 kyoku_rewards，
+                    # γ^steps_to_done 的局内折扣不再适用（γ 的语义已迁移为跨局折扣）。
+                    q_target_mc = kyoku_rewards.to(torch.float32)
+                else:
+                    q_target_mc = gamma ** steps_to_done * kyoku_rewards
+                    q_target_mc = q_target_mc.to(torch.float32)
 
-                next_rank_logits, = aux_net(phi)
-                next_rank_loss = ce(next_rank_logits, player_ranks)
+                with torch.autocast(device.type, enabled=enable_amp):
+                    phi = mortal(obs)
+                    q_out = dqn(phi, masks)
+                    q = q_out[range(batch_size), actions]
+                    dqn_loss = 0.5 * mse(q, q_target_mc)
+                    cql_loss = 0
+                    if not online:
+                        cql_loss = q_out.logsumexp(-1).mean() - q.mean()
 
-                loss = sum((
-                    dqn_loss,
-                    cql_loss * min_q_weight,
-                    next_rank_loss * next_rank_weight,
-                ))
+                    next_rank_logits, = aux_net(phi)
+                    next_rank_loss = ce(next_rank_logits, player_ranks)
+
+                    loss = sum((
+                        dqn_loss,
+                        cql_loss * min_q_weight,
+                        next_rank_loss * next_rank_weight,
+                    ))
+
             scaler.scale(loss / opt_step_every).backward()
 
             with torch.inference_mode():
-                stats['dqn_loss'] += dqn_loss
-                if not online:
-                    stats['cql_loss'] += cql_loss
+                if objective == 'iql':
+                    stats['q_loss'] += q_loss
+                    stats['v_loss'] += v_loss
+                    stats['awr_loss'] += awr_loss
+                else:
+                    stats['dqn_loss'] += dqn_loss
+                    if not online:
+                        stats['cql_loss'] += cql_loss
                 stats['next_rank_loss'] += next_rank_loss
                 all_q[idx] = q
                 all_q_target[idx] = q_target_mc
@@ -516,6 +615,15 @@ def train():
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
+                if objective == 'iql':
+                    # EMA target：参数 polyak；BN buffer 每步直接跟随 online（自身统计无意义，见上）
+                    with torch.no_grad():
+                        for pe, p in zip(ema_mortal.parameters(), mortal.parameters()):
+                            pe.mul_(ema_decay).add_(p, alpha=1 - ema_decay)
+                        for be, b in zip(ema_mortal.buffers(), mortal.buffers()):
+                            be.copy_(b)
+                        for pe, p in zip(ema_dqn.parameters(), dqn.parameters()):
+                            pe.mul_(ema_decay).add_(p, alpha=1 - ema_decay)
             scheduler.step()
             pb.update(1)
 
@@ -530,9 +638,14 @@ def train():
                 all_q_1d = all_q.cpu().numpy().flatten()[::128]
                 all_q_target_1d = all_q_target.cpu().numpy().flatten()[::128]
 
-                writer.add_scalar('loss/dqn_loss', stats['dqn_loss'] / save_every, steps)
-                if not online:
-                    writer.add_scalar('loss/cql_loss', stats['cql_loss'] / save_every, steps)
+                if objective == 'iql':
+                    writer.add_scalar('loss/q_loss', stats['q_loss'] / save_every, steps)
+                    writer.add_scalar('loss/v_loss', stats['v_loss'] / save_every, steps)
+                    writer.add_scalar('loss/awr_loss', stats['awr_loss'] / save_every, steps)
+                else:
+                    writer.add_scalar('loss/dqn_loss', stats['dqn_loss'] / save_every, steps)
+                    if not online:
+                        writer.add_scalar('loss/cql_loss', stats['cql_loss'] / save_every, steps)
                 writer.add_scalar('loss/next_rank_loss', stats['next_rank_loss'] / save_every, steps)
                 writer.add_scalar('hparam/lr', scheduler.get_last_lr()[0], steps)
                 # 非有限值会让 TB 的 histogram 抛 ValueError 直接打死训练进程 → 先过滤再记
@@ -548,7 +661,12 @@ def train():
                 # 参数更新、救不了 buffer；继续跑只会把坏状态写进所有产物。宁可停下来让人接手。
                 nonfinite = [
                     f'{mn}.{k}'
-                    for mn, mod in (('mortal', mortal), ('dqn', dqn), ('aux', aux_net))
+                    for mn, mod in (
+                        ('mortal', mortal), ('dqn', dqn), ('aux', aux_net)
+                    ) + (
+                        (('v_net', v_net), ('ema_mortal', ema_mortal), ('ema_dqn', ema_dqn))
+                        if objective == 'iql' else ()
+                    )
                     for k, v in mod.state_dict().items()
                     if not torch.isfinite(v).all()
                 ]
@@ -577,6 +695,11 @@ def train():
                     'mortal': mortal.state_dict(),
                     'current_dqn': dqn.state_dict(),
                     'aux_net': aux_net.state_dict(),
+                    **({
+                        'v_net': v_net.state_dict(),
+                        'ema_mortal': ema_mortal.state_dict(),
+                        'ema_dqn': ema_dqn.state_dict(),
+                    } if objective == 'iql' else {}),
                     'optimizer': optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
                     'scaler': scaler.state_dict(),
@@ -682,38 +805,21 @@ def train():
                     logging.info('training budget reached')
                     raise SystemExit(0)
 
-        for obs, actions, masks, steps_to_done, kyoku_rewards, player_ranks in data_loader:
-            bs = obs.shape[0]
+        for fields in data_loader:
+            bs = fields[0].shape[0]
             if bs != batch_size:
-                remaining_obs.append(obs)
-                remaining_actions.append(actions)
-                remaining_masks.append(masks)
-                remaining_steps_to_done.append(steps_to_done)
-                remaining_kyoku_rewards.append(kyoku_rewards)
-                remaining_player_ranks.append(player_ranks)
+                remaining.append(fields)
                 remaining_bs += bs
                 continue
-            train_batch(obs, actions, masks, steps_to_done, kyoku_rewards, player_ranks)
+            train_batch(*fields)
 
         remaining_batches = remaining_bs // batch_size
         if remaining_batches > 0:
-            obs = torch.cat(remaining_obs, dim=0)
-            actions = torch.cat(remaining_actions, dim=0)
-            masks = torch.cat(remaining_masks, dim=0)
-            steps_to_done = torch.cat(remaining_steps_to_done, dim=0)
-            kyoku_rewards = torch.cat(remaining_kyoku_rewards, dim=0)
-            player_ranks = torch.cat(remaining_player_ranks, dim=0)
+            stacked = tuple(torch.cat(parts, dim=0) for parts in zip(*remaining))
             start = 0
             end = batch_size
             while end <= remaining_bs:
-                train_batch(
-                    obs[start:end],
-                    actions[start:end],
-                    masks[start:end],
-                    steps_to_done[start:end],
-                    kyoku_rewards[start:end],
-                    player_ranks[start:end],
-                )
+                train_batch(*(p[start:end] for p in stacked))
                 start = end
                 end += batch_size
         pb.close()

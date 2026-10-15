@@ -230,6 +230,24 @@ class DQN(nn.Module):
         q = (v + a - a_mean).masked_fill(~mask, -torch.inf)
         return q
 
+class VHead(nn.Module):
+    """IQL 的状态价值头（2026-10-15，Stage B）：共享 Brain 的 phi，输出标量 V(s)。
+
+    结构与 DQN 的 v_head 同风格（Linear→Mish→Linear）。在 train.py 中与
+    ema_mortal/ema_dqn（EMA target 网络）配合，实现 L_Q（Bellman bootstrap）、
+    L_V（τ-expectile）与 L_AWR（优势加权 CE）三损失。
+    """
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(1024, 256),
+            nn.Mish(inplace=True),
+            nn.Linear(256, 1),
+        )
+
+    def forward(self, phi: Tensor) -> Tensor:
+        return self.net(phi)
+
 class GRP(nn.Module):
     def __init__(self, hidden_size=64, num_layers=2):
         super().__init__()

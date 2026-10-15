@@ -932,6 +932,34 @@ holdout（仅诊断，sample_digest 一致）：三条 top1 0.812–0.817（持�
 3. **现役最强仍为 `round4/mortal.pth`（645k）**；三条 hp_ablation 分支 + B 与父代均统计等价，无任何分支值得采纳为新基线。
 4. 产物：`mortal/hp_ablation/<tag>/{train.log,holdout_202609.log,ladder_summary.log}`；链日志 `mortal/logs/hp_resume_chain.log`（含 ALL DONE）；脚本 `tools/training/prepare_hp_ablation.py`、`mortal/run_hp_ablation.sh`、`mortal/resume_and_judge_hp.sh`。
 
+### 会话 22：IQL/Bellman Stage A（跨局信用分配）终局判定（10-14 17:16 UTC）——无增益、方向偏负
+
+**背景与设计**：hp_ablation（会话 21）排除超参解释后，按「IQL/Bellman 两阶段改造」计划先做便宜的 Stage A。唯一实质变量 `env.credit_mode`：`'kyoku'`（现状：样本只回归**本局**的 GRP 期望点差，未来所有局的收益被完全丢弃）→ `'game'`（跨局折扣回报 `returns[k]=Σ_{j≥k}γ^(j−k)·r_j`）。γ=1 时有闭式 **`pts[final_rank] − E_grp[pts|第 k 局开始]`**：GRP 中途期望自动成为**控制变量**（方差远低于纯 MC），逐局项 telescope 求和使中间项精确抵消（无双重计入），终局处 GRP 收敛为 one-hot 故**无需终端特判**。数据/名单(top400_v2)/增强/B 口径 pts/CQL=5/aux=0.2/GRP_h128 全部与 B 组锁死。
+
+**代码改动**（三处 + 验证）：`dataloader.py`（`credit_mode`/`gamma` 参数 + populate_buffer 沿局轴折扣后缀和）、`train.py`（`credit_mode` 进 `_ENV_REWARD_KEYS` 守卫；game 模式不再乘 γ^steps_to_done）、`holdout_metrics.py`（口径透传）；新增 `tools/training/test_credit_modes.py` 五层验证 **ALL PASS**（闭式恒等 max_err 8.9e-16、GRP 终局 one-hot、telescope 终点、kyoku 回归等价多重集逐位一致、γ=0.5 折扣确实生效、守卫 3 例）。冒烟链 `run_iql_a_smoke.sh` **7/7 全过**（守卫告警恰 1 条、索引 manifest 复用同批文件、无 non-finite、快照、test_play、吞吐 4.6 it/s）。
+
+**执行**：`run_iql_a.sh`（tmux `iql_a`）10-14 09:32 UTC 从 **B/756k** 暖启（`reset_optimizer='iql-a-v1'`）→ **867,000** 步，16:47 exit=0、无 non-finite、预算达成；用时 **7.25 h**，稳态 **4.52 batch/s**（与 B 的 4.28 持平 → **后缀和零 GPU 成本**）。判定 vs B/756k，新种子块 **160000/170000**，双向各 5×500 sets（10,000 半庄/方向）。
+
+**判定结果**：
+
+| 方向 | 分块 avg_pt | 合计 |
+|---|---|---|
+| 波A（新当挑战者） | +0.02 / −2.54 / −1.91 / −1.37 / −1.37 | **−1.435**（SE 0.847） |
+| 波B（旧当挑战者） | +2.79 / +0.99 / −0.32 / −0.79 / +0.43 | **+0.621**（SE 0.837） |
+
+- **δ = −1.028 pt/半庄**；解析 SE 0.595、t=−1.73、95%CI[−2.20, +0.14]（跨 0）
+- **block bootstrap：SE 0.517、95%CI = [−2.06, −0.02]、ρ_A +0.189 / ρ_B +0.191**（bseed 20261014，5000 次）→ **CI 不跨 0，工具判读「变弱」**
+- 两向同号，**未出现** C 组那种「A 全负 / B 全正」反对称伪影 → 是真实方向偏负，不是测量噪声
+- ⚠ 诚实标注：上界仅 −0.02，属**边际显著**；最稳妥表述是「**无增益、方向偏负**」，不宜称“确证变弱”
+
+**holdout 202609（仅诊断）**：top1 **0.8118**（与 B 同量级）、dqn_loss 1.6623 vs const 1.2103、**R²=−0.3734**、**var_q/var_t = 0.9158/2.4208**、agari_top1 171/171、logsumexp_q +0.433；digest `sample=d83666d339dac9d9` / `target=654aa926354a76a9`（target 随口径变化属预期，不可与 B 口径横比）。诊断含义：新目标幅度更大而 Q 只拟合到约 1/2.6 的方差 → **欠拟合目标幅度**，与「更像人 ≠ 更能赢」的既有结论同向。
+
+**结论与影响**：
+1. **Stage A 不采纳**：`checkpoints/iql_a/`（867k）归档保留，不替代任何基线；现役最强仍 `round4/mortal.pth`(645k)，训练基线口径仍 B/756k。
+2. **「把整场回报回传给早期动作」这条 MC / 控制变量路线被否** —— 跨局信用分配本身不是瓶颈的解；瓶颈不在“看不到长期结果”，而在**没有价值传播与政策改进机制**（Q 无法给未访问动作定价，argmax 仍停在行为克隆上）。
+3. **按计划直接转 Stage B（真 IQL）**：数据侧 `next_obs` + terminal 标志，模型侧 `VHead` + EMA target 网络，损失 `L_Q(r+γV(s')) + L_V(τ-expectile) + L_AWR(优势加权 CE)`、CQL 关闭；预算 +111k，吞吐预计降至 ~1.7-2 it/s（每步 3 次 encoder 前向）≈ 18-22 h；判定种子块预 **180000/190000**，父代 B/756k。Stage B 仍无增益 → ③ 扩窗 2019+ + 重训 GRP + 按年份审计。
+4. 产物：`mortal/iql_a/{train.log,holdout_202609.log,ladder_summary.log,ladder/A_16*.log,ladder/B_17*.log}`、链日志 `mortal/logs/iql_a_chain.log`（含 ALL DONE）、配置 `mortal/config.iql_a{,_smoke}.toml`、脚本 `mortal/run_iql_a{,_smoke}.sh`、索引 `mortal/indexes/iql_a_r4_v2.pth`；ckpt `checkpoints/iql_a/`=mortal.pth(867k)+best.pth(800k)+step_800k/850k。
+
 ## 13. 待办与下一步
 
 | # | 事项 | 说明 |
@@ -1014,6 +1042,8 @@ holdout（仅诊断，sample_digest 一致）：三条 top1 0.812–0.817（持�
 
 31. ⚠️ **`gamma<1` 不是跨局信用分配（10-12 实测更正，此前 §13bis/§16.16/§16.22 的说法有误）**：`steps_to_done` 在**局边界归零**（`dataloader.py`：`if not dones[i]` 才累加），奖励取 `kyoku_rewards[at_kyoku[i]]`（仅当前局）→ `gamma**steps_to_done` 只在**当前局内**给较早动作打折，且每局最后一条动作 `steps_to_done=0` 不被折扣。实测（`tools/training/inspect_gamma_semantics.py`，200 文件 / 54,526 样本）：参与折扣的只有**打牌(0-36) 与立直(37)**（判据 `label <= 37`）；**鸣牌(38-41)、杠(42)、和了(43)、九种九牌(44)、pass(45) 都不折扣** —— 与 `add_entry` 旧注释 "only discard and kan" 不符（注释已改）。**若做真跨局 credit assignment**，需数据侧显式给出"下一局状态 + 未来回报"并引入 target network，属独立框架改动。
 32. ⚠️ **主训练必须用 GPU 2（RTX 8000），别随手挑 P100（10-13 实测踩到）**：本模型 192×40 fp32 直接吃 GPU 算力，实测 P100 **2.48 batch/s** vs RTX 8000 **4.36 batch/s**（R4/R5 同配方复核一致，差 1.76×）。R5 首次启动误选 GPU 0，按 P100 速率估要 12.8 h，换卡后 7.3 h——**凭空多花 5.5 h**，而且会让"每轮约 7 h"的既有时间基线被无声拉长一倍。硬件原因：P100 是 Pascal（FP32 ~9.3 TFLOPS）、RTX 8000 是 Turing（~13 TFLOPS）。**做法**：所有 `run_roundN.sh` 固定 `CUDA_VISIBLE_DEVICES=2` + `CHECK_GPU_NAME='RTX 8000'`（env_check 会反验）；估算训练时长一律引用 RTX 8000 的实测基线；P100 留给并行 ladder 判定（那阶段吃 GPU 但每卡只跑 500 sets，不敏感）。
+33. ⚠️ **暖启续训的冒烟配置不能用「绝对小步数」当预算（10-14 踩到）**：`train.py` 的 `steps` 从 checkpoint 里恢复，`max_train_steps` 是**全局绝对值**——若照直觉写 `max_train_steps=2000`，而父代 ckpt 自带 `steps=756000`，则启动即命中 `steps >= max_train_steps` → 打一行 `training budget already reached` **秒退、0 步不训**（看着像“配置生效了但没产物”）。正确写法：目标 = 父代步数 + 冒烟步数（如 **758000**）；并同步把 `test_every`/`snapshot_every` 调小（且满足 `test_every % save_every == 0`、`snapshot_every % save_every == 0`、`max_train_steps % save_every == 0` 三条断言），否则冒烟窗口内触发不到 test_play/快照，等于白跑。
+34. ⚠️ **`tmux new -d -s x 'cmd > /path/日志'` 的重定向目录必须预先存在（10-14 踩到两次）**：重定向由 tmux 起的 shell 在**执行脚本之前**打开，若目标目录尚未被脚本 `mkdir -p` 创建，shell 直接 `No such file or directory` 退出 → **会话“秒退且零日志”**，`tmux ls` 看不到、`rc=0` 也照样失败（`tmux new -d` 的返回码不代表命令成功）。做法：启动前先 `mkdir -p` 日志目录，或把重定向指向已存在的 `mortal/logs/`；启动后用「脚本自己 tee 的日志文件」而非 tmux 重定向文件来确认存活。
 
 
 ---
@@ -1607,6 +1637,33 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 
 ---
 
+### 16.25 IQL/Bellman Stage A（跨局信用分配）终局判定（10-14 17:16）：无增益、方向偏负
+
+> 详情与分块明细见 §12 会话 22。本节只归档结论与更新后的强度账。
+
+**方案（相对原计划的差异）**：原拟“先跨局信用、再真 IQL”两步走；Stage A 实际采用 **GRP 作控制变量的折扣后缀和**（`env.credit_mode='game'`，γ=1 闭式 `pts[final_rank] − E_grp[pts|第 k 局开始]`），因此**零 GPU 成本**（实测 4.52 batch/s，与 B 持平）且无需 next-state/target net——它是 Bellman 思想的廉价近似，而不是真 IQL。
+
+**判定（IQL-A/867k vs B 组/756k，新种子 160000/170000，双向各 5×500 sets）**：δ = **−1.028 pt/半庄**，解析 SE 0.595、t=−1.73、95%CI[−2.20,+0.14]（跨 0）；**block bootstrap SE 0.517、95%CI=[−2.06,−0.02]、ρ≈+0.19** → CI 不跨 0（工具判“变弱”），但上界仅 −0.02 属**边际显著**，保守表述为“无增益、方向偏负”。两向同号（新做挑战者 −1.435；旧做挑战者 +0.621），无 C 组式反对称伪影。
+
+**累计强度账（全部 ≥5000 sets 双向同牌山）**：
+
+| 轮 | 变量 | δ vs 父代 | 结论 |
+|---|---|---|---|
+| R2 | 白名单 top400 + GRP h128/l3 | **+2.86 ± 0.59**（t=4.83） | ✅ 有效 |
+| R3 | 同池再跑一个 epoch | −0.03 ± 0.59 | ❌ 无效 |
+| R4 | 席位视角增强 +145k 步 | +0.10 ± 0.59 | ❌ 无效 |
+| 消融 B | 奖励口径 →[2,1,0,−3] | +0.18（bootstrap CI[−0.85,+1.19]） | ❌ 无结论（已采纳为基线） |
+| 消融 C | 真实分数差奖励 | −5.61（bootstrap CI[−6.67,−4.55]） | ❌ 确证变弱，路线关 |
+| R5 | top400_v2 → top200_v3 收紧名单 | −0.61（bootstrap CI[−1.61,+0.36]） | ❌ 无结论、方向偏负 |
+| hp_ablation | cql 1/10、aux 0 | +0.05 / −0.07 / +0.59（均跨 0） | ❌ 超参非瓶颈 |
+| **IQL-A** | **credit_mode: kyoku → game（跨局信用）** | **−1.03 ± 0.60（bootstrap CI[−2.06,−0.02]）** | ❌ **无增益、方向偏负 → MC 回传路线关** |
+
+→ **目标形式改造的第一条子路线（把整场回报用 GRP 控制变量回传）已否**。剩下的未试于段是**价值传播 + 政策改进**本身：Stage B 真 IQL（`next_obs` + terminal 标志、`VHead`、EMA target 网络、`L_Q + L_V(τ-expectile) + L_AWR`、CQL 关）。吞吐预估因每步 3 次 encoder 前向降至 ~1.7-2 it/s（+111k 步 ≈ 18-22 h）；判定种子块预 180000/190000。Stage B 仍无增益 → ③ 扩窗 2019+（需 GRP 重训 + 按年份审计）。现役最强仍 `checkpoints/round4/mortal.pth`（645k），基线口径仍 B/756k。
+
+**本轮终态资产**：`checkpoints/iql_a/` = `mortal.pth`(867k) + `best.pth`(800k) + `step_800k/850k`；判定牌谱 `mortal/iql_a/ladder/`（10 任务、双向 20,000 局）；汇总 `mortal/iql_a/ladder_summary.log`；链日志 `mortal/logs/iql_a_chain.log`（含 ALL DONE）；曲线 `runs/iql_a`。
+
+---
+
 ## 17. 进展总纲（10-01→10-11 系统性汇总）
 
 > 新会话只读本节即可接手；需细节时按小节号回查 §8～§16。
@@ -1628,6 +1685,8 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | 10-11 | 双向判定与第 3 轮收尾 | 第 2 轮 δ=+2.86 显著；第 3 轮（epoch 2）δ=−0.03 无增益；best_perf 重置已实现并验证 |
 | 10-11 | 代码评审 + 第 4 轮启动 | 修 4 个真 bug（供托计分/白名单 v2/best.pth 悬空/holdout worker）+ 实现两条建议（block bootstrap、一次性令牌）；R4=augmentation 起跑 |
 | 10-12 | **主机重启 + NaN 事故 + R4 终局** | 重启后 1000 步内 AMP/BN 污染致全状态 NaN → 三重防护 + fp32 回滚 500k 重跑 → 645k 完成；判定 δ=+0.10±0.59 **无增益** |
+| 10-13 | R5 终局 + 奖励消融判定 | names 修复与 v3 榜单上线；消融 C 确证变弱（−5.61）、B 采纳为基线；R5 top200 收紧名单 δ=−0.61 无增益 → 数据 reshuffle 路线到头 |
+| 10-14 | hp_ablation + IQL Stage A 全天 | 上午：cql/aux 三分支均跨 0 → 超参非瓶颈（会话 21）；下午：**Stage A 跨局信用分配**实现→冒烟 7/7→训完 867k→判定 **δ=−1.03（bootstrap CI[−2.06,−0.02]）无增益、方向偏负**（会话 22/§16.25）→ 下一步转 Stage B 真 IQL |
 
 ### 17.2 模型谱系与强度账（全部用 ladder 双向同牌山 ≥5000 sets 判定）
 
@@ -1638,8 +1697,11 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | R3 | **与 R2 完全相同**，仅 `num_epochs=2` | 同 grp_h128 | 424k→650,000 | 6.7 it/s / 10.4 h | **−0.03 pt**（SE 0.595，t=−0.05，95%CI[−1.19,+1.14]）❌ | 0.8091（下降） | `round3/mortal.pth` + step_450k…650k |
 | R4 | R2 同窗 + **白名单 v2**（492,810 文件）+ **augmentation** | 同 grp_h128 | 424k→**645,000**（中途 NaN 回滚到 500k 重跑，fp32 4.24 it/s / 累计 18.8 h） | **δ=+0.10 pt**（SE 0.593，t=0.16，95%CI[−1.07,+1.26]；bootstrap SE 0.508、CI[−0.90,+1.07]）❌ 无增益 | 0.8112@600k（12 批小样本口径，别与 24 批序列混比） | `round4/mortal.pth`(645k) + step_450k/500k/550k/600k，`best.pth`=500k |
 | R5 | R2/B 同窗 + **白名单 v3 top200**（293,416 文件、席位 344,068）+ names 修复补丁树，augmentation=true | grp_h128；奖励 **B 口径 pts=[2,1,0,-3]** | B/756k→**870,000**（fp32 4.28 it/s / ≈7.8 h） | **δ=−0.61 pt**（SE 0.594，t=−1.02，95%CI[−1.77,+0.56]；bootstrap SE 0.508、CI[−1.61,+0.36]）❌ 无结论、方向偏负 | 未测 holdout（本轮不跑） | `round5/mortal.pth`(870k) + step_800k/850k，`best.pth`=850k |
+| **IQL-A** | **与 B 组完全同数据/同配方**，唯一变量 `env.credit_mode`: kyoku→**game**（跨局折扣回报后缀和） | grp_h128；B 口径 pts=[2,1,0,-3] | B/756k→**867,000**（fp32 **4.52 it/s** / 7.25 h，后缀和零 GPU 成本） | **δ=−1.03 pt**（SE 0.595，t=−1.73，解析 CI[−2.20,+0.14]；**bootstrap SE 0.517、CI[−2.06,−0.02]**、ρ≈+0.19）❌ 无增益、方向偏负 | 0.8118（新口径不可横比：R² −0.373、var_q/var_t 0.92/2.42） | `iql_a/mortal.pth`(867k) + `best.pth`(800k) + step_800k/850k |
 
 → **三次“同分布层面挤数据”尝试全被否 + 收紧名单也被否**：R3（同池重复一个 epoch）δ=−0.03、R4（席位视角增强，+145k 步新样本）δ=+0.10、**R5（top400→top200 收紧名单）δ=−0.61**，都落在 ±1.2 pt 噪声带内（R5 还是方向偏负）；**目前唯一有效的增益仍只有 R2 的“换更强数据 + 换更好奖励”（δ=+2.86，t=4.83）**。现役最强 = `checkpoints/round4/mortal.pth`（645k）；下一轮应离开数据 reshuffle、转 **IQL/Bellman（带 next-state + target network）**。
+
+→ **新增（10-14）：目标形式改造的第一子路线也已否**——**IQL-A（跨局信用分配）δ=−1.03，bootstrap CI[−2.06,−0.02]**。即“让早期动作看到整场回报”不带来强度；瓶颈不在信用分配视界，而在**无价值传播与政策改进机制**（Q 无法给未访问动作定价）。下一轮 = **Stage B 真 IQL**（next_obs + VHead + EMA target net + τ-expectile + AWR，CQL 关）；若仍无增益 → 扩窗 2019+ + 重训 GRP。**至今八次对照（R3/R4/R5/消融 A/hp×3/Stage A）+ 基线 B 全部无统计增益，仅 R2 有效。**
 
 ### 17.3 可直接引用的量化事实
 
@@ -1663,6 +1725,7 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | `mortal/train.py` | ① `max_train_steps` 预算自停；② `snapshot_every` 编号快照；③ 索引构建改 `start.get('names', [])` 防 KeyError；④ **`best_perf` 重置机制**：新增 `state['best_perf_baseline']` 记录当时的卫冕者，加载时若（手动 `control.reset_best_perf` / 旧 state 无记录 / 卫冕者已更换）则重置为哨兵 `{4.0, −135.0}`；⑤ **10-12 `file_index` manifest**（`FILE_INDEX_VERSION=2`，比对 globs/名单 sha256/data_version，不一致自动重建）；⑥ **10-12 奖励口径**（读 `env.reward_mode`/`reward_scale`/`dataset.always_include_kan_select`）+ **续训目标守卫**（`env_reward_diff` 告警） | ①②③ 已跑过三轮；④ **10-11 四路测试通过**；⑤⑥ **10-12 回归通过**（`test_file_index_manifest.sh` U+E1~E6、`test_reward_modes.py` D 段） |
 | `mortal/dataloader.py` | **10-12**：新增 `reward_mode`（`rank_pt`/`delta_points`）、`reward_scale`、`always_include_kan_select` 三个参数与 `reward_desc()`；`delta_points` 复用此前从未接线的 `RewardCalculator.calc_delta_points` | ✅ `test_reward_modes.py` 全过（独立重算误差 7.3e-12） |
 | `mortal/holdout_metrics.py` | **10-12**：与训练同奖励口径（新增三个参数的透传）并在表头打印 env 口径 | ✅ |
+| **信用分配口径（10-14，Stage A）** | `mortal/dataloader.py`：`FileDatasetsIter` 新增 `credit_mode`（`'kyoku'`/`'game'`）+ `gamma`，`populate_buffer` 沿局轴做折扣后缀和（`returns[k]=Σ_{j≥k}γ^(j−k)·r_j`），`reward_desc()` 带口径标识；`mortal/train.py`：`credit_mode` 进 `_ENV_REWARD_KEYS` 守卫（默认 `'kyoku'`，旧 ckpt 缺键不误报），game 模式 q_target **不再乘 γ^steps_to_done**；`mortal/holdout_metrics.py`：透传 credit_mode/gamma | ✅ `test_credit_modes.py` 五层 ALL PASS + 冒烟 7/7 + 全轮跑完（无 non-finite、吞吐与 B 持平） |
 | `libriichi/src/dataset/gameplay.rs` | **10-12**：`add_entry` 的 `apply_gamma` 注释改为实测口径（打牌+立直折扣；杠/鸣牌/和了/pass 不折扣；视界只在当前局内）——**仅注释，无行为变更，无需重编 .so** | ✅ 见 §14-31 |
 | `mortal/train_grp.py` | `grp.control.max_train_steps`、`grp_best.pth` 按 val loss 取优、固定验证抽样种子、`est. %` 日志 | ✅ 已用（grp_h128 即此产物） |
 | `mortal/player.py` | `enable_amp` / `enable_rule_based_agari_guard` 从 `[test_play]` 读；固定评测种子块 | ✅（固定块现在只用于同轮趋势，见 §17.7-坑 2） |
@@ -1695,6 +1758,8 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | `tools/training/test_reward_modes.py` | **10-12 新增**：奖励口径验证——独立重算 `Grp::final_scores` 与每局真实分数差核对 `delta_points`、回归 `rank_pt`、检查 `reward_scale` 缩放与非法模式拦截、`env_reward_diff` 单测 |
 | `tools/training/inspect_gamma_semantics.py` | **10-12 新增**：在真实牌谱上验证 `apply_gamma`/`dones`/`steps_to_done` 语义（折扣判据、局边界归零、折扣视界=当前局内），并打印动作×折扣分布与局内折扣示例 |
 | `tools/player_stats/build_whitelist.sh` | **10-12 更新为 v3 口径**：glob 改为「HF 2022-2025 + `houou4_names/20260[1-8]`」，产出 `_v3` 榜单与 top400/top200 名单（v2 产物保留） |
+| `tools/training/test_credit_modes.py` | **10-14 新增**：信用分配口径验证——γ=1 闭式恒等（后缀和 == `pts[final]−E_grp[pts\|局k]`）、GRP 终局 one-hot、telescope 终点、kyoku 回归等价多重集、γ<1 折扣生效、非法 credit_mode 拦截、`env_reward_diff` 守卫 3 例 |
+| `mortal/config.iql_a.toml` + `mortal/run_iql_a.sh` | **10-14 新增**：Stage A 端到端链（env_check → B/756k 暖启 → 867k 训练 → holdout → 双向 ladder 160000/170000 → block bootstrap），全 env 重置内建于脚本；`config.iql_a_smoke.toml` + `run_iql_a_smoke.sh` 为同名 2k 步冒烟（**max_train_steps=758000**，见 §14-33） |
 
 ### 17.6 数据与产物台账
 
@@ -1704,8 +1769,8 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | `dataset/mjai/houou4_names/` | **10-12 新增**：2026（202601~202610，130,407 文件）补 names 的**补丁树**；训练需与旧树并列 glob（见下） | 607.6 MiB |
 | `dataset/tenhou_hf/` | 18 个 HF 年度原包 | 17 GB |
 | `dataset/raw/`、`dataset/index/` | 2026 自建 mjlog；清单 CSV + **强度榜 CSV/top400** | 1.2 GB / 197 MB |
-| `mortal/checkpoints/` | R1 快照、R2、R3、**R4**、grp×3、随机 baseline | 3.2 GB |
-| `mortal/logs/ladder_r2`、`ladder_r3`、`ladder_r4` | 三次 20,000 局判定牌谱（可事后重算/bootstrap） | 0.81 + 0.82 + 0.79 GB |
+| `mortal/checkpoints/` | R1 快照、R2、R3、**R4**、**R5(870k)**、**reward_ablation/{A,B,C}**、**hp_ablation/×3**、**iql_a(867k)**、grp×3、随机 baseline | ≈ 5 GB+ |
+| `mortal/logs/ladder_r2`、`ladder_r3`、`ladder_r4`；`mortal/{reward_ablation,hp_ablation,iql_a}/ladder*/` | 各轮 20,000 局判定牌谱（可事后重算/bootstrap）；**Stage A 判定牌谱在 `mortal/iql_a/ladder/`**（A_160000..162000 / B_170000..172000，含 `run_meta.json`） | 每轮 ≈ 0.8 GB |
 | `mortal/logs/tb_archive/` | TB 坏段事件文件取证归档 | 72 KB |
 | `mortal/indexes/` | `main_r2_whitelist_v1.pth`（480,414）等文件表 | 248 MB |
 | 本地 git | 分支 `main`，基线 `33e63bc`、`5a1867f`，tag `round1-complete`；**无远端** | 4.4 MB |
@@ -1716,21 +1781,21 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 |---|---|
 | 评测与判定 | 随机 baseline 使 test_play 饱和（§14-15）；**固定种子块不能跨轮比较**（§16.15，虚高 4.5 pt）；小样本只会低估（§16.13）；`best_perf` 继承会停写 best.pth（已修）；自写解析与 Rust Stat 平分 tie-break 不同（±1.4 pt） |
 | 数据 | `file_index` 换名单/换窗必须改名；2026 部分无 `names`；exFAT 簇浪费（已迁服务器）；大文件传输必须打包 |
-| 训练 | 离线只跑一个 epoch 就静默退出（§14-22）；state_file 存在即续训；GRP 必须先行且尺寸与 checkpoint 必须同步；`grp_best.pth` 会被不同容量实验互盖 |
-| 环境 | `MORTAL_CFG` 必需（默认 config.toml 不存在）；`CUDA_DEVICE_ORDER=PCI_BUS_ID` 否则选卡错（§14-19）；`import libriichi` 必须在 `mortal/` 下（§14-20）；`LD_LIBRARY_PATH` 只有跑 Rust CLI 才必需（§14-21）；RAYON 必须启动前设好 |
+| 训练 | 离线只跑一个 epoch 就静默退出（§14-22）；state_file 存在即续训；GRP 必须先行且尺寸与 checkpoint 必须同步；`grp_best.pth` 会被不同容量实验互盖；**暖启冒烟的 `max_train_steps` 是全局绝对值，必须写“父代步数+冒烟步数”否则秒退（§14-33）** |
+| 环境 | `MORTAL_CFG` 必需（默认 config.toml 不存在）；`CUDA_DEVICE_ORDER=PCI_BUS_ID` 否则选卡错（§14-19）；`import libriichi` 必须在 `mortal/` 下（§14-20）；`LD_LIBRARY_PATH` 只有跑 Rust CLI 才必需（§14-21）；RAYON 必须启动前设好；**tmux 重定向目录必须预先 mkdir，否则会话秒退且零日志（§14-34）** |
 | 工程 | 长任务一律 tmux + 日志落 `mortal/logs/`；脚本内用绝对路径解释器 `$PY`；`pgrep -f` 要锚定模式；并发 ladder 必传独立 log_dir |
 
 ### 17.8 未决与下一步
 
 | 类型 | 事项 |
 |---|---|
-| 已判定 | **第 4 轮 augmentation = 无增益**（δ=+0.10±0.59）；**奖励消融：C 显著变弱（−5.61）、B 方向正向未显著（+0.18，已采纳为新基线）**（会话 18）；**第 5 轮 top200 收紧名单 = 无结论、方向偏负**（δ=−0.61±0.59，bootstrap CI[−1.61,+0.36]，会话 20）。→ “同分布层面挤数据”（R3/R4/消融 A）+“换信息源的收紧名单”（R5）共 5 次否掉，**数据 reshuffle 路线到头**；**hp_ablation 便宜前置（10-14，cql/aux 小扫）也无增益（均 CI 跨 0）→ 排除“只是超参没扫对”，确认瓶颈在目标形式** |
-| **下一步（进行中/待判定）** | **IQL/Bellman 两阶段改造已开工（10-14）**：**Stage A = 跨局信用分配**（`env.credit_mode='game'`，GRP 控制变量折扣后缀和；γ=1 闭式 `pts[final] − E_grp[pts|局k]`）已实现并全量验证（`test_credit_modes.py` 五层 ALL PASS、冒烟 7/7），**正式链 10-14 09:32 UTC 启动**（B/756k 暖启 → 867k，GPU2 RTX8000；判定 vs B/756k，新种子块 160000/170000）；**Stage B = 真 IQL**（next_obs + V 网络 + expectile + AWR + target network）待 Stage A 判定后设计实施（父代取 Stage A 与 B 口径中较强者，种子块预 180000/190000）；若 Stage B 仍无增益 → 扩窗 2019+ + 重训 GRP + 按年份审计。**“收紧名单”已从候选删除。**现役最强仍为 `round4/mortal.pth`（645k），B/756k 为 10-13 采纳的训练基线口径（+0.18 未显著） |
+| 已判定 | **第 4 轮 augmentation = 无增益**（δ=+0.10±0.59）；**奖励消融：C 显著变弱（−5.61）、B 方向正向未显著（+0.18，已采纳为新基线）**（会话 18）；**第 5 轮 top200 收紧名单 = 无结论、方向偏负**（δ=−0.61±0.59，bootstrap CI[−1.61,+0.36]，会话 20）。→ “同分布层面挤数据”（R3/R4/消融 A）+“换信息源的收紧名单”（R5）共 5 次否掉，**数据 reshuffle 路线到头**；**hp_ablation 便宜前置（10-14，cql/aux 小扫）也无增益（均 CI 跨 0）→ 排除“只是超参没扫对”，确认瓶颈在目标形式**；**IQL Stage A（跨局信用分配，10-14）也无增益、方向偏负（δ=−1.03，bootstrap CI[−2.06,−0.02]，会话 22/§16.25）→ “整场回报回传”这条 MC/控制变量路线关闭** |
+| **下一步（未开工）** | **Stage B = 真 IQL（唯一剩下的未试方向）**：数据侧为每样本附 `next_obs` + terminal 标志（同局下一决策点或下一局首决策点；注意 kan_select 双条目与 collate 内存翻倍）；模型侧新增 `VHead` + mortal/dqn 的 **EMA target 网络**（存进 checkpoint）；损失换为 `L_Q = MSE(Q(s,a), r+γV(s'))` + `L_V = τ-expectile(V(s), Q̄(s,·))`（τ≈0.7）+ `L_AWR = 优势加权 CE`（β≈3.0），**CQL 关闭**（整套目标替换，接受捆绑；成功再补 cql on/off 归因）。预算 +111k（父代 B/756k、`reset_optimizer` 新令牌），吞吐预计 ~1.7-2 it/s → **≈18-22 h**（含判定 ~23 h）；判定种子块 **180000/190000**。Stage B 仍无增益 → ③ 扩窗 2019+ + 重训 GRP + 按年份审计。**现役最强仍为 `round4/mortal.pth`（645k），基线口径仍 B/756k** |
 | **已完成（10-12）** | 数据侧 P0 两条（分析文档 §2.1/§2.2，详见 §12 会话 15）：① 2026 缺失 names 已修复到**补丁树** `dataset/mjai/houou4_names/`（13 万文件；validate_logs 全绿；白名单命中 20.7% 座位 / 60.6% 文件），强度榜重建为 **v3**（top400 席位 789,454 / 262k 步每 epoch；top200 席位 344,068 / 114k 步）；② `file_index` 升级为带 **manifest 校验**（`FILE_INDEX_VERSION=2` + 可选 `dataset.data_version`），回归测试 E1~E6 全过。**模型侧 P0 三条**（详见 §12 会话 16）：③ 奖励口径可切换（`env.reward_mode` = `rank_pt`/`delta_points` + `reward_scale`）并加**续训目标守卫**；④ gamma 语义实测更正（`gamma<1` **不是**跨局信用分配，见 §14-31）；⑤ `ladder.py` 执行参数改为可配置+显式记录（`[1v3.ladder]`/CLI、`run_meta.json`、ckpt sha256） |
 | 已完成（10-13） | **第 5 轮已判定（top200_v3 收紧名单 = 无结论、方向偏负，δ=−0.61）→ 详见 §12 会话 20 / §16.23** |
-| 已完成（10-14） | ① **hp_ablation 终局判定**：cql=1/10、aux=0 三分支 vs 父代全 CI 跨 0 → 超参不是瓶颈，直接支持目标形式改造（§12 会话 21 / §16.24）；② **IQL Stage A 实施完毕**：dataloader/train/holdout 三处 `credit_mode` 接线 + 守卫键扩展（`_ENV_REWARD_KEYS`），验证脚本 `tools/training/test_credit_modes.py` ALL PASS（γ=1 闭式恒等 8.9e-16、GRP 终局 one-hot、kyoku 回归等价多重集、γ=0.5 折扣生效、守卫 3 例）；③ **冒烟链 7/7 全过**（守卫告警恰 1 条、索引 manifest 复用、无 non-finite、758k 预算、快照、test_play 正常、吞吐 4.6 it/s）；④ 正式链启动（见上“下一步”） |
-| 10-14 训练中实测 | Stage A 吞吐 4.52 batch/s（与 B 持平，后缀和零 GPU 成本）；800k 处 test_play avg_rank 2.4815 / avg_pt 2.5425（父代 B 记录 2.466/3.06，属暖启后正常波动；强度只认 ladder） |
-| 可做未做 | akochan 外部锚点（需 JRE，本机无）；上游 `git diff` 校准补丁清单（**服务器无外网**，curl 超时）；git 无远端→推不出去（10-14 复核 `git remote -v` 为空）；checkpoint 无异地备份（10-14 复核 `backups/` 仅本机同盘打包）；两套固定 holdout 的“同分布口径”未建（时间外推口径 202609 已常态化，见分析文档 §4/S1）；带 agari-guard 的 holdout 未做（§3.5）；kan-select 训/部署口径回放对照未做（§3.3）。**已解决并移出（原条目）：**~~固定种子块轮换~~（ladder.py CLI 每轮换块：R5=100000/110000、hp_ablation=140000/150000、Stage A=160000/170000）；~~GRP 真实点数差监督~~（C 组 10-13 测定 δ=−5.61 显著变弱，路线关闭）；~~`agg_ladder` block bootstrap 复核~~（已成每轮判定标配，bseed 记录在案） |
+| 已完成（10-14） | ① **hp_ablation 终局判定**：cql=1/10、aux=0 三分支 vs 父代全 CI 跨 0 → 超参不是瓶颈，直接支持目标形式改造（§12 会话 21 / §16.24）；② **IQL Stage A 实施完毕**：dataloader/train/holdout 三处 `credit_mode` 接线 + 守卫键扩展（`_ENV_REWARD_KEYS`），验证脚本 `tools/training/test_credit_modes.py` ALL PASS（γ=1 闭式恒等 8.9e-16、GRP 终局 one-hot、kyoku 回归等价多重集、γ=0.5 折扣生效、守卫 3 例）；③ **冒烟链 7/7 全过**（守卫告警恰 1 条、索引 manifest 复用、无 non-finite、758k 预算、快照、test_play 正常、吞吐 4.6 it/s）；④ 正式链 09:32 启动 → **16:47 训完 867k**（exit=0、无 non-finite、7.25 h）；⑤ **Stage A 终局判定（17:16 ALL DONE）：δ=−1.03、bootstrap CI[−2.06,−0.02] → 无增益、方向偏负，“整场回报回传”路线关闭**（§12 会话 22 / §16.25） |
+| 10-14 实测数值 | Stage A 吞吐 **4.52 batch/s**（与 B 持平 → 后缀和零 GPU 成本）；test_play 固定种子 800k avg_rank 2.4815/avg_pt 2.5425、850k 2.47/2.295（**仅趋势，不入强度结论**；种子块已被多轮消费）；holdout top1 0.8118 |
+| 可做未做 | akochan 外部锚点（需 JRE，本机无）；上游 `git diff` 校准补丁清单（**服务器无外网**，curl 超时）；git 无远端→推不出去（10-14 复核 `git remote -v` 为空）；checkpoint 无异地备份（10-14 复核 `backups/` 仅本机同盘打包）；两套固定 holdout 的“同分布口径”未建（时间外推口径 202609 已常态化，见分析文档 §4/S1）；带 agari-guard 的 holdout 未做（§3.5）；kan-select 训/部署口径回放对照未做（§3.3）。**已解决并移出（原条目）：**~~固定种子块轮换~~（ladder.py CLI 每轮换块，**已消费记录**：R2=60000-、R3=70000-、R4=80000-、消融=90000-/100000+110000（B）、R5=120000/130000、hp_ablation=140000/150000、**Stage A=160000/170000**；**Stage B 预定 180000/190000**）；~~GRP 真实点数差监督~~（C 组 10-13 测定 δ=−5.61 显著变弱，路线关闭）；~~`agg_ladder` block bootstrap 复核~~（已成每轮判定标配，bseed 记录在案） |
 | 文档对账 | §16.11 四项（尤其本机手册的 §4.x 代码修改章节与本节 §17.4 的逐条比对）；本地 `.md` 仍无法从服务器读取（无盘映射），需上传后才能真合并 |
 
 ### 17.9 新会话接手三步

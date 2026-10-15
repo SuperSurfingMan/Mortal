@@ -27,9 +27,10 @@ DEVICE = torch.device(config['control']['device'])
 def collect(month, n_batch, bs, seed, workers):
     random.seed(seed)
     generator = torch.Generator().manual_seed(seed)
-    # credit_mode/gamma 必须与训练同口径，否则 q_target 不可比（2026-10-14 加，Stage A）
+    # credit_mode/gamma/objective 必须与训练同口径，否则 q_target 不可比（2026-10-14/15 加）
     credit_mode = config['env'].get('credit_mode', 'kyoku')
     gamma = config['env']['gamma']
+    objective = config['control'].get('objective', 'cql_mc')
     files = sorted(glob.glob(f'{ROOT}/{month}/*.json.gz'))
     if not files:
         raise SystemExit(f'没有文件: {ROOT}/{month}')
@@ -54,6 +55,7 @@ def collect(month, n_batch, bs, seed, workers):
         reward_scale = config['env'].get('reward_scale', 1.0),
         credit_mode = credit_mode,
         gamma = gamma,
+        objective = objective,
         always_include_kan_select = bool(config['dataset'].get('always_include_kan_select', True)),
     )
     it = iter(DataLoader(ds, batch_size = bs, drop_last = True,
@@ -61,15 +63,21 @@ def collect(month, n_batch, bs, seed, workers):
                          worker_init_fn = worker_init_fn, generator = generator))
     batches = []
     while len(batches) < n_batch:
-        obs, actions, masks, std, kr, ranks = next(it)
-        if obs.shape[0] != bs:
+        fields = next(it)
+        if fields[0].shape[0] != bs:
             continue
-        if credit_mode == 'game':
-            # 'game' 模式：dataloader 已给出跨局折扣回报，不再乘局内 γ^steps_to_done
-            q_target = kr.to(torch.float32)
+        if objective == 'iql':
+            # iql 目标 = r+γV(s')，非 MC 口径且依赖在线 V 网络 → R²/dqn_loss 不适用（置 None）
+            obs, actions, masks = fields[0], fields[1], fields[2]
+            q_target = None
         else:
-            q_target = (gamma ** std.to(torch.int64)
-                        * kr.to(torch.float64)).to(torch.float32)
+            obs, actions, masks, std, kr, ranks = fields
+            if credit_mode == 'game':
+                # 'game' 模式：dataloader 已给出跨局折扣回报，不再乘局内 γ^steps_to_done
+                q_target = kr.to(torch.float32)
+            else:
+                q_target = (gamma ** std.to(torch.int64)
+                            * kr.to(torch.float64)).to(torch.float32)
         batches.append((obs, actions, masks, q_target))
 
     # 同一 seed 不仅应选到同一批文件，也应得到同一 worker 迭代顺序；把动作和目标
@@ -80,7 +88,8 @@ def collect(month, n_batch, bs, seed, workers):
     for obs, actions, masks, q_target in batches:
         for tensor in (obs, actions, masks):
             sample_digest.update(tensor.contiguous().numpy().tobytes())
-        target_digest.update(q_target.contiguous().numpy().tobytes())
+        if q_target is not None:
+            target_digest.update(q_target.contiguous().numpy().tobytes())
     return batches, sample_digest.hexdigest()[:16], target_digest.hexdigest()[:16]
 
 
@@ -106,8 +115,9 @@ def evaluate(name, ckpt, batches, bs):
             masks = masks.to(dtype = torch.bool, device = DEVICE)
             q_out = dqn(mortal(obs), masks)
             q = q_out[torch.arange(n, device = DEVICE), actions]
-            pq.append(q.float().cpu())
-            pt.append(q_target)
+            if q_target is not None:
+                pq.append(q.float().cpu())
+                pt.append(q_target)
             argmax = q_out.argmax(-1)
             agree += int((argmax == actions).sum().item())
             lse += float(torch.logsumexp(q_out, dim = -1).mean().item())
@@ -116,6 +126,12 @@ def evaluate(name, ckpt, batches, bs):
             n_agari += c
             if c > 0:
                 n_agari_hit += int((argmax[m] == 43).sum().item())
+    if not pt:
+        print(f'{name:<40} steps={str(st.get("steps", "-")):<8} '
+              f'top1={agree / total:.4f}  agari_top1={n_agari_hit}/{n_agari}  '
+              f'logsumexp_q={lse / len(batches):+.3f}  '
+              f'(objective=iql：目标非 MC 口径，dqn_loss/R² 不适用)', flush = True)
+        return
     q = torch.cat(pq)
     t = torch.cat(pt)
     mse = float(torch.mean((q - t) ** 2))

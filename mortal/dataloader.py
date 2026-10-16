@@ -53,8 +53,8 @@ class FileDatasetsIter(IterableDataset):
           'iql'    —— 真 IQL：条目 [obs, actions, masks, next_obs, terminal, r_t, ranks]。
                       next_obs = 下一决策点 obs（同局 obs[i+1]；跨局自然落到下一局首个决策点），
                       最后一条样本 terminal=True（next_obs 用自身占位，训练端丢弃 bootstrap 项）；
-                      r_t 仅局边界非零（= kyoku 口径 r_k），**不做后缀和**——未来回报由 V(s')
-                      bootstrap 接管。此模式下 credit_mode 被强制视为 'kyoku'。
+                      **r_t 仅局边界样本非零**（= kyoku 口径 r_k，每局只计一次），中间步 r=0，
+                      未来价值由 V(s') bootstrap 传递。此模式下 credit_mode 被强制视为 'kyoku'。
         """
         super().__init__()
         assert reward_mode in ('rank_pt', 'delta_points'), f'未知 reward_mode: {reward_mode}'
@@ -193,18 +193,25 @@ class FileDatasetsIter(IterableDataset):
                 if self.objective == 'iql':
                     # Stage B（真 IQL）：next 决策点 = 整场 obs 序列的 i+1（局内续接、跨局自然落到
                     # 下一局首个决策点，因为 obs/at_kyoku 序列跨局连续）；最后一条样本 terminal=True。
+                    #
+                    # ⚠ r_t **只在局边界样本非零**（dones[i]=True：下一样本跨入新一局，或整场最后一条）。
+                    #   10-15 修正：首版误把 kyoku_rewards 发给该局**每一个**样本，Bellman 沿链把每局
+                    #   奖励重复计入 ≈16 次（实测每局平均决策点数 16.00）→ Q 尺度爆到 logsumexp=-176、
+                    #   top1 0.81→0.69、ladder δ=-31.04，Stage B 首轮结果无效（详 MEMORY §16.26）。
+                    #   中间决策点 r=0，未来价值由 V(s') bootstrap 传递。
                     for i in range(game_size):
                         if i + 1 < game_size:
                             next_i, terminal_i = i + 1, False
                         else:
                             next_i, terminal_i = i, True   # 占位：训练端按 terminal 丢弃 bootstrap 项
+                        r_t_i = kyoku_rewards[at_kyoku[i]] if dones[i] else 0.0
                         entry = [
                             obs[i],
                             actions[i],
                             masks[i],
                             obs[next_i],
                             terminal_i,
-                            kyoku_rewards[at_kyoku[i]],
+                            r_t_i,
                             player_ranks[at_kyoku[i] + 1],
                         ]
                         if self.oracle:

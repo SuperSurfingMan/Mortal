@@ -1,7 +1,13 @@
 # IQL/Bellman Stage B 冒烟配置（2026-10-15，对应计划 S-B1b）
 # 目的：验证 objective='iql' 的训练端接线（iql 数据条目 → 三损失 → EMA/state 往返），2k 步内确认：
 #   ① 暖启守卫与 "缺 v_net/EMA" 告警恰 1 条 ② 无 non-finite ③ q/v/awr 三损失曲线稳定
-#   ④ 吞吐实测（预计 1.7-2 it/s）⑤ test_play 正常跑完。产物全部隔离在 *_smoke 命名空间。
+#   ④ 吞吐实测 ⑤ test_play 正常跑完 ⑥⑦ **行为门禁**：test_play avg_rank 未劣化、holdout top1 与
+#     Q 幅度在合理带内（v1 只查结构性项目，未能拦下 r_t 双重计入缺陷，见 MEMORY §16.26）。
+#     产物全部隔离在 *_smoke 命名空间。
+# ★ 命名空间递增记录：v1（checkpoints/iql_b_smoke/）= r_t 双重计入缺陷版；v2（checkpoints/iql_b_smoke_v2/）
+#   = r_t 已修但 L_V 错用「全部合法动作取 expectile」的版（末态 test_play avg_rank 2.840/avg_pt −26.54，
+#   holdout top1 0.6975、logsumexp_q −33.59 → 行为门禁 FAIL）。两者均含受损权重，不可续用，
+#   就地封存供取证；v3 = 两个缺陷都修完后的验证轮。
 # 与正式 config.iql_b.toml 的差异：max_train_steps=758000（756k 暖启 + 2k 冒烟步）、
 #   test_every/snapshot_every=2000（保证冒烟窗口内触发 test_play 与快照）、独立 ckpt/TB/test_play、
 #   smoke 专属 reset 令牌；数据侧复用 B 组索引（manifest 校验通过即复用）。
@@ -9,9 +15,9 @@
 [control]
 version = 4
 online = false
-state_file = "checkpoints/iql_b_smoke/mortal.pth"    # 启动前从 B 组 756k 暖启（脚本负责拷贝）
-best_state_file = "checkpoints/iql_b_smoke/best.pth"
-tensorboard_dir = "runs/iql_b_smoke"
+state_file = "checkpoints/iql_b_smoke_v3/mortal.pth"   # 启动前从 B 组 756k 暖启（脚本负责拷贝）
+best_state_file = "checkpoints/iql_b_smoke_v3/best.pth"
+tensorboard_dir = "runs/iql_b_smoke_v3"
 device = "cuda:0"                # 物理卡由 CUDA_VISIBLE_DEVICES 指定（冒烟用 GPU2 RTX 8000）
 enable_cudnn_benchmark = true
 enable_amp = false               # 与正式一致：fp32
@@ -24,8 +30,8 @@ submit_every = 1000
 max_train_steps = 758000         # ★ 暖启自带 steps=756000 → 实际只训练 2k 步（§14-33）
 snapshot_every = 2000
 seed = 20261015
-reset_best_perf = "iql-b-smoke-v1"
-reset_optimizer = "iql-b-smoke-v1"
+reset_best_perf = "iql-b-smoke-v3"
+reset_optimizer = "iql-b-smoke-v3"
 objective = "iql"                # ★ 冒烟目标：iql 端到端
 iql_tau = 0.7
 iql_beta = 3.0
@@ -33,7 +39,7 @@ ema_decay = 0.995
 
 [test_play]
 games = 256                      # 冒烟：每次 test_play 只打 64 局
-log_dir = "runs/iql_b_smoke/test_play"
+log_dir = "runs/iql_b_smoke_v3/test_play"
 enable_amp = false
 enable_rule_based_agari_guard = true
 
@@ -83,12 +89,12 @@ enable_compile = false
 seed_key = -1
 games_per_iter = 2000
 iters = 500
-log_dir = "runs/iql_b_smoke/ladder"
+log_dir = "runs/iql_b_smoke_v3/ladder"
 
 [1v3.challenger]
 device = "cuda:0"
 name = "mortal"
-state_file = "checkpoints/iql_b_smoke/mortal.pth"
+state_file = "checkpoints/iql_b_smoke_v3/mortal.pth"
 stochastic_latent = false
 enable_compile = false
 enable_amp = true

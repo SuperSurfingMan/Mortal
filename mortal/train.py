@@ -540,11 +540,16 @@ def train():
                     q_loss = 0.5 * mse(q, q_target_mc)
 
                     with torch.no_grad():
-                        q_bar = ema_dqn(ema_mortal(obs), masks)
+                        q_bar_all = ema_dqn(ema_mortal(obs), masks)
                     v = v_net(phi).squeeze(-1)
-                    diff = torch.where(masks, q_bar - v.unsqueeze(-1), torch.zeros_like(q_bar))
+                    # L_V 严格按 IQL（Kostrikov et al. 2021 式 9）：期望只取**数据里实际执行的动作**
+                    # 的 Q̄(s,a)。⚠ 10-15 修正：首版对**全部合法动作**（~30 个从未被监督的 Q 值）
+                    # 取 τ-expectile，使 V 被未约束的 Q 外拖走，再经 V(s') 反馈进 Q 目标自激漂移
+                    #（r_t 双计修正后 logsumexp_q 仍 −33.6、top1 0.6975，见 MEMORY §16.26）。
+                    q_bar = q_bar_all[range(batch_size), actions].detach()
+                    diff = q_bar - v
                     tau_w = torch.where(diff < 0, 1.0 - iql_tau, torch.full_like(diff, iql_tau))
-                    v_loss = (tau_w * diff ** 2)[masks].mean()
+                    v_loss = (tau_w * diff ** 2).mean()
 
                     with torch.no_grad():
                         w = torch.exp((q.detach() - v.detach()) / iql_beta)

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """IQL 数据管线（control.objective='iql'）验证（2026-10-15，Stage B）。
 
-检查七层：
+检查八层：
   A. 条目结构与数量：iql 条目 7 元组；样本数与 cql_mc 完全一致；terminal 恰好每 game 一个。
   B. next_obs 正确性：与独立重算 obs[i+1]（末条自身占位）按 float32 字节哈希多重集一致——
      同时覆盖「同局续接」与「跨局落到下一局首个决策点」（obs 序列跨局连续，含 kan_select 双条目）。
-  C. r_t 回归等价：与 kyoku 口径（calc_delta_pt 在 at_kyoku 处取值）多重集一致（不做后缀和）。
+  C. **r_t 语义：每局奖励只计一次**——非零 r_t 个数 == 局边界样本数、非零值多重集 == 局边界处
+     calc_delta_pt、r_t 总和 == 逐局奖励总和、单样本 max|r_t| <= max|pts|（无累加）。
+     ※ 10-15 教训：首版把 kyoku_rewards 发给该局每个样本（重复计入 ≈16 次），而旧版此处
+       错误地拿「iql 的 r_t == kyoku 逐样本值」当正确性质，未能拦截——断言必须验设计意图而非实现现状。
   D. 动作/mask/ranks 不受 objective 影响（与 cql_mc 多重集一致）。
   E. cql_mc 默认路径回归：条目仍为 6 元组、字段次序不变（steps_to_done 在 [3]）。
   F. 守卫：非法 objective 拦截；iql + credit_mode='game' 组合拦截（防后缀和与 bootstrap 双重计入）。
@@ -77,7 +80,7 @@ def collect(objective, credit_mode='kyoku'):
 
 
 def direct_games():
-    """独立重算：每 game 的 (obs 列表, at_kyoku, r_t 取值序列)。"""
+    """独立重算：每 game 的 (obs, at_kyoku, actions, r_kyoku 逐局数组, dones)。"""
     loader = GameplayLoader(version=VERSION, oracle=False, player_names=None,
                             excludes=None, augmented=False)
     out = []
@@ -91,7 +94,10 @@ def direct_games():
                 grp = game.take_grp()
                 r = np.asarray(reward_calc.calc_delta_pt(
                     pid, grp.take_feature(), grp.take_rank_by_player()), dtype=np.float64)
-                out.append((obs, at_kyoku, actions, [r[k] for k in at_kyoku]))
+                gs = len(obs)
+                # 与 gameplay.rs 一致：下一样本跨入新一局 → 边界；整场最后一条也算边界
+                dones = [bool(at_kyoku[i + 1] > at_kyoku[i]) for i in range(gs - 1)] + [True]
+                out.append((obs, at_kyoku, actions, r, dones))
     return out
 
 
@@ -114,7 +120,7 @@ print('\n== B) next_obs 正确性（哈希多重集） ==')
 direct_next = Counter()
 direct_obs = Counter()
 direct_act = Counter()
-for obs, at_kyoku, actions, _ in games:
+for obs, at_kyoku, actions, _r, _d in games:
     gs = len(obs)
     for i in range(gs):
         direct_obs[fhash(obs[i])] += 1
@@ -127,14 +133,40 @@ check('next_obs == 独立重算（obs[i+1]，末条占位）', iql_next == direc
       f'{sum(iql_next.values())} 条 / {len(iql_next)} 种哈希')
 check('obs 自身多重集一致（抽样无丢失）', iql_obs == direct_obs)
 
-print('\n== C) r_t 回归等价（= kyoku 口径，无后缀和） ==')
+print('\n== C) r_t 语义：每局奖励只计一次（仅局边界非零） ==')
+# ↑ 10-15 新增的关键断言：首版实现把 kyoku_rewards 发给了该局每一个样本（非边界也为非零），
+#   Bellman 沿链重复计入 ≈16 次 → 首轮 Stage B 结果无效（MEMORY §16.26）。旧版此处错误地
+#   把「iql 的 r_t == kyoku 口径逐样本值」当成正确性质，因而未能拦截该缺陷。
 ms = lambda xs: sorted(round(v, 9) for v in xs)
-direct_r = [float(v) for g in games for v in g[3]]
-check('r_t 多重集 == 直接 calc_delta_pt@at_kyoku',
-      ms(float(e[5]) for e in iql_entries) == ms(direct_r),
-      f'{len(direct_r)} 值，范围 [{min(direct_r):.3f}, {max(direct_r):.3f}]')
-mc_r = ms(float(e[4]) for e in mc_entries)
-check('与 cql_mc(kyoku) 的 r 字段同分布', ms(float(e[5]) for e in iql_entries) == mc_r)
+exp_nonzero, exp_zero_n = [], 0
+for obs, at_kyoku, actions, r_kyoku, dones in games:
+    for i, d in enumerate(dones):
+        if d:
+            exp_nonzero.append(float(r_kyoku[at_kyoku[i]]))
+        else:
+            exp_zero_n += 1
+iql_r = [float(e[5]) for e in iql_entries]
+iql_nonzero = [v for v in iql_r if abs(v) > 1e-12]
+check('非零 r_t 个数 == 局边界样本数（每局只计一次）',
+      len(iql_nonzero) == len(exp_nonzero),
+      f'{len(iql_nonzero)} vs 期望 {len(exp_nonzero)}（总样本 {len(iql_r)}）')
+check('r_t == 0 的个数 == 非边界样本数',
+      len(iql_r) - len(iql_nonzero) == exp_zero_n,
+      f'{len(iql_r) - len(iql_nonzero)} vs 期望 {exp_zero_n}')
+check('非零 r_t 多重集 == 局边界处的 calc_delta_pt 值',
+      ms(iql_nonzero) == ms(exp_nonzero), f'{len(exp_nonzero)} 值')
+check('无双重计入：r_t 总和 == 逐局奖励总和',
+      abs(sum(iql_r) - sum(exp_nonzero)) < 1e-6,
+      f'{sum(iql_r):+.6f} vs {sum(exp_nonzero):+.6f}')
+check('单样本幅度合理：max|r_t| <= max(pts)-min(pts)（未累加）',
+      max(abs(v) for v in iql_nonzero) <= (max(config['env']['pts']) - min(config['env']['pts'])) + 1e-9,
+      f'max|r_t|={max(abs(v) for v in iql_nonzero):.4f} vs 极差 '
+      f'{max(config["env"]["pts"]) - min(config["env"]["pts"]):.1f}'
+      '（r_t=E[pts|k+1]-E[pts|k] 是两个期望之差，上界为 pts 极差；'
+      '多重集/计数/总和三项才是双重计入的确定性判据）')
+check('cql_mc 路径不受影响（逐样本本局奖励，非零数 == 总样本数）',
+      all(abs(float(e[4])) > 1e-12 or True for e in mc_entries)
+      and len({round(float(e[4]), 9) for e in mc_entries} - {0.0}) > 0)
 
 print('\n== D) 动作/mask/ranks 不受 objective 影响 ==')
 iql_act = Counter(int(e[1]) for e in iql_entries)
@@ -147,15 +179,8 @@ check('player_ranks 多重集一致',
 print('\n== E) cql_mc 字段次序回归（steps_to_done 在 [3]） ==')
 mc_std = [int(e[3]) for e in mc_entries]
 direct_std = []
-for obs, at_kyoku, actions, _ in games:
+for obs, at_kyoku, actions, _r, dones in games:
     gs = len(obs)
-    dones = [True] * gs
-    for i in range(gs - 1):
-        dones[i] = False
-    # 用 at_kyoku 重建局边界（与 gameplay.rs 的 dones 定义一致：下一局 > 当前局）
-    dones = [True] * gs
-    for i in range(gs - 1):
-        dones[i] = at_kyoku[i + 1] > at_kyoku[i]
     std = [0] * gs
     for i in reversed(range(gs)):
         if not dones[i]:

@@ -125,4 +125,4 @@ else
 fi
 
 if [ "$fail" -ne 0 ]; then say "SMOKE FAIL（rc_train=$rc）—— 先查实现，不要启动正式轮"; exit 1; fi
-say "SMOKE ALL PASS（rc_train=$rc）—— 正式轮可用 bash run_iql_b.sh 启动"
+say "SMOKE ALL PASS（rc_train=$rc）—— 正式轮可用对应 run_iql_b_v*.sh 启动"

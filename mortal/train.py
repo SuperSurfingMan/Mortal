@@ -159,6 +159,12 @@ def train():
     iql_tau = float(config['control'].get('iql_tau', 0.7))      # expectile 分位
     iql_beta = float(config['control'].get('iql_beta', 3.0))    # AWR 优势温度
     ema_decay = float(config['control'].get('ema_decay', 0.995))
+    # L_Q bootstrap 的 V 是否改用 EMA target（10-16 加，IQL v2 价值尺度漂移修复的待测臂）：
+    # 0.0 = 关（用在线 V，IQL 原文 Algorithm 1 口径）；>0 = VHead 的 Polyak EMA（如 0.99）。
+    # 动机：v2 实测 q_target 中位数 105k 步内 +0.6→+61 纯指数发散（超理论界 [−5,+5] ~12 倍），
+    # 机制为 expectile 不对称放大 × γ≈1 × 边界稀疏奖励下的 bootstrap 反馈增益 >1（MEMORY 会话 25）。
+    iql_v_target_decay = float(config['control'].get('iql_v_target_decay', 0.0))
+    assert 0.0 <= iql_v_target_decay < 1.0, f'iql_v_target_decay 应在 [0,1)：{iql_v_target_decay}'
     assert save_every % opt_step_every == 0
     assert test_every % save_every == 0
     max_train_steps = config['control'].get('max_train_steps', 0)
@@ -226,6 +232,7 @@ def train():
     if objective == 'iql':
         logging.info(
             f'iql: per-step gamma={gamma} tau={iql_tau} beta={iql_beta} ema_decay={ema_decay} '
+            f'v_target_decay={iql_v_target_decay} '
             '(Q̄ 用 EMA 网络；CQL 关闭；未来回报由 V(s\') bootstrap 接管)'
         )
     logging.info(f'mortal params: {parameter_count(mortal):,}')
@@ -333,18 +340,27 @@ def train():
 
     # EMA target 网络与 VHead 恢复（iql 专属；放在 online 权重加载之后，保证 EMA 初始=online）
     ema_mortal = ema_dqn = None
+    v_ema = None
     if objective == 'iql':
         ema_mortal = Brain(version=version, **config['resnet']).to(device)
         ema_dqn = DQN(version=version).to(device)
+        if iql_v_target_decay > 0:
+            v_ema = VHead().to(device)
         saved = loaded_state if isinstance(loaded_state, dict) else {}
-        if 'v_net' in saved and 'ema_mortal' in saved and 'ema_dqn' in saved:
+        need_keys = ['v_net', 'ema_mortal', 'ema_dqn']
+        if all(k in saved for k in need_keys):
             v_net.load_state_dict(saved['v_net'])
             ema_mortal.load_state_dict(saved['ema_mortal'])
             ema_dqn.load_state_dict(saved['ema_dqn'])
+            if v_ema is not None:
+                # 旧 iql ckpt（v_target 关闭时存的）没有 v_ema 键 → 从 v_net 复制（EMA 初始=online）
+                v_ema.load_state_dict(saved['v_ema'] if 'v_ema' in saved else saved['v_net'])
             logging.info('iql: 已从 checkpoint 恢复 v_net 与 EMA target 网络')
         else:
             ema_mortal.load_state_dict(mortal.state_dict())
             ema_dqn.load_state_dict(dqn.state_dict())
+            if v_ema is not None:
+                v_ema.load_state_dict(v_net.state_dict())
             logging.warning(
                 'iql: 父代 ckpt 缺 v_net/EMA target 键 → VHead 随机初始化、EMA=online 复制'
                 '（首次从 cql_mc 暖启时属预期，恰好 1 条）'
@@ -532,7 +548,10 @@ def train():
                 with torch.autocast(device.type, enabled=enable_amp):
                     phi = mortal(obs)
                     with torch.no_grad():
-                        v_next = v_net(mortal(next_obs)).squeeze(-1)
+                        # L_Q 的 bootstrap 目标：默认用在线 V（IQL 原文口径）；iql_v_target_decay>0
+                        # 时改用 V 的 EMA target（打断 V→Q̄→V 的瞬时正反馈，v2 价值漂移的待测修复）
+                        v_src = v_ema if v_ema is not None else v_net
+                        v_next = v_src(mortal(next_obs)).squeeze(-1)
                     q_target_mc = torch.where(terminal, r_t, r_t + gamma * v_next)
 
                     q_out = dqn(phi, masks)
@@ -629,6 +648,9 @@ def train():
                             be.copy_(b)
                         for pe, p in zip(ema_dqn.parameters(), dqn.parameters()):
                             pe.mul_(ema_decay).add_(p, alpha=1 - ema_decay)
+                        if v_ema is not None:
+                            for pe, p in zip(v_ema.parameters(), v_net.parameters()):
+                                pe.mul_(iql_v_target_decay).add_(p, alpha=1 - iql_v_target_decay)
             scheduler.step()
             pb.update(1)
 
@@ -647,6 +669,17 @@ def train():
                     writer.add_scalar('loss/q_loss', stats['q_loss'] / save_every, steps)
                     writer.add_scalar('loss/v_loss', stats['v_loss'] / save_every, steps)
                     writer.add_scalar('loss/awr_loss', stats['awr_loss'] / save_every, steps)
+                    # 价值尺度监控（10-16 加，MEMORY 会话 25）：v2 曾因子指数漂移打废价值函数而
+                    # 2k 冒烟无感——每个存盘点打一行分位数，供链脚本门禁与事后取证。
+                    # 理论界：整场折扣回报 telescope 至 pts[final]−E[pts|start] ∈ [−5,+5]（B 口径）。
+                    _qt = all_q_target[torch.isfinite(all_q_target)]
+                    _qp = all_q[torch.isfinite(all_q)]
+                    if _qt.numel():
+                        logging.info(
+                            f'iql scale: q_target p50={_qt.median():+.3f} p99={_qt.quantile(0.99):+.3f}'
+                            f' | q_pred p50={_qp.median():+.3f}'
+                            f' | v_ema={"on" if v_ema is not None else "off"}'
+                        )
                 else:
                     writer.add_scalar('loss/dqn_loss', stats['dqn_loss'] / save_every, steps)
                     if not online:
@@ -670,6 +703,7 @@ def train():
                         ('mortal', mortal), ('dqn', dqn), ('aux', aux_net)
                     ) + (
                         (('v_net', v_net), ('ema_mortal', ema_mortal), ('ema_dqn', ema_dqn))
+                        + ((('v_ema', v_ema),) if v_ema is not None else ())
                         if objective == 'iql' else ()
                     )
                     for k, v in mod.state_dict().items()
@@ -704,6 +738,7 @@ def train():
                         'v_net': v_net.state_dict(),
                         'ema_mortal': ema_mortal.state_dict(),
                         'ema_dqn': ema_dqn.state_dict(),
+                        **({'v_ema': v_ema.state_dict()} if v_ema is not None else {}),
                     } if objective == 'iql' else {}),
                     'optimizer': optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),

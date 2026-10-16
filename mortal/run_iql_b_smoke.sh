@@ -114,5 +114,15 @@ else
     say "  [FAIL] logsumexp_q=${lq:-?} 尺度异常（门禁 |·|≤10）→ 目标量级可能被重复计入"; fail=1
 fi
 
+# ⑧ 价值尺度门禁（10-16 加，v2 漂移教训）：冒烟窗内 q_target p50 ≤ 10。
+#    v2 的漂移时间尺度 ~3 万步，2k 冒烟结构性无感——此门禁是兜底，充分证据靠探针/加长冒烟。
+sc_max=$(grep -a 'iql scale:' "$LOG" | grep -aoE 'q_target p50=[-+0-9.]+' | cut -d= -f2 \
+    | awk 'BEGIN{m=-1e9}{v=$1+0; if(v>m)m=v}END{printf "%.3f", m}')
+if [ -n "$sc_max" ] && awk -v m="$sc_max" 'BEGIN{exit !(m<=10)}'; then
+    say "  [OK] 价值尺度 max p50=$sc_max 未漂移（门禁 ≤10）"
+else
+    say "  [FAIL] 价值尺度 max p50=${sc_max:-?} 已漂移（门禁 ≤10）→ expectile/bootstrap 可能自激"; fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then say "SMOKE FAIL（rc_train=$rc）—— 先查实现，不要启动正式轮"; exit 1; fi
 say "SMOKE ALL PASS（rc_train=$rc）—— 正式轮可用 bash run_iql_b.sh 启动"

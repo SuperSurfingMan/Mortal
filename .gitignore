@@ -48,5 +48,7 @@ mortal/reward_ablation/*/ladder_summary.log
 # 运行期产物，一律排除（checkpoint 在 mortal/checkpoints/ 已被上面规则覆盖）。
 # ★ 用 glob 而非逐个列目录：命名空间会递增（iql_b_smoke_v2/v3、iql_b_v2…），列不尽；
 #   尾缀 / 保证只匹配目录，不误伤顶层的 config.iql_b_v2.toml / run_iql_b_v2.sh。
+# iql_probe*/ = 价值尺度漂移探针臂产物（10-16 新增，同约定：顶层 config/run 脚本入库）。
 mortal/iql_a*/
 mortal/iql_b*/
+mortal/iql_probe*/

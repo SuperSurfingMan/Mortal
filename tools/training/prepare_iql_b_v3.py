@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""生成 IQL Stage B v3 正式轮配置（10-16，MEMORY 会话 25；探针判据出来后调用）。
+"""生成 IQL Stage B v3 正式轮配置（10-16，MEMORY 会话 25/26；探针判据出来后调用）。
 
 用法：
-    python tools/training/prepare_iql_b_v3.py --fix v_ema     # 默认：bootstrap 用 V 的 EMA target
-    python tools/training/prepare_iql_b_v3.py --fix gamma99   # γ=0.99
-    python tools/training/prepare_iql_b_v3.py --fix tau05      # τ=0.5（机制检查臂，仅当探针只它稳定时用）
+    python tools/training/prepare_iql_b_v3.py --fix tau05      # 默认：τ=0.5（探针唯一验证的稳定修复）
+    python tools/training/prepare_iql_b_v3.py --fix clip8      # 备选：τ=0.7 + L_Q 目标钳位 ±8（待臂 E 验证）
 
+探针判决（10-16，5 臂各 30k 步）：对照/v-ema/γ=0.99 均漂移（8k 步 p50 +2.2~+3.4），
+τ=0.5 基本平坦（+0.20）→ 根因是 expectile 不对称棘轮（V 持续落后上升目标→残差持续为正→
+τ=0.7 强上拉/0.3 弱下拉的净向上蠕动，速率∝尺度），与反馈增益（γ）和 target lag 无关。
 v3 = v2 + 探针选出的最小反漂移修复；其余（数据/名单/增强/pts/GRP/预算/判定口径）全部锁死 = v2。
 判定用新种子块 220000/230000（200000/210000 已被 v2 消费）。
 """
@@ -17,14 +19,18 @@ SRC = MORTAL / 'config.iql_b_v2.toml'
 text = SRC.read_text(encoding='utf-8')
 
 FIXES = {
-    'v_ema': ('bootstrap 改用 V 的 EMA target（iql_v_target_decay=0.99）',
+    'tau05': ('τ=0.5（expectile 对称化；探针唯一验证的稳定修复，v2 棘轮根因的对症解）',
+              {'iql_tau = 0.7': 'iql_tau = 0.5'}),
+    'clip8': ('τ=0.7 + L_Q 目标钳位 ±8（保乐观性；臂 E 验证"撞墙止漂"是否伤价值学习）',
+              {'ema_decay = 0.995': 'ema_decay = 0.995\niql_value_clip = 8.0'}),
+    # 以下两项已被探针证伪（8k 步 p50 仍 +2.2/+2.6，与对照 +3.0 同量级），保留仅作记录：
+    'v_ema': ('bootstrap 改用 V 的 EMA target（探针证伪：仅慢 ~25%）',
               {'ema_decay = 0.995': 'ema_decay = 0.995\niql_v_target_decay = 0.99'}),
-    'gamma99': ('γ=0.99（每决策步折扣收紧）', {'gamma = 0.997': 'gamma = 0.99'}),
-    'tau05': ('τ=0.5（expectile 对称化）', {'iql_tau = 0.7': 'iql_tau = 0.5'}),
+    'gamma99': ('γ=0.99（探针证伪：与对照同速）', {'gamma = 0.997': 'gamma = 0.99'}),
 }
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--fix', choices=list(FIXES), default='v_ema')
+ap.add_argument('--fix', choices=list(FIXES), default='tau05')
 args = ap.parse_args()
 desc, subs = FIXES[args.fix]
 

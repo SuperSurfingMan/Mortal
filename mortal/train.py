@@ -165,6 +165,11 @@ def train():
     # 机制为 expectile 不对称放大 × γ≈1 × 边界稀疏奖励下的 bootstrap 反馈增益 >1（MEMORY 会话 25）。
     iql_v_target_decay = float(config['control'].get('iql_v_target_decay', 0.0))
     assert 0.0 <= iql_v_target_decay < 1.0, f'iql_v_target_decay 应在 [0,1)：{iql_v_target_decay}'
+    # L_Q 目标钳位（10-16 加，探针臂 E）：v2 实测 expectile 棘轮使价值指数自激（q_target 中位数
+    # +0.6→+61）。理论界：整场折扣回报 telescope 至 pts[final]−E[pts|start] ∈ [−5,+5]（B 口径），
+    # 取 8 留 60% margin——正常价值永不触界，仅漂移撞墙。0 = 关。
+    iql_value_clip = float(config['control'].get('iql_value_clip', 0.0))
+    assert iql_value_clip >= 0, f'iql_value_clip 应 ≥0：{iql_value_clip}'
     assert save_every % opt_step_every == 0
     assert test_every % save_every == 0
     max_train_steps = config['control'].get('max_train_steps', 0)
@@ -232,7 +237,7 @@ def train():
     if objective == 'iql':
         logging.info(
             f'iql: per-step gamma={gamma} tau={iql_tau} beta={iql_beta} ema_decay={ema_decay} '
-            f'v_target_decay={iql_v_target_decay} '
+            f'v_target_decay={iql_v_target_decay} value_clip={iql_value_clip} '
             '(Q̄ 用 EMA 网络；CQL 关闭；未来回报由 V(s\') bootstrap 接管)'
         )
     logging.info(f'mortal params: {parameter_count(mortal):,}')
@@ -553,6 +558,11 @@ def train():
                         v_src = v_ema if v_ema is not None else v_net
                         v_next = v_src(mortal(next_obs)).squeeze(-1)
                     q_target_mc = torch.where(terminal, r_t, r_t + gamma * v_next)
+                    if iql_value_clip > 0:
+                        # 仅钳非终端目标（终端目标 = r_t ∈ [−5,+5] 本就可达界内）。
+                        # 注意 terminal 样本的 r_t 不钳——它本就是有界锚。
+                        q_target_mc = torch.where(
+                            terminal, q_target_mc, q_target_mc.clamp(-iql_value_clip, iql_value_clip))
 
                     q_out = dqn(phi, masks)
                     q = q_out[range(batch_size), actions]

@@ -52,3 +52,11 @@ mortal/reward_ablation/*/ladder_summary.log
 mortal/iql_a*/
 mortal/iql_b*/
 mortal/iql_probe*/
+
+# ---- 本项目追加（2026-10-17）：读牌模型（tools/read_model/，对 mortal/ 零改动）----
+# 代码/文档/启动脚本在 tools/read_model/ 与 docs/TECHNICAL_REPORT.md，入库；
+# read_model_v*/ 目录内仅保留 eval_report.json（评估结论，类比 reward_ablation 的
+# experiment.json/config.toml），其余为运行期产物一律排除：
+#   *.pth   已被上方 *.pth 覆盖；*.onnx 为导出台账；train_log.jsonl 为训练日志。
+mortal/read_model_*/*.onnx
+mortal/read_model_*/*.jsonl

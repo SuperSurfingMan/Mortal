@@ -23,6 +23,7 @@ getter 比对（注意：立直家的 shanten 被 Rust 冻结在宣言时刻的�
 from __future__ import annotations
 
 import numpy as np
+import torch
 
 NUM_TILES = 34
 STRUCT_KEYS = ('shuntsu', 'kotsu', 'toitsu', 'ryanmen', 'kanchan', 'penchan', 'isolated')
@@ -31,6 +32,8 @@ MAX_COUNT_BIN = 4                             # 每个结构元素计数的分�
 COUNT_BINS = MAX_COUNT_BIN + 1                # 5
 NUM_FORMS = 3                                 # normal / chiitoi / kokushi
 FORM_NORMAL, FORM_CHIITOI, FORM_KOKUSHI = 0, 1, 2
+MAX_SHANTEN_BUCKET = 7                        # 标签桶 0..7（7 = 向听 >= 6）
+NUM_SHANTEN_BUCKETS = MAX_SHANTEN_BUCKET + 1  # 8
 KOKUSHI_TILES = (0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33)
 
 
@@ -181,3 +184,51 @@ def labels_from_bytes(tehai_bytes: bytes, len_div3: int) -> dict:
     """便捷入口：tehai 为 [u8;34] 的 bytes（PlayerState.tehai getter 的返回）。"""
     counts = np.frombuffer(tehai_bytes, dtype=np.uint8).astype(int).tolist()
     return structure_labels(counts, len_div3)
+
+
+# --------------------------------------------------------------------------- #
+# 可微软向听（分解 -> 向听的一致性约束 / 诊断共用）
+# --------------------------------------------------------------------------- #
+def soft_shanten_from_counts(count_probs: torch.Tensor,
+                             len_div3: torch.Tensor | float) -> torch.Tensor:
+    """由预测的搭子构造分布计算**可微软向听数**（与硬枚举器同一公式）。
+
+    用于「分解-向听一致性约束」：预测的分解直方图必须对应一个自洽向听数。
+    对预测分布取期望得到 M/T/K，代入与 ``_decompose_normal.shanten_of``
+    完全同口径的公式：
+
+        向听 = 2L - 2M - min(T+K, L-M) - 雀首修正
+        L = len_div3 = 手牌张数 // 3 = 4 - 副露数
+        M = 顺子 + 刻子；T = 两面 + 嵌张 + 边张；K = 对子
+        雀首修正：有对子 且 搭子+对子总数超过还差的面子槽位时再省 1 抽
+
+    与硬版的差异仅在「期望」与「逐分解」：硬公式对每个具体分解精确成立，
+    软公式对边际分布的期望做同构计算（min 取次梯度、雀首修正用 sigmoid 软 AND），
+    全程可微——梯度经 count_probs 回流到分解头，经返回值进入一致性损失。
+
+    **只覆盖 normal 路径**（与硬枚举器的 normal 项同口径）：七对/国士形制的
+    counts 标签取的仍是 normal 分解边际，不承载其向听信息。实测（202601 树
+    8 文件 18855 个目标）：normal 形制上 round(soft)==硬标签 **100%**
+    （mean|d|=0.039），非 normal 形制恒偏（mean|d|≈1.4）——故一致性约束
+    按形制门控（见 train.py），诊断脚本同样只解读 normal 子集。
+
+    Args:
+        count_probs: [..., NUM_STRUCT_COUNTS, COUNT_BINS]，最后一维是 0..4 的分布
+        len_div3:   [...] 或标量，L = 4 - 副露数（由公开信息精确推导）
+    Returns:
+        [...] 软向听（实数；>=6 的远处牌不截断，与标签比对时由调用方 clamp）
+    """
+    k = torch.arange(COUNT_BINS, dtype=count_probs.dtype, device=count_probs.device)
+    exp = (count_probs * k).sum(-1)                          # [...,7] 期望计数
+    m = exp[..., 0] + exp[..., 1]                            # 面子数（顺+刻）
+    t = exp[..., 3] + exp[..., 4] + exp[..., 5]              # 搭子数（两面+嵌张+边张）
+    kotsu = exp[..., 2]                                      # 对子数
+    len_div3 = torch.as_tensor(len_div3, dtype=count_probs.dtype,
+                               device=count_probs.device)
+    slots = len_div3 - m                                    # 还差的面子槽位
+    s = 2.0 * len_div3 - 2.0 * m - torch.minimum(t + kotsu, slots)
+    # 雀首修正的软 AND：sigmoid(k-0.5) * sigmoid((t+k)-slots-0.5)（sharpness 8）
+    sharp = 8.0
+    corr = (torch.sigmoid(sharp * (kotsu - 0.5))
+            * torch.sigmoid(sharp * (t + kotsu - slots - 0.5)))
+    return s - corr

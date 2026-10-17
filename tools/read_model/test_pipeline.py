@@ -1,6 +1,6 @@
 """读牌模型数据管线回归测试（对应 memory §14-35/36：断言设计意图 + 独立重算 + 数值门禁）。
 
-七层检查：
+八层检查：
   A. 标签不变量（全部从**事件流独立重算**，不复用被测代码输出）：
      A1 手牌数   : 每家 alloc.sum() == 13 - 3*(吃+碰+大明杠+暗杠)（加杠净贡献 0）
      A2 136 守恒 : 四家手牌 + 河牌 + 手牌外 tile + 牌山 + 14(死庄) == 136
@@ -14,6 +14,13 @@
   C. 万↔筒增广等变：标签按牌种置换一致；obs 绝大多数行满足列置换
   D. 掩码/标签一致：wait 标签支撑集与硬掩码零冲突（较大样本集）
   E. 模型数值门禁：前向形状/掩码/归一化；小训练后验证集 alloc_ce 显著下降（真在学）
+  F. 结构枚举器与时序 token（v2）：向听 vs Rust calc_all、token 独立重算、标签自洽
+  G. 结构头专项（v2s）：
+     G1 软向听公式 : normal 形制上 round(soft_shanten)==硬标签（公式与枚举器同口径）
+     G2 v2s 前向   : 形状/有限性/空时序边界；瓶颈维度 46（含向听分布）
+     G3 梯度流     : 新损失确实监督结构头向听头（v2 缺陷=该头零梯度，修复证明）；
+                     边界批（无心听牌目标）总损失有限（顺带修 v1/v2 潜在 -inf*0 NaN）
+     G4 v2s 小训练 : struct_shanten 未加权 CE 有限且下降；评测输出 struct_shanten_acc
 
 用法：
     python tools/read_model/test_pipeline.py [--n-files 12]
@@ -460,6 +467,129 @@ def test_model_and_learning(files, tmp_out='/tmp/read_model_test_train'):
           f"top1 {last['alloc_top1']:.4f} vs 常数 {const_top1:.4f}")
 
 
+def test_structure_head_special(files, tmp_out='/tmp/read_model_test_train_v2s'):
+    print('\n== G. 结构头专项（v2s：向听监督 + 分解-向听一致性）==', flush=True)
+    import model_v2 as M2
+    from structure import (FORM_NORMAL, MAX_SHANTEN_BUCKET,
+                           soft_shanten_from_counts)
+
+    # ---- G1：软向听公式 vs 硬枚举器标签（公式只覆盖 normal 路径，见
+    #      structure.soft_shanten_from_counts docstring；非 normal 形制的
+    #      counts 标签不承载其向听信息，一致性约束按形制门控）----
+    counts, trues, forms, allocs = [], [], [], []
+    for f in files[:4]:
+        samples, _ = D.replay_file(f)
+        for s in samples:
+            counts.append(s['struct_counts'])
+            trues.append(s['shanten'])
+            forms.append(s['struct_form'])
+            allocs.append(s['alloc'])
+    P = torch.from_numpy(np.stack(counts).astype(np.float32))        # [n,3,7,5]
+    T_ = np.stack(trues)                                             # [n,3]
+    F_ = np.stack(forms)
+    L_ = torch.from_numpy((np.stack(allocs).sum(-1) // 3).astype(np.float32))
+    with torch.no_grad():
+        S = soft_shanten_from_counts(P, L_).numpy()                  # [n,3]
+    m = F_ == FORM_NORMAL
+    ok = np.round(S).clip(0, MAX_SHANTEN_BUCKET) == T_
+    mean_abs = float(np.abs(np.clip(S, 0, MAX_SHANTEN_BUCKET) - T_)[m].mean())
+    check(f'G1 软向听公式：normal 形制 round==硬标签（{int(m.sum())} 个目标）',
+          bool(m.any()) and ok[m].mean() >= 0.999,
+          f'acc {ok[m].mean():.4f} mean|d| {mean_abs:.4f}')
+
+    # ---- G2：v2s 前向门禁（形状/有限/空时序；瓶颈 46 维含向听分布）----
+    torch.manual_seed(0)
+    net2s = M2.build_model_v2s()
+    B = 4
+    obs = torch.randn(B, 1012, 34)
+    unseen = torch.full((B, 34), 4.0)
+    unseen[:, 5] = 1.0
+    unseen[:, 27] = 0.0
+    bias = torch.zeros(B, 3, 34)
+    bias[:, 0, 5] = float('-inf')
+    tl_tokens = torch.zeros(B, 3, D.TL_MAX_LEN, D.TL_FEATURES)
+    tl_mask = torch.zeros(B, 3, D.TL_MAX_LEN, dtype=torch.bool)
+    tl_tokens[0, 0, :7, 3] = 1.0                     # 样本0目标0：7 个 token
+    tl_mask[0, 0, :7] = True
+    tl_tokens[1, 1, :26, 10] = 1.0                   # 样本1目标1：满长 26
+    tl_mask[1, 1, :26] = True
+    out2s = net2s(obs, unseen, bias, tl_tokens, tl_mask)
+    check('G2a v2s 前向形状',
+          out2s['alloc_probs'].shape == (B, 3, 34, 5)
+          and out2s['wait_probs'].shape == (B, 3, 35)
+          and out2s['struct_shanten_logits'].shape == (B, 3, 8))
+    finite2s = all(torch.isfinite(v).all() for k, v in out2s.items()
+                   if v.dtype.is_floating_point and 'logits' not in k)
+    check('G2b v2s 前向有限（含空时序样本）', finite2s)
+    check('G2c 瓶颈维度 46 = counts35+form3+向听8（v2 为 38）',
+          net2s.S == 46 and net2s.struct_shanten_belief
+          and not M2.build_model_v2().struct_shanten_belief)
+
+    # ---- G3：梯度流门禁——新损失必须真的监督到结构头向听头 ----
+    samples, _ = D.replay_file(files[0])
+    batch = T.collate(samples[:8])
+    wb = T.wait_bias_of(batch)
+    net2s.zero_grad()
+    out = net2s(batch['obs'], batch['unseen'], wb,
+                batch['tl_tokens'], batch['tl_mask'])
+    loss, parts = T.compute_loss(out, batch)
+    loss.backward()
+    g_head = net2s.struct.shanten_head.weight.grad
+    g_cnt = net2s.struct.count_head.weight.grad
+    check('G3a 总损失有限', bool(torch.isfinite(loss)))
+    check('G3b 结构头向听头获得梯度（v2 缺陷：该头原先零监督）',
+          g_head is not None and float(g_head.abs().sum()) > 0,
+          f'|grad|={0.0 if g_head is None else float(g_head.abs().sum()):.3e}')
+    check('G3c 分解头获得一致性梯度（consist_decomp 经公式回流）',
+          g_cnt is not None and float(g_cnt.abs().sum()) > 0)
+    check('G3d 新损失项进入 parts',
+          all(k in parts for k in ('struct_shanten', 'consist_head',
+                                   'consist_decomp', 'tenpai_tie')))
+    # v2 原状存档：关闭全部新损失后，结构头向听梯度严格为 0/None——
+    # 这正是 25.7% < 28.4% 多数类基差的机制原因，防止回归。
+    net2 = M2.build_model_v2()
+    net2.zero_grad()
+    out_v2 = net2(batch['obs'], batch['unseen'], wb,
+                  batch['tl_tokens'], batch['tl_mask'])
+    zero_cfg = {'w_shanten': 0.0, 'w_struct_shanten': 0.0, 'consist_head': 0.0,
+                'consist_decomp': 0.0, 'tenpai_tie': 0.0, 'struct_balance': False}
+    loss_v2, _ = T.compute_loss(out_v2, batch, loss_cfg=zero_cfg)
+    loss_v2.backward()
+    gv2 = net2.struct.shanten_head.weight.grad
+    check('G3e v2 原状存档：无向听监督时结构头向听梯度为 0/None',
+          gv2 is None or float(gv2.abs().sum()) == 0.0)
+
+    # ---- G4：v2s 小训练学习门禁（新损失有限且向听损失真的在降）----
+    import shutil
+    import subprocess
+    shutil.rmtree(tmp_out, ignore_errors=True)
+    cmd = [sys.executable, str(Path(__file__).parent / 'train.py'),
+           '--train-globs', files[0].rsplit('/', 1)[0] + '/*.json.gz',
+           '--val-globs', files[0].rsplit('/', 1)[0] + '/*.json.gz',
+           '--out-dir', tmp_out, '--steps', '60', '--batch-size', '128',
+           '--model', 'v2s', '--num-workers', '2',
+           '--stage-schedule', '1:15,2:15,3:30',
+           '--eval-samples', '1024', '--eval-every', '30', '--log-every', '30',
+           '--max-files', '12', '--seed', '7']
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    log = [json.loads(l) for l in open(Path(tmp_out) / 'train_log.jsonl')]
+    recs = [e for e in log if 'struct_shanten_raw' in e]
+    check('G4a v2s 小训练产出结构头损失记录', len(recs) >= 2, r.stderr[-300:])
+    check('G4c 一致性项全程有限',
+          bool(recs) and all(np.isfinite(e['consist_head'])
+                             and np.isfinite(e['consist_decomp'])
+                             and np.isfinite(e['tenpai_tie']) for e in recs))
+    # 学习门禁用**固定评估集**上的向听 CE/准确率（逐阶段瞬时损失分布不同，不可比）
+    evals = [e for e in log if 'eval' in e]
+    check('G4d 评测输出 struct_shanten_acc/ce',
+          bool(evals) and 'struct_shanten_acc' in evals[-1]['eval']
+          and 'struct_shanten_ce' in evals[-1]['eval'])
+    if len(evals) >= 2:
+        ce0, ce1 = evals[0]['eval']['struct_shanten_ce'], evals[-1]['eval']['struct_shanten_ce']
+        check('G4b 学习门禁：固定评估集 struct_shanten_ce 下降', ce1 < ce0,
+              f'{ce0:.4f} -> {ce1:.4f}')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--n-files', type=int, default=12)
@@ -479,6 +609,7 @@ def main():
     test_mask_label_consistency(files)
     test_structure_and_timeline(files)
     test_model_and_learning(files)
+    test_structure_head_special(files)
 
     print('\n================ 结果 ================')
     if FAILS:

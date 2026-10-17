@@ -43,10 +43,15 @@ def batch_to_samples(batch):
 def load_net(path, device):
     state = torch.load(path, map_location='cpu', weights_only=False)
     cfg = state.get('config', {})
-    if cfg.get('model', 'v1') == 'v2':
+    kind = cfg.get('model', 'v1')
+    if kind == 'v2':
         net = M2.build_model_v2(conv_channels=cfg.get('conv_channels', 96),
                                 num_blocks=cfg.get('num_blocks', 12),
                                 with_aux=not cfg.get('no_aux', False))
+    elif kind == 'v2s':
+        net = M2.build_model_v2s(conv_channels=cfg.get('conv_channels', 96),
+                                 num_blocks=cfg.get('num_blocks', 12),
+                                 with_aux=not cfg.get('no_aux', False))
     else:
         net = M.build_model(conv_channels=cfg.get('conv_channels', 96),
                             num_blocks=cfg.get('num_blocks', 12),
@@ -74,10 +79,12 @@ def predict(net, samples, device, bs=2048):
         if isinstance(net, M2.ReadNetV2):
             SH.append(o['struct_shanten_logits'].argmax(-1).cpu().numpy())
             SC.append(o['struct_count_logits'].softmax(-1).cpu().numpy())
+            SF.append(o['struct_form_logits'].argmax(-1).cpu().numpy())
     out = {'E': np.concatenate(E), 'WP': np.concatenate(WP)}
     if SH:
         out['shanten_pred'] = np.concatenate(SH)
         out['struct_pred'] = np.concatenate(SC)
+        out['form_pred'] = np.concatenate(SF)
     return out
 
 
@@ -158,17 +165,34 @@ def metrics(pred, samples, tag):
         out['shanten_acc'] = float((pred['shanten_pred'] == sh_true).mean())
         sc_true = np.stack([s['struct_counts'] for s in samples])
         out['struct_l1'] = float(np.abs(pred['struct_pred'] - sc_true).sum(-1).mean())
+        # 自洽向听：分解直方图暗含的软向听（L=手牌数//3，公开信息推导）
+        from structure import MAX_SHANTEN_BUCKET, soft_shanten_from_counts
+        len_div3 = (H.sum(-1) // 3).astype(np.float32)               # [n,3]
+        with torch.no_grad():
+            sh_soft = soft_shanten_from_counts(
+                torch.from_numpy(pred['struct_pred']),
+                torch.from_numpy(len_div3)).numpy()
+        sh_self = np.clip(np.round(sh_soft), 0, MAX_SHANTEN_BUCKET).astype(int)
+        out['shanten_self_acc'] = float((sh_self == sh_true).mean())
+        out['shanten_consist'] = float((pred['shanten_pred'] == sh_self).mean())
+        # 形制准确率（normal 占 ~97%，对照多数类基线看是否退化为常数预测）
+        form_true = np.stack([s['struct_form'] for s in samples])
+        out['form_acc'] = float((pred['form_pred'] == form_true).mean())
     return out
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--v1', required=True)
-    ap.add_argument('--v2', required=True)
+    ap.add_argument('--v1', required=True, help='基线 checkpoint（列 A）')
+    ap.add_argument('--v2', required=True, help='对照 checkpoint（列 B）')
+    ap.add_argument('--tag-a', default=None, help='列 A 显示名（默认取 checkpoint 目录名）')
+    ap.add_argument('--tag-b', default=None, help='列 B 显示名（默认取 checkpoint 目录名）')
     ap.add_argument('--samples', type=int, default=12000)
     ap.add_argument('--root', default='/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202609')
     args = ap.parse_args()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    tag_a = args.tag_a or Path(args.v1).parent.name
+    tag_b = args.tag_b or Path(args.v2).parent.name
 
     files = sorted(glob.glob(f'{args.root}/**/*.json.gz', recursive=True))
     # 与 evaluate.py 完全同一固定评估集（固定种子 + 均匀抽稀），保证两模型严格可比
@@ -178,6 +202,8 @@ def main():
 
     net1, cfg1 = load_net(args.v1, device)
     net2, cfg2 = load_net(args.v2, device)
+    print(f'[model] A = {tag_a} ({cfg1.get("model", "v1")}) | '
+          f'B = {tag_b} ({cfg2.get("model", "v1")})', flush=True)
     p1 = predict(net1, samples, device)
     p2 = predict(net2, samples, device)
     m1 = metrics(p1, samples, 'v1')
@@ -199,10 +225,13 @@ def main():
         ('  纯模型场合 最安全', 'deal_safest_pure', '.4f'),
         ('  立直纯模型 随机', 'riichi_rand_pure', '.4f'),
         ('  立直纯模型 最安全', 'riichi_deal_pure', '.4f'),
-        ('向听预测准确率(v2)', 'shanten_acc', '.4f'),
-        ('结构分布 L1(v2)', 'struct_l1', '.4f'),
+        ('向听 头准确率', 'shanten_acc', '.4f'),
+        ('向听 自洽准确率', 'shanten_self_acc', '.4f'),
+        ('向听 头↔分解一致', 'shanten_consist', '.4f'),
+        ('形制准确率', 'form_acc', '.4f'),
+        ('结构分布 L1', 'struct_l1', '.4f'),
     ]
-    print(f"\n{'指标':<24s} {'v1':>10s} {'v2':>10s} {'Δ(v2-v1)':>10s}")
+    print(f"\n{'指标':<24s} {tag_a:>10s} {tag_b:>10s} {'Δ(B-A)':>10s}")
     print('-' * 58)
     for label, key, fmt in rows:
         a, b = m1.get(key, float('nan')), m2.get(key, float('nan'))

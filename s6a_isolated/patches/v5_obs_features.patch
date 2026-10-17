@@ -1,0 +1,177 @@
+diff --git a/libriichi/src/consts.rs b/libriichi/src/consts.rs
+index 55bcf68..d29d7f4 100644
+--- a/libriichi/src/consts.rs
++++ b/libriichi/src/consts.rs
+@@ -2,7 +2,7 @@ use crate::py_helper::add_submodule;
+ 
+ use pyo3::prelude::*;
+ 
+-pub const MAX_VERSION: u32 = 4;
++pub const MAX_VERSION: u32 = 5;
+ 
+ pub const ACTION_SPACE: usize = 37 // discard | kan (choice)
+                               + 1  // riichi
+@@ -23,6 +23,11 @@ pub const fn obs_shape(version: u32) -> (usize, usize) {
+         2 => (942, 34),
+         3 => (934, 34),
+         4 => (1012, 34),
++        // v5 = v4 + 6 行「逆转紧迫度」特征（S6a，2026-10-17）：
++        //   与排序后 1/2/3/4 名的点差 d_k（4 行）+ 紧邻上位 overtake_gap /
++        //   紧邻下位 lead_gap（2 行）。全部由 state.scores 确定性导出，
++        //   无分布假设（牌局长度 6~11 局不等，不做剩余局归一化）。
++        5 => (1018, 34),
+         _ => unreachable!(),
+     }
+ }
+@@ -32,7 +37,7 @@ pub const fn obs_shape(version: u32) -> (usize, usize) {
+ pub const fn oracle_obs_shape(version: u32) -> (usize, usize) {
+     match version {
+         1 => (211, 34),
+-        2 | 3 | 4 => (217, 34),
++        2 | 3 | 4 | 5 => (217, 34),
+         _ => unreachable!(),
+     }
+ }
+diff --git a/libriichi/src/state/obs_repr.rs b/libriichi/src/state/obs_repr.rs
+index 998917f..e1fdc9e 100644
+--- a/libriichi/src/state/obs_repr.rs
++++ b/libriichi/src/state/obs_repr.rs
+@@ -89,7 +89,7 @@ impl IntegerEncoder {
+                     ctx.idx += intervals - 1;
+                 }
+             }
+-            4 => {
++            4 | 5 => {
+                 debug_assert!(self.one_hot || self.rescale);
+ 
+                 if self.one_hot {
+@@ -155,7 +155,7 @@ impl<'a> ObsEncoderContext<'a> {
+                 2 | 3 => IntegerEncoder::new(score as usize / 100, 500)
+                     .rbf_intervals(10)
+                     .encode(&mut self),
+-                4 => {
++                4 | 5 => {
+                     let v = score.clamp(0, 30_000) as f32 / 30_000.;
+                     self.arr.fill(self.idx, v);
+                     self.idx += 1;
+@@ -172,24 +172,24 @@ impl<'a> ObsEncoderContext<'a> {
+         match self.version {
+             // for v1, this was a mistake, it actually only uses 3 channels.
+             1 => self.arr.fill_rows(self.idx, n, 1.),
+-            2 | 3 | 4 => self.arr.fill(self.idx + n, 1.),
++            2 | 3 | 4 | 5 => self.arr.fill(self.idx + n, 1.),
+             _ => unreachable!(),
+         }
+         self.idx += 4;
+ 
+         let cap = match self.version {
+-            1 | 4 => 10,
++            1 | 4 | 5 => 10,
+             2 | 3 => 6,
+             _ => unreachable!(),
+         };
+         let n = state.honba as usize;
+         IntegerEncoder::new(n, cap)
+-            .rescale(self.version == 4)
++            .rescale(self.version >= 4)
+             .rbf_intervals(3)
+             .encode(&mut self);
+         let n = state.kyotaku as usize;
+         IntegerEncoder::new(n, cap)
+-            .rescale(self.version == 4)
++            .rescale(self.version >= 4)
+             .rbf_intervals(3)
+             .encode(&mut self);
+ 
+@@ -197,7 +197,7 @@ impl<'a> ObsEncoderContext<'a> {
+         self.arr.assign(self.idx + 1, state.jikaze.as_usize(), 1.);
+         self.idx += 2;
+ 
+-        if matches!(self.version, 2 | 3 | 4) {
++        if matches!(self.version, 2 | 3 | 4 | 5) {
+             let n = (state.bakaze.as_u8() - tu8!(E)).min(1) * 4 + state.kyoku;
+             IntegerEncoder::new(n as usize, 7)
+                 .rescale(true)
+@@ -220,7 +220,7 @@ impl<'a> ObsEncoderContext<'a> {
+         self.idx += (18 - state.kawa[0].len().min(18)) * SELF_KAWA_ITEM_CHANNELS;
+ 
+         let max_kawa_len = state.kawa.iter().map(|k| k.len()).max().unwrap();
+-        if matches!(self.version, 3 | 4) {
++        if matches!(self.version, 3 | 4 | 5) {
+             for (turn, kawa_item) in state.kawa[0].iter().enumerate() {
+                 if let Some(kawa_item) = kawa_item {
+                     let sutehai = kawa_item.sutehai;
+@@ -258,7 +258,7 @@ impl<'a> ObsEncoderContext<'a> {
+                     }
+                     self.idx += 6;
+                 }
+-                3 | 4 => {
++                3 | 4 | 5 => {
+                     for (turn, kawa_item) in player_kawa.iter().enumerate() {
+                         if let Some(kawa_item) = kawa_item {
+                             let sutehai = kawa_item.sutehai;
+@@ -328,7 +328,7 @@ impl<'a> ObsEncoderContext<'a> {
+             self.idx += 1;
+         }
+ 
+-        if matches!(self.version, 2 | 3 | 4) {
++        if matches!(self.version, 2 | 3 | 4 | 5) {
+             for (tid, count) in state.tiles_seen.iter().copied().enumerate() {
+                 self.arr.assign(self.idx, tid, count as f32 / 4.);
+             }
+@@ -561,7 +561,7 @@ impl<'a> ObsEncoderContext<'a> {
+         }
+         self.idx += 1;
+ 
+-        if self.version == 4 {
++        if matches!(self.version, 4 | 5) {
+             if let Ok(SinglePlayerTables { max_ev_table }) = state.single_player_tables() {
+                 // Get the max EV from the table that maximizes EV, which should
+                 // be the global max EV.
+@@ -623,12 +623,46 @@ impl<'a> ObsEncoderContext<'a> {
+             }
+         }
+ 
++        if self.version == 5 {
++            self.encode_urgency();
++        }
++
+         assert_eq!(self.idx, self.arr.rows());
+         let arr = self.arr.build();
+         debug_assert!(arr.iter().all(|&v| (0. ..=1.).contains(&v)));
+         (arr, self.mask)
+     }
+ 
++    /// S6a「逆转紧迫度」特征（version 5 追加，2026-10-17）：6 行常量通道，全部由
++    /// `state.scores`（已旋转为相对序，`scores[0]` = 自家）确定性导出，无任何分布假设。
++    ///
++    /// - 行 0..4：与排序后第 1/2/3/4 名的点差 `d_k = me − all[k]`（四家分数降序）。
++    ///   `d_1 ≤ 0 ≤ d_4`，且 `d_k = 0` 的位置即自家当前顺位——符号模式本身就是顺位。
++    /// - 行 4：`overtake_gap` = 紧邻上位者分数 − 自家（0 若自家第一；取"高于自家的最低分"，
++    ///   即排位直接压着自家的那家）。
++    /// - 行 5：`lead_gap` = 自家 − 紧邻下位者分数（0 若自家垫底；取"低于自家的最高分"）。
++    ///
++    /// 归一化到 [0,1]（与 obs 全局值域一致）：`clamp(±100_000) / 200_000 + 0.5`，
++    /// 0.5 = 零差距。注：牌局长度实测 6~11 局不等（提前结束/西入），故**不做**剩余局
++    /// 归一化；"每局需得分"留给 S6d 的 GRP 顺位后验。
++    fn encode_urgency(&mut self) {
++        let me = self.state.scores[0];
++        let mut all = self.state.scores;
++        all.sort_unstable_by(|a, b| b.cmp(a)); // 四家分数降序
++        let enc = |diff: i32| -> f32 { diff.clamp(-100_000, 100_000) as f32 / 200_000. + 0.5 };
++
++        for k in 0..4 {
++            self.arr.fill(self.idx + k, enc(me - all[k]));
++        }
++
++        // 紧邻上位：仍高于自家的玩家里的最低分；紧邻下位：仍低于自家的玩家里的最高分。
++        let above = all.iter().copied().filter(|&s| s > me).min();
++        let below = all.iter().copied().filter(|&s| s < me).max();
++        self.arr.fill(self.idx + 4, enc(above.map_or(0, |s| s - me)));
++        self.arr.fill(self.idx + 5, enc(me - below.unwrap_or(me)));
++        self.idx += 6;
++    }
++
+     fn encode_ev(&mut self, value: f32) {
+         let v = value.clamp(0., 100_000.) / 100_000.;
+         self.arr.fill(self.idx, v);

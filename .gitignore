@@ -60,3 +60,22 @@ mortal/iql_probe*/
 #   *.pth   已被上方 *.pth 覆盖；*.onnx 为导出台账；train_log.jsonl 为训练日志。
 mortal/read_model_*/*.onnx
 mortal/read_model_*/*.jsonl
+
+# ---- 本项目追加（2026-10-17）：S6a 隔离工作区（s6a_isolated/）----
+# code/*.py（含 v5 分支的 model/engine/env_check）、config.s6a*.toml、run_s6a*.sh、
+# patches/v5_obs_features.patch、tools/ 是本轮唯一的源码载体（共享树已还原为 v4）→ 入库；
+# 下列为隔离区运行期产物，一律排除：
+#   checkpoints/  = 本地输出 + 指向共享树权重目录的软链（共享树已被 mortal/checkpoints/ 排除）
+#   indexes/      = 数据索引（*.pth，49MB 级，可重建）
+#   runs/         = TensorBoard 事件文件；s6a*/ = 各轮日志/手术记录
+# libriichi.so / *.pth 已被上方通用规则覆盖。
+s6a_isolated/code/checkpoints/
+s6a_isolated/code/indexes/
+s6a_isolated/code/runs/
+s6a_isolated/code/s6a*/
+s6a_isolated/code/logs/
+s6a_isolated/code/*.log
+s6a_isolated/logs/
+
+# IQL AWR 温度 β 扫描探针（10-17 新增）：顶层 config.iql_beta_*.toml /
+# run_iql_beta_probe.sh 入库；臂产物目录 mortal/iql_beta_*/ 已被上面 mortal/iql_b*/ 覆盖。

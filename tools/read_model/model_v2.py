@@ -182,11 +182,12 @@ class ReadNetV2(nn.Module):
 
     def __init__(self, version: int = 4, conv_channels: int = 96, num_blocks: int = 12,
                  with_aux: bool = True, tl_features: int = 43, tl_len: int = 26,
-                 d_time: int = 64):
+                 d_time: int = 64, struct_shanten_belief: bool = False):
         super().__init__()
         self.version = version
         self.with_aux = with_aux
         self.tl_features = tl_features
+        self.struct_shanten_belief = struct_shanten_belief
         in_channels = obs_shape(version)[0]
 
         # 空间流（与 v1 完全同构，保证可比）
@@ -200,7 +201,9 @@ class ReadNetV2(nn.Module):
         # 结构流
         s_in = conv_channels + d_time
         self.struct = StructureHead(s_in)
-        self.S = NUM_STRUCT_COUNTS * COUNT_BINS + NUM_FORMS      # 结构瓶颈维度
+        # 结构瓶颈维度：counts(35) + form(3) [+ v2s: 向听分布(8)]
+        self.S = (NUM_STRUCT_COUNTS * COUNT_BINS + NUM_FORMS
+                  + (MAX_SHANTEN_BUCKET + 1 if struct_shanten_belief else 0))
 
         # H1：逐列计数分配头（逐目标家）——输入 = 列特征 h + 时序嵌入 + 结构瓶颈
         h1_in = conv_channels + d_time + self.S
@@ -229,7 +232,12 @@ class ReadNetV2(nn.Module):
         st = self.struct(z)
         s_counts = F.softmax(st['count_logits'], dim=-1).flatten(-2)    # [B,3,35]
         s_form = F.softmax(st['form_logits'], dim=-1)                   # [B,3,3]
-        s_belief = torch.cat([s_counts, s_form], dim=-1)                # [B,3,38]
+        if self.struct_shanten_belief:
+            # v2s：向听分布也进入瓶颈（H1/H2 直接消费显式向听信念）
+            s_belief = torch.cat(
+                [s_counts, s_form, F.softmax(st['shanten_logits'], dim=-1)], dim=-1)  # [B,3,46]
+        else:
+            s_belief = torch.cat([s_counts, s_form], dim=-1)            # [B,3,38]
 
         # ---- H1：逐列计数分配 ----
         # h: [B,C,34] -> [B,3,34,C]（三家共享列特征，头各自特化）
@@ -285,3 +293,13 @@ def build_model_v2(version: int = 4, conv_channels: int = 96, num_blocks: int = 
     return ReadNetV2(version=version, conv_channels=conv_channels,
                      num_blocks=num_blocks, with_aux=with_aux,
                      tl_features=tl_features, tl_len=tl_len)
+
+
+def build_model_v2s(version: int = 4, conv_channels: int = 96, num_blocks: int = 12,
+                    with_aux: bool = True, tl_features: int = 43,
+                    tl_len: int = 26) -> ReadNetV2:
+    """v2s = v2 + 向听分布注入结构瓶颈（结构头专项，见模块 docstring）。"""
+    return ReadNetV2(version=version, conv_channels=conv_channels,
+                     num_blocks=num_blocks, with_aux=with_aux,
+                     tl_features=tl_features, tl_len=tl_len,
+                     struct_shanten_belief=True)

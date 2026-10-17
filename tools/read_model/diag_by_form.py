@@ -31,12 +31,16 @@ FORM_NAMES = {0: 'normal', 1: '七对', 2: '国士'}
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--v1', default='mortal/read_model_v1/best.pth')
-    ap.add_argument('--v2', default='mortal/read_model_v2/best.pth')
+    ap.add_argument('--v1', default='mortal/read_model_v1/best.pth', help='对照 checkpoint')
+    ap.add_argument('--v2', default='mortal/read_model_v2/best.pth', help='实验 checkpoint')
+    ap.add_argument('--tag-a', default=None)
+    ap.add_argument('--tag-b', default=None)
     ap.add_argument('--samples', type=int, default=20000)
     ap.add_argument('--root', default='/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202609')
     args = ap.parse_args()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    tag_a = args.tag_a or Path(args.v1).parent.name
+    tag_b = args.tag_b or Path(args.v2).parent.name
 
     files = sorted(glob.glob(f'{args.root}/**/*.json.gz', recursive=True))
     samples = batch_to_samples(T.build_fixed_eval_set(files, args.samples))
@@ -120,8 +124,8 @@ def main():
             print(f'    shanten={s_}: n={int(m.sum()):>6d}  top1 {top1_hit[m].mean():.4f}  '
                   f'向听准确 {sa:.4f}')
 
-    bucket_metrics(p1, 'v1（无结构瓶颈，对照）')
-    bucket_metrics(p2, 'v2（有结构瓶颈）')
+    bucket_metrics(p1, f'{tag_a}（对照）')
+    bucket_metrics(p2, f'{tag_b}（实验）')
 
 
 if __name__ == '__main__':

@@ -64,8 +64,12 @@ def main():
     n = len(samples)
     print(f'[data] {n} 个样本（固定评估集）', flush=True)
 
-    net1, _ = load_net(args.v1, device)
-    net2, _ = load_net(args.v2, device)
+    net1, cfg1 = load_net(args.v1, device)
+    net2, cfg2 = load_net(args.v2, device)
+    tag_a = Path(args.v1).parent.name
+    tag_b = Path(args.v2).parent.name
+    print(f'[model] A = {tag_a} ({cfg1.get("model", "v1")}) | '
+          f'B = {tag_b} ({cfg2.get("model", "v1")})', flush=True)
     p1 = predict(net1, samples, device)
     p2 = predict(net2, samples, device)
 
@@ -99,11 +103,18 @@ def main():
         safest = p_cand.argmin(-1)
         p_safe = tile_p[bidx + (safest,)]
         deal_safe = sup[bidx + (safest,)]
-        return {
+        out = {
             'top1_hit': top1_hit, 'hit1': hit1, 'hit5': hit5, 'eff': eff,
             'riichi': RI, 'score': score, 'tenpai': TP,
             'p_safe': p_safe, 'deal_safe': deal_safe, 'riichi_f': RI,
         }
+        # 结构头向听准确率（逐目标；v1 无结构头 -> None）
+        if 'shanten_pred' in pred:
+            sh_true = np.stack([s['shanten'] for s in samples])
+            out['shanten_correct'] = (pred['shanten_pred'] == sh_true).astype(np.float64)
+        else:
+            out['shanten_correct'] = None
+        return out
 
     s1 = per_sample(p1)
     s2 = per_sample(p2)
@@ -124,10 +135,12 @@ def main():
         out['deal_pure'] = s['deal_safe'][idx][pure].mean() if pure.any() else np.nan
         ri_pure = ri & (s['p_safe'][idx] > 0)
         out['riichi_deal_pure'] = s['deal_safe'][idx][ri_pure].mean() if ri_pure.any() else np.nan
+        if s.get('shanten_correct') is not None:
+            out['shanten_acc'] = s['shanten_correct'][idx].mean()
         return out
 
     full1, full2 = agg(s1, np.ones(n, bool)), agg(s2, np.ones(n, bool))
-    keys = list(full1.keys())
+    keys = list(dict.fromkeys(list(full1.keys()) + list(full2.keys())))
 
     # bootstrap：按样本重采样（整条样本的所有目标一起，保留样本内相关结构）
     rng = np.random.default_rng(20261017)
@@ -136,16 +149,17 @@ def main():
         idx = rng.integers(0, n, n)
         a1, a2 = agg(s1, idx), agg(s2, idx)
         for k in keys:
-            boots[k].append(a2[k] - a1[k])
+            boots[k].append(a2.get(k, np.nan) - a1.get(k, np.nan))
 
-    print(f"\n{'指标':<22s} {'v1':>9s} {'v2':>9s} {'Δ':>9s} {'95% CI':>20s} {'判定':>8s}")
+    print(f"\n{'指标':<22s} {tag_a:>9s} {tag_b:>9s} {'Δ':>9s} {'95% CI':>20s} {'判定':>8s}")
     print('-' * 74)
     for k in keys:
         d = np.array(boots[k])
         lo, hi = np.percentile(d, [2.5, 97.5])
-        sig = 'v2优' if lo > 0 else ('v1优' if hi < 0 else '不显著')
-        print(f'{k:<22s} {full1[k]:>9.4f} {full2[k]:>9.4f} '
-              f'{full2[k] - full1[k]:>+9.4f}   [{lo:+.4f},{hi:+.4f}] {sig:>8s}')
+        sig = 'B优' if lo > 0 else ('A优' if hi < 0 else '不显著')
+        print(f'{k:<22s} {full1.get(k, float("nan")):>9.4f} {full2.get(k, float("nan")):>9.4f} '
+              f'{full2.get(k, float("nan")) - full1.get(k, float("nan")):>+9.4f}   '
+              f'[{lo:+.4f},{hi:+.4f}] {sig:>8s}')
 
 
 if __name__ == '__main__':

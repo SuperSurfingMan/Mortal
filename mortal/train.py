@@ -394,6 +394,13 @@ def train():
             'q_loss': 0,
             'v_loss': 0,
             'awr_loss': 0,
+            # AWR 权重集中度诊断（2026-10-17，β 扫描探针新增，仅日志无数值行为改动）：
+            # w 已按批内均值归一 → ess=1/mean(w^2)∈(0,1] 度量权重退化到"少数样本主导"的程度，
+            # p99/max 度量极端权重。τ=0.5 时 V=行为均值，β 是策略提取的唯一锐度旋钮，
+            # 必须能从日志确认旋钮真的移动了权重分布（区分"没拨动"与"拨动了但无强度效应"）。
+            'awr_w_ess': 0,
+            'awr_w_p99': 0,
+            'awr_w_max': 0,
             'next_rank_loss': 0,
         }
     else:
@@ -631,6 +638,9 @@ def train():
                     stats['q_loss'] += q_loss
                     stats['v_loss'] += v_loss
                     stats['awr_loss'] += awr_loss
+                    stats['awr_w_ess'] += 1.0 / w.pow(2).mean().clamp_min(1e-12)
+                    stats['awr_w_p99'] += w.quantile(0.99)
+                    stats['awr_w_max'] += w.max()
                 else:
                     stats['dqn_loss'] += dqn_loss
                     if not online:
@@ -679,6 +689,8 @@ def train():
                     writer.add_scalar('loss/q_loss', stats['q_loss'] / save_every, steps)
                     writer.add_scalar('loss/v_loss', stats['v_loss'] / save_every, steps)
                     writer.add_scalar('loss/awr_loss', stats['awr_loss'] / save_every, steps)
+                    writer.add_scalar('iql/awr_w_ess', stats['awr_w_ess'] / save_every, steps)
+                    writer.add_scalar('iql/awr_w_p99', stats['awr_w_p99'] / save_every, steps)
                     # 价值尺度监控（10-16 加，MEMORY 会话 25）：v2 曾因子指数漂移打废价值函数而
                     # 2k 冒烟无感——每个存盘点打一行分位数，供链脚本门禁与事后取证。
                     # 理论界：整场折扣回报 telescope 至 pts[final]−E[pts|start] ∈ [−5,+5]（B 口径）。
@@ -688,6 +700,7 @@ def train():
                         logging.info(
                             f'iql scale: q_target p50={_qt.median():+.3f} p99={_qt.quantile(0.99):+.3f}'
                             f' | q_pred p50={_qp.median():+.3f}'
+                            f' | awr_w ess={stats["awr_w_ess"] / save_every:.3f} p99={stats["awr_w_p99"] / save_every:.2f} max={stats["awr_w_max"] / save_every:.1f}'
                             f' | v_ema={"on" if v_ema is not None else "off"}'
                         )
                 else:
@@ -790,6 +803,12 @@ def train():
 
                     logging.info(f'avg rank: {stat.avg_rank:.6}')
                     logging.info(f'avg pt: {avg_pt:.6}')
+                    # 行为分解入日志（2026-10-17 加）：TB 里早有这些标量但 train.log 不可见；
+                    # β/AWR 类"策略锐度"旋钮需要能从日志直接监控方向性（进攻性变化 → houjuu 率）。
+                    logging.info(
+                        f'behavior: agari={stat.agari_rate:.4f} houjuu={stat.houjuu_rate:.4f}'
+                        f' fuuro={stat.fuuro_rate:.4f} riichi={stat.riichi_rate:.4f}'
+                    )
                     writer.add_scalar('test_play/avg_ranking', stat.avg_rank, steps)
                     writer.add_scalar('test_play/avg_pt', avg_pt, steps)
                     writer.add_scalars('test_play/ranking', {

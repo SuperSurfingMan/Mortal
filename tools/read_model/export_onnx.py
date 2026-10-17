@@ -74,11 +74,13 @@ def main():
 
     state = torch.load(args.state, map_location='cpu', weights_only=False)
     cfg = state.get('config', {})
-    is_v2 = cfg.get('model', 'v1') == 'v2'
+    kind = cfg.get('model', 'v1')
+    is_v2 = kind in ('v2', 'v2s')
     if is_v2:
-        net = M2.build_model_v2(conv_channels=cfg.get('conv_channels', 96),
-                               num_blocks=cfg.get('num_blocks', 12),
-                               with_aux=not cfg.get('no_aux', False))
+        builder = M2.build_model_v2s if kind == 'v2s' else M2.build_model_v2
+        net = builder(conv_channels=cfg.get('conv_channels', 96),
+                      num_blocks=cfg.get('num_blocks', 12),
+                      with_aux=not cfg.get('no_aux', False))
     else:
         net = M.build_model(conv_channels=cfg.get('conv_channels', 96),
                             num_blocks=cfg.get('num_blocks', 12),

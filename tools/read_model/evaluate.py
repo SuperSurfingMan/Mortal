@@ -9,6 +9,10 @@
   wait 听牌分布：
       - 听牌样本 log-loss、hit@1 / hit@3（真实可荣集内）
       - 听牌检测 AUC（P(非未听) vs 结构性听牌标签）、振听率
+  结构头专项（v2/v2s，向听估计）：
+      - 向听头准确率 vs 多数类基线 + 逐桶召回（0..7）
+      - 自洽向听（分解直方图暗含的软向听）准确率、头↔分解一致率
+      - 形制准确率 + per-class 召回、结构计数 L1
   baseline（方案 §8.1 第 1 条）：每列未见张数按容量独立二项分配——
       P(h_{j,i}=k) = C(u_i, k) p_j^k (1-p_j)^(u_i-k)，
       p_j = hand_j / (Σ_q hand_q + tiles_left)。不使用任何牌河/立直信息。
@@ -36,10 +40,12 @@ import model as M                                       # noqa: E402
 import model_v2 as M2                                   # noqa: E402
 import train as T                                       # noqa: E402
 from constraints import apply_constraints, compute_wait_bias, expected_hand_size  # noqa: E402
+from structure import MAX_SHANTEN_BUCKET, NUM_SHANTEN_BUCKETS, soft_shanten_from_counts  # noqa: E402
 
 NUM_TILES = D.NUM_TILES
 TURN_BUCKETS = [(0, 3, 'turn<=3'), (4, 7, 'turn4-7'), (8, 11, 'turn8-11'),
                 (12, 15, 'turn12-15'), (16, 99, 'turn16+')]
+FORM_NAMES = {0: 'normal', 1: 'chiitoi', 2: 'kokushi'}
 
 
 def auc_score(y_true: np.ndarray, y_score: np.ndarray) -> float:
@@ -112,17 +118,22 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     state = torch.load(args.state, map_location='cpu', weights_only=False)
     cfg = state.get('config', {})
+    model_kind = cfg.get('model', 'v1')
     net = M.build_model(conv_channels=cfg.get('conv_channels', 96),
                         num_blocks=cfg.get('num_blocks', 12),
                         with_aux=not cfg.get('no_aux', False),
                         pool=cfg.get('pool', 'mean')).to(device)
-    if cfg.get('model', 'v1') == 'v2':
+    if model_kind == 'v2':
         net = M2.build_model_v2(conv_channels=cfg.get('conv_channels', 96),
                                 num_blocks=cfg.get('num_blocks', 12),
                                 with_aux=not cfg.get('no_aux', False)).to(device)
+    elif model_kind == 'v2s':
+        net = M2.build_model_v2s(conv_channels=cfg.get('conv_channels', 96),
+                                 num_blocks=cfg.get('num_blocks', 12),
+                                 with_aux=not cfg.get('no_aux', False)).to(device)
     net.load_state_dict(state['model'])
     net.eval()
-    print(f'[model] {args.state} ({cfg.get("model", "v1")}, '
+    print(f'[model] {args.state} ({model_kind}, '
           f'step={state.get("step")}, best_val={state.get("best_val")})', flush=True)
 
     files = []
@@ -135,7 +146,8 @@ def main():
 
     # ---- 模型前向（分批）----
     alloc_probs_all, wait_probs_all = [], []
-    is_v2 = cfg.get('model', 'v1') == 'v2'
+    struct_sh_logits_all, struct_count_probs_all, struct_form_logits_all = [], [], []
+    is_v2 = model_kind in ('v2', 'v2s')
     for i in range(0, n, args.batch_size):
         chunk = {k: v[i:i + args.batch_size].to(device) for k, v in batch.items()}
         with torch.no_grad():
@@ -146,6 +158,11 @@ def main():
                 o = net(chunk['obs'], chunk['unseen'], T.wait_bias_of(chunk).to(device))
         alloc_probs_all.append(o['alloc_probs'].cpu().numpy())
         wait_probs_all.append(o['wait_probs'].cpu().numpy())
+        if is_v2:
+            struct_sh_logits_all.append(o['struct_shanten_logits'].cpu().numpy())
+            struct_count_probs_all.append(
+                torch.softmax(o['struct_count_logits'], dim=-1).cpu().numpy())
+            struct_form_logits_all.append(o['struct_form_logits'].cpu().numpy())
     alloc_probs = np.concatenate(alloc_probs_all)          # [n,3,34,5]
     wait_probs = np.concatenate(wait_probs_all)            # [n,3,35]
 
@@ -224,8 +241,56 @@ def main():
         wait_report['riichi_hit3'] = float(hit3[m_riichi].mean())
         wait_report['riichi_ce'] = float(ll_wait[m_riichi].mean())
 
+    # ---- 结构头专项诊断（v2/v2s）：向听估计是主攻方向 ----
+    struct_report = None
+    if is_v2:
+        sh_true = batch['shanten'].numpy()                          # [n,3] 桶 0..7
+        form_true = batch['struct_form'].numpy()                    # [n,3]
+        counts_true = batch['struct_counts'].numpy()                # [n,3,7,5]
+        sh_head = np.concatenate(struct_sh_logits_all).argmax(-1)   # [n,3]
+        count_probs = np.concatenate(struct_count_probs_all)        # [n,3,7,5]
+        form_pred = np.concatenate(struct_form_logits_all).argmax(-1)  # [n,3]
+        # 自洽向听：分解直方图经可微公式暗含的向听（L = 手牌数//3，公开信息）
+        len_div3 = (alloc_true.sum(-1) // 3).astype(np.float32)     # [n,3]
+        with torch.no_grad():
+            sh_soft = soft_shanten_from_counts(
+                torch.from_numpy(count_probs),
+                torch.from_numpy(len_div3)).numpy()                 # [n,3]
+        sh_self = np.clip(np.round(sh_soft), 0, MAX_SHANTEN_BUCKET).astype(int)
+
+        sh_hist = np.bincount(sh_true.ravel(), minlength=NUM_SHANTEN_BUCKETS)
+        majority = int(sh_hist.argmax())
+        struct_report = {
+            'shanten_label_hist': sh_hist.tolist(),
+            'shanten_majority_class': majority,
+            'shanten_majority_baseline': float((sh_true == majority).mean()),
+            'shanten_head_acc': float((sh_head == sh_true).mean()),
+            'shanten_self_acc': float((sh_self == sh_true).mean()),
+            'shanten_consistency': float((sh_head == sh_self).mean()),
+            'shanten_head_by_bucket': {
+                str(k): {
+                    'n': int((sh_true == k).sum()),
+                    'recall': (float((sh_head[sh_true == k] == k).mean())
+                               if (sh_true == k).any() else None),
+                } for k in range(NUM_SHANTEN_BUCKETS)
+            },
+            'shanten_soft_mae': float(np.abs(
+                np.clip(sh_soft, 0, MAX_SHANTEN_BUCKET) - sh_true).mean()),
+            'form_acc': float((form_pred == form_true).mean()),
+            'form_by_class': {
+                FORM_NAMES[k]: {
+                    'n': int((form_true == k).sum()),
+                    'recall': (float((form_pred[form_true == k] == k).mean())
+                               if (form_true == k).any() else None),
+                } for k in range(len(FORM_NAMES))
+            },
+            'struct_counts_l1': float(np.abs(count_probs - counts_true).sum(-1).mean()),
+        }
+
     report = {'state': args.state, 'step': state.get('step'),
               'n_samples': int(n), 'alloc': alloc_report, 'wait': wait_report}
+    if struct_report is not None:
+        report['struct'] = struct_report
 
     print('\n================ 读牌模型离线诊断 ================')
     print(f"alloc CE        : {alloc_report['ce_overall']:.4f}   "
@@ -245,6 +310,24 @@ def main():
     if 'riichi_hit1' in wait_report:
         print(f"立直家 hit@1/@3 : {wait_report['riichi_hit1']:.4f} / "
               f"{wait_report['riichi_hit3']:.4f} (CE {wait_report['riichi_ce']:.4f})")
+    if struct_report is not None:
+        print('---- 结构头专项（向听估计）----')
+        print(f"向听标签分布    : {struct_report['shanten_label_hist']}  "
+              f"多数类 {struct_report['shanten_majority_class']} "
+              f"基线 {struct_report['shanten_majority_baseline']:.4f}")
+        print(f"向听 头/自洽    : {struct_report['shanten_head_acc']:.4f} / "
+              f"{struct_report['shanten_self_acc']:.4f}   "
+              f"头↔分解一致率 {struct_report['shanten_consistency']:.4f}   "
+              f"软向听 MAE {struct_report['shanten_soft_mae']:.3f}")
+        recalls = '  '.join(
+            f"{k}:{(v['recall'] if v['recall'] is not None else float('nan')):.3f}"
+            for k, v in struct_report['shanten_head_by_bucket'].items())
+        print(f"向听逐桶召回    : {recalls}")
+        forms = '  '.join(
+            f"{nm}:{(v['recall'] if v['recall'] is not None else float('nan')):.3f}"
+            for nm, v in struct_report['form_by_class'].items())
+        print(f"形制准确/召回   : {struct_report['form_acc']:.4f}   {forms}")
+        print(f"结构计数 L1     : {struct_report['struct_counts_l1']:.4f}")
     print('==================================================\n')
 
     out = args.out or str(Path(args.state).parent / 'eval_report.json')

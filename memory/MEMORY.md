@@ -23,6 +23,7 @@
 12. [历史操作记录（时间线）](#12-历史操作记录时间线)
 13. [待办与下一步](#13-待办与下一步)
 14. [关键坑位备忘](#14-关键坑位备忘)
+14bis. [日志文件归置规范（强制执行）](#14bis-日志文件归置规范强制执行)
 15. [关键文件索引](#15-关键文件索引)
 16. [服务器实跑现状（2026-10-07~10-09 远程同步）](#16-服务器实跑现状2026-10-0710-09-远程同步)
 17. [进展总纲（10-01→10-11 系统性汇总，新会话先读这一节）](#17-进展总纲10-0110-11系统性汇总)
@@ -1073,6 +1074,63 @@ holdout（仅诊断，sample_digest 一致）：三条 top1 0.812–0.817（持�
 - **训练配置**：813,145 训练文件（HF 2022-2025 + names 补丁树 202601-202608）/ 202609 验证（固定评估集），15000 步 × 512，三阶段课程 1:0.27/2:0.30/3:0.43，`--augment random`，AdamW+cosine，fp32。吞吐 ~2.5k 样本/s（8 workers），瓶颈是 `encode_obs` 的 SP 计算器（~2.2ms/样本，对读牌无用）——优化路径：Rust 侧 `with_sp_tables` 开关。产物：`mortal/read_model_v1/`、`mortal/read_model_v2/`（best.pth + onnx + eval_report.json + train_log.jsonl），ONNX 均经 onnxruntime 校验。
 - **工程资产**：回归测试 23 项 ALL PASS（含枚举器交叉验证、时序 token 独立重算、与 GameplayLoader obs 逐位一致、136 牌守恒、tiles_seen 通道比对、增广等变、学习门禁）；`compare_v1_v2.py`（对决）+ `compare_bootstrap.py`（CI 判决）；`run_v1.sh`/`run_v2.sh`。
 - **下一步**：① 结构头专项（向听损失加权 / 分解-向听一致性约束，把 25.7% 拉过基线）；② 更长训练（50k+ 步）验证时序流增益是否扩大；③ 方案 §9 路径 C 注入 Mortal + ladder 在线验收（唯一强度标准）。集成前需补：规则法基线（方案 §8.1 第 2 条）、立直振听自动检测。
+- **v2s 结构头专项（会话 27c，10-17，已训练+对决判决）**：解剖 v2 发现「向听没学会」的机制根因是 **`StructureHead.shanten_head` 零监督**——`L_struct` 只有 counts+form，该头输出不进 `s_belief` 瓶颈（38 维不含向听），25.7% 是无监督头的随机水平（回归测试 G3e 把「关闭新损失后该头梯度恒 0」存档为门禁）。v2s 六改：① 向听分布注入瓶颈（38→46 维，`build_model_v2s`，+9.2k 参数）；② 结构头向听直接 CE（0.5）；③ **分解-向听一致性约束**（`structure.soft_shanten_from_counts`：预测分解边际分布取期望代入同口径向听公式，min 取次梯度、雀首修正 sigmoid 软 AND，全程可微；头侧 CE 让向听头对齐分解暗含向听 [target detach]，分解侧 MSE 让软向听拟合真标签 [梯度回流分解头]；**形制门控**——公式只覆盖 normal 路径，实测 normal 上 round(soft)==硬标签 100% [mean|d|=0.041，9495 目标，测试 G1]，七对/国士的 counts 标签仍是 normal 分解边际故排除）；④ 向听-听牌一致性（shanten==0 ⟺ tenpai，BCE 0.1）；⑤ aux 向听 CE ×3（0.05→0.15）；⑥ 向听/形制类均衡（批内频率逆平方根）。顺带修 v1/v2 潜在 bug：`l_wait` 在整批无心听牌目标时 `wait_logits.sum()*0` 遇硬掩码 -inf 得 NaN（大 batch 不触发，测试 G3a 门禁）。**对决（同固定评估集 20000 + bootstrap 200）**：向听头 0.2574→**0.5263**（CI [+.264,+.273]，原定「拉过 28.4% 基线」超额完成；逐桶召回 {0.49,0.44,0.09,0.23,0.01}→{0.72,0.51,0.61,0.41,0.40}，仅最稀有 sh5 归零；七对 0.212→0.494、国士 0→0.512）、**听牌检测 AUC 0.6855→0.7392（+0.054，CI [+.051,+.057]，tenpai-tie 的功劳）**、头↔分解一致率 0.28→0.93；**代价**：wait hit@1 −0.014（CI 显著）、立直 hit@1 −0.017、alloc top-1 −0.007。机制诊断：听牌目标上两模型行为几乎一致（P(未听) 0.0039 vs 0.0041），差别是 H2 锐度略降（top1 概率 0.082→0.076）——容量/优化预算成本（瓶颈 +8 维 + 4 项新损失分薄 15k 预算），非信号方向错误，解药是更长训练（50k+，下一步 ② 现有双重动机），各损失均有 CLI 旋钮可消融。附记：aux 头向听 v2 时代已有 0.540（×3 后 0.553），v2s 结构头 0.547——两头收敛到互洽。产物 `mortal/read_model_v2s/`（best@13000 + onnx 校验 + eval_report + train_log）；回归测试扩到八层 39 项 ALL PASS；旧 v1/v2 checkpoint 加载不受影响（已验）。
+- **下一步计划（会话 27c 定稿，2026-10-17）**——三阶段，全部机时在空闲 P100（勿抢 GPU2/RTX8000）：
+
+  **阶段 A：模型定型（2 个训练轮次，机时 ~0.5 天）**
+
+  - **A1 瓶颈归因消融（先跑，15k 步，~2-4h；入口 `tools/read_model/run_v2x.sh`，tmux `read_v2x`，out-dir `mortal/read_model_v2x`）**：`--model v2`（38 维瓶颈不加宽）+ v2s 全部新损失（旗标显式传参防默认漂移），同数据/同步数(20261016)/同预算/同课程/同增广。三单元单因素对照（20000 固定评估集 + bootstrap 200 CI，与 v2/v2s 判决完全同口径）：v2(38维/旧损, wait 0.1464) — **v2x(38维/新损, W 待测)** — v2s(46维/新损, wait 0.1323)。**预注册判据**（正向效应分解：瓶颈效应 B = W−0.1323，损失效应 L = 0.1464−W，B+L=0.0141；加性假设，2×2 缺第四格 46维+旧损=无兴趣格；80/20 阈值——wait_hit1 的 95% CI 半宽 ≈0.007，60/40 band 窄于噪声不可分辨）：① **B ≥ 0.0113（W ≥ 0.1436，损失代价 ≤20%）→ 瓶颈加宽是主因** → 回退 38 维保留全部损失，v2x 直接晋级 A2 50k；② **L ≥ 0.0113（W ≤ 0.1351，损失代价 ≥80%）→ 新损失是主因** → 转 `--tenpai-tie-weight 0` 消融（它直接塑形 H2 消费的向听信念）；③ 混合区（0.1351<W<0.1436）→ 比增益定去留：v2x 的 AUC/向听 ≥ v2s−0.005 则按简约原则用 38 维，否则保留 46 维（瓶颈在贡献增益而非仅代价）。**次级预注册判读**：(a) v2x 结构头向听准确率 vs v2s 0.526——接近则瓶颈对「头学会」非必要（作用仅在馈通 H1/H2），差距大则瓶颈消费是头的自蒸馏训练信号；(b) wait 代价机制诊断（听牌目标 P(未听)/top1 概率/熵，6000 子集同 v2s 诊断法）——复现「行为一致仅锐度降」则确认容量/优化类成本；(c) 护栏：v2x 须保留损失收益（AUC/向听/一致率不回零），否则说明瓶颈宽是增益的载荷而非仅代价。
+  - **A1 结果（10-17 跑完并判决；v2x best@12000，7678s）——三单元归因（20000 固定评估集 + bootstrap 200，全部带 CI）**：
+
+    | 指标 | v2 (38/旧损) | v2x (38/新损) | v2s (46/新损) | 损失效应 (v2→v2x) | 瓶颈效应 (v2x→v2s) |
+    |---|---|---|---|---|---|
+    | wait_hit1 | 0.1464 | **0.1386** | 0.1323 | −0.0078 CI[−.016,−.001]（55%） | −0.0064 CI 跨 0（45%） |
+    | **tenpai_auc** | 0.6855 | **0.6670** | **0.7392** | **−0.0185 CI[−.021,−.016]（负！）** | **+0.0722 CI[+.070,+.075]** |
+    | shanten_acc | 0.2574 | 0.5257 | 0.5263 | +0.2683（≈全部） | +0.0007 ns |
+    | alloc_top1 | 0.5830 | 0.5719 | 0.5762 | −0.0111 sig | +0.0043 sig（回补） |
+    | riichi_hit1 | 0.1447 | 0.1295 | 0.1280 | −0.0152 sig（≈全部） | −0.0014 ns |
+    | wait_hit5 | 0.4900 | 0.4993 | 0.4936 | +0.0092 sig | −0.0057 ns |
+
+    **结论**：① 向听头学习**完全由损失驱动**（次级判读 a 证实：v2x 头 0.5257≈v2s 0.5263、一致率 0.9405——瓶颈消费对「头学会」非必要）；② **AUC 增益完全由瓶颈馈通驱动，且损失单独作用反而使 AUC 低于 v2**（−0.019）——tenpai-tie 塑造的头信念必须被 H2 消费才转化为听牌检测力；显式向听分布的**排序**能力远超 exp_counts 所能表达（两模型听牌目标上平均 P(未听) 一致 0.011，差别全在排序）；③ wait hit@1 代价 55/45 混合（W=0.1386 落预注册混合区）、riichi 代价几乎全在损失侧；④ 存在交互：瓶颈回补损失的 alloc 代价（+0.0043）但吃掉损失的 wait_hit5 收益（−0.0057）；⑤ 机制诊断：v2x 与 v2s 的 wait 分布形态几乎一致（top1 0.0756/0.0763、熵 3.0025/3.0005，均比 v2 的 0.0823/2.9772 软）——锐度损失在损失侧，与 AUC 排序增益是两条独立通路。**判决（预注册规则③）**：v2x AUC 0.667 ≪ v2s−0.005=0.734 → **保留 46 维瓶颈，v2s 架构定为 A2 基线**；wait/riichi 代价在损失侧，A2 家族内用旋钮攻（λ_w 0.5→0.75 / tenpai-tie↓），不回 38 维。
+  - **A2 v2s 50k 步正式轮（~7-12h）**：`STEPS=50000 bash run_v2s.sh`（同数据同种子，**同配置**——干净的单因素=预算扩展 + README 既定下一步②）。判据（bootstrap CI vs 15k v2）：wait Δ 跨 0 或转正 = 容量成本假设成立，该 checkpoint 定为**注入基线**；代价仍在 → 转 A2b 旋钮轮（λ_w 0.5→0.75 直接对冲 wait 项，或 tenpai-tie 0.1→0.05）。
+  - **A3 规则法基线（方案 §8.1 第 2 条，集成前必需；无训练，纯 numpy）**：现物/筋/壁 + 立直枚举 + 见逃排除，同一固定评估集出 wait hit@1/deal_safe/AUC。用途：① 校验模型 wait 概率相对人类百年规则的增量；② 注入时的混合/回退组件；③ 逐样本错误分析（模型在哪些局面输给规则）。
+
+  **阶段 B：注入 Mortal（路径 C，唯一强度标准；按方案 §9 单独立项，不碰 `mortal/`/`libriichi/` 直到立项）**
+
+  - **B0 前置**：立直振听自动检测（`constraints.renormalize_wait` 的 `riichi_furiten` 口子已留，河牌硬掩码覆盖主体，剩余=立直后见逃极稀有例）；吞吐（Rust `with_sp_tables` 开关或 sidecar 缓存，50k+ 轮与注入数据生成的乘数——当前瓶颈 `encode_obs` ~2.2ms/样本其中 SP 计算器是大头）。
+  - **B1 限域注入实验**：读牌模型冻结，输出（wait_probs 35 维 + exp_counts + 向听分布）作额外特征注入 Mortal 观测，防守决策点/全决策点两档，短程微调；ladder 双向同牌山 ≥5000 sets + block bootstrap vs 现役最强（`round4/mortal.pth` 645k，基线口径 B/756k）。可选路径 B（ONNX-in-Rust）作零训练依赖通道：export 已就绪并经 onnxruntime 校验，补 Rust loader + 逐位一致性测试即可。
+  - **B2 判定门禁（事前写死）**：CI 下界 >0 → 采纳；跨 0 → 无结论（按效能公式算所需 sets 再决定）；<0 → 回滚并记录。
+
+  **阶段 C：持续项**：每轮训练后固定动作 = evaluate（20000）→ compare_bootstrap CI → diag_by_form 分形制 → ONNX 导出校验；任何 dataset/model/loss 改动全量重跑 39 项回归。已知遗留：类均衡使最稀有向听桶 sh5 召回 0.011→0.000（n=1155）——旋钮：均衡幂次 0.5→0.25 或 lo 钳制上调，留待 A2 轮次顺带观察。
+
+  **明确不做**：离线指标不作强度结论；注入前不动共享代码。
+
+### 会话 28：IQL Stage B v3 终局判定（10-16 18:29 UTC ALL DONE）——真 IQL 首次干净检验【无结论】，IQL 路线按预注册规则关闭
+
+**Stage B 全轮次结构（入档）**：
+
+| 轮次 | 状态 | 关键差异 | 结果 | 有效性 |
+|---|---|---|---|---|
+| v1（10-15） | ❌ 作废 | τ=0.7；**r_t 每样本重复计入 16×**（dataloader 无条件发 `kyoku_rewards[at_kyoku[i]]`，§16.26） | δ=−31.04、top1 0.692、lse −176.1 | 无效（实现缺陷，会话 23） |
+| v2（10-16 凌晨） | ⚠ 不作判决 | r_t/L_V 已修；τ=0.7 → **价值指数漂移**（q_target p50 +0.6→+60.8，棘轮，§14-39） | δ=−3.416 显著变弱（bootstrap CI[−4.46,−2.36]）、top1 0.8069/lse +45 | 无效（目标实现不稳定，漂移二阶污染策略通道） |
+| v3（10-16 06:26→17:41 训完） | ✅ 有效 | v2+**τ=0.5**（探针唯一验证的稳定修复），其余锁死=B；种子块 220000/230000、bseed 20261016、命名空间 iql_b_v3 | **δ=+0.646，bootstrap CI[−0.35,+1.63] → 无统计结论** | **首份干净判决** |
+
+**v3 实测明细**：
+- 训练：867k/867k exit=0、无 non-finite；111k 步 / 11.25 h（均 ~2.74 batch/s，区间 2.7–2.95；iql 模式 3× encoder 前向故慢于 B 的 4.2）；价值尺度全程监控（train.py 每存盘点 `iql scale:` 行）：q_target p50 约 2 万步内收敛 ~1.2，终点 **+1.206**、p99 +2.04，q_pred p50 +1.265 紧贴 → **max p50=1.206 ≪ 理论界 [−5,+5] 的 1/4，且远低于 v2 同点 +60.8；τ=0.5 反漂移修复在 111k 步全程成立**
+- holdout（202609，仅诊断）：top1 **0.8167**（历轮最高：B 0.8118 / Stage A 0.8118 / v2 0.8069 / v1 0.6917）、logsumexp_q **+1.596**（v2 +45）、agari_top1 171/171
+- ladder（双向同牌山各 10,000 半庄，两波各 5×500 sets）：A（v3 当挑战者）avg_pt +1.750（SE 0.832）/ B（B/756k 当挑战者）+0.459（SE 0.842）；**δ=+0.646 pt/半庄，t=+1.09；block bootstrap SE 0.509、95%CI[−0.35,+1.63] → CI 跨 0 = 无结论**；10 个分块中 3 块为负，信号全部落在同牌山正相关噪声内（ρ≈+0.19）；效能参考：若真实效应就是 +0.65，达 2σ 需 ~16,808 sets/侧（当前 5,000，即 ×3.4）
+
+**判读（按 `run_iql_b_v3.sh` 事前写死的收尾守则）**：CI 下界 >0 → 判进采纳；无结论/变弱 → **IQL 路线关闭**。v3 落“无结论”格 → 与 Stage A（δ=−1.03 显著负，§16.25）合并：**目标形式改造（信用分配视界 / TD 价值传播）两条子路线全部关闭**，转 ③ 扩窗 2019+ + 重训 GRP + 按年份审计。现役最强仍 `round4/mortal.pth`（645k），基线口径仍 B/756k。
+
+**归因分析（以下为基于实测数据的推断，非直接实测）**——为何 Stage A/B 均无正向效果：
+1. **基线 B 已做完局内信用分配**：每局平均 16.00 个决策点、γ=0.997/决策步 → 局内折扣 0.997^16≈0.95，`kyoku_rewards` 本就近全权重回传给局内每一步；A/B 真正改动的只有**跨局**视界
+2. **跨局视界信噪比崩溃**：终局 pts∈{2,1,0,−3} 的共同分量（std≈1.2）被全场 ~190 个决策分享，而单决策对终局 pts 的因果效应仅 ~±0.1 → 每决策 SNR≈1:10。Stage A 把该方差倒回 Q 头（且拆掉 delta_points 相对 GRP 期望的低方差残差结构）故**显著负**；Stage B 的 bootstrap 方差缩减被“V 自身要从同一跨局噪声信号学习”的误差反馈抵消，故**中性**
+3. **AWR 在近最优专家数据上权重≈均匀**：模型与专家分歧仅剩 ~18%（top1 0.8167），其中相当比例是人类的合理方差/ indifferent 选择而非可纠正错误，优势加权无从发力
+4. 与历史 null（R3/R4/R5/augmentation/hp_ablation 全 CI 跨 0）互相印证：**瓶颈是数据分布的信息天花板，不在目标函数/优化维度**——这为路线图预判的“扩窗换信息源”提供了又一向下的证据
+
+**方法论沉淀（§14-40）**：慢漂移（时间尺度 ~3 万步）必须靠“每存差点分位数日志”在正式轮全程监控——探针（30k 步 ×5 臂）只验证短期稳定，v3 的 111k 步长稳靠 `iql scale:` 全程行 + 链脚本放行门禁（max p50 ≤ ~5）确认。
+
+**产物**：`checkpoints/iql_b_v3/`（mortal.pth 867k + best.pth + step_800k/850k）、`iql_b_v3/{train.log,holdout_202609.log,ladder_summary.log}`、判定牌谱 `iql_b_v3/ladder/`（A_220000..222000 / B_230000..232000，20,000 局）、链日志 `logs/iql_b_v3_chain.log`（ALL DONE）、曲线 `runs/iql_b_v3`；配置 `config.iql_b_v3.toml`（`tools/training/prepare_iql_b_v3.py --fix tau05` 生成）+ `run_iql_b_v3.sh`；v2 产物在 `checkpoints/iql_b_v2/` + `iql_b_v2/`（漂移轮，权重不作基线）。种子块 220000/230000 已消费（记入 §17.8 清单）。
 
 ## 13. 待办与下一步
 
@@ -1163,7 +1221,36 @@ holdout（仅诊断，sample_digest 一致）：三条 top1 0.812–0.817（持�
 37. ⚠️ **IQL 的 expectile V 只能对「数据里实际执行的动作」回归，不能对全体合法动作取分位（10-15 踩到）**：`L_V = E_{(s,a)~D}[ L_2^τ(Q̄(s,a) − V(s)) ]`（Kostrikov et al. 2021 式 9）里的 a 是 **dataset action**；若改成对 masked 后的全部合法动作（本模型 ~30-40 个选项）取 τ-expectile，就把 V 绑到了**从未被任何损失监督过的 Q 外推值**的上分位上，后果：V 被无约束的 Q 外推拖走 → Q 目标（r+γV(s')）跟着漂 → 自激，表现为 logsumexp_q 到 −30 量级、top1 从 0.81 降到 0.70。**适用边界**：任何“对一个未完全被监督的 Q 分布做 max/expectile/top-k”的写法，都要先问这些动作的 Q 值到底由什么约束住。另记：算这类 masked 统计量时 `masked_fill(-inf)` 后要先 `torch.where(mask, x, 0)` 再参与乘方，否则 inf*0 会出 NaN。
 38. ⚠️ **幅度类断言的上界要从数学推导，不能拿"直觉里的最大值"凑（10-15 v2 启动前审查发现）**：`test_iql_data.py` C 段原断言 `max|r_t| ≤ max|pts|` 是**错的**——`r_t = E[pts|k+1] − E[pts|k]` 是两个凸组合之差，正确上界是 **pts 极差 max(pts)−min(pts)**（B 口径 2−(−3)=5.0），max|pts|（3.0）只是其子集（旧 round4 口径 [6,4,2,0] 两者恰相等，故一直没暴露）。后果不是"漏报 bug"而是**误报**：按 B 口径复跑测试 FAIL（实测 max|r_t|=3.4573，144 局独立重算确认合法单局值），差点被当成"r_t 又出问题了"打断正式轮启动。**做法**：写"量级合理"类断言前先推导上界（差分量→极差；和/累加量→和上界）；本例双重计入的确定性判据是**计数/多重集/总和三项**（非零个数==局边界数、非零值多重集==边界处 calc_delta_pt、总和==逐局总和），幅度上界只是兜底。已修断言为极差上界。
 39. ⚠️ **IQL 的 expectile V + γ≈1 + 边界稀疏奖励 = 价值尺度指数自激（10-16 v2 实测，会话 25）**：v2 实测 q_target 中位数 105k 步 +0.6→+61（倍增 ~32k 步纯指数，超理论界 [−5,+5] ~12 倍；理论界推导：r_k 沿局 telescope 至 pts[final]−E[pts|start]∈[−5,+5]）。机制：L_2^τ 在 V 低于目标时权重 τ=0.7 上拉、高于时仅 1−τ=0.3 下拉——增长 regime 中中游状态的 V 持续落后于下游目标（价值从有锚的局末向前传播、追而不及），残差持续为负 → 每步被不对称放大 → 有效反馈增益 γ·(1+bias)>1（bias≈2.3e-5/步）；EMA(0.995) 滞后使目标噪声 ∝ 尺度 → 偏差 ∝ 尺度 → 纯指数。**关键缓解事实**：v4 DQN 的 q=v(φ)+a(φ,·)−mean(a)，argmax 只依赖 a——价值膨胀不直接污染部署策略（参数级诊断：a_head 跨动作 std 1.74→1.60 统计不变），但 AWR 权重含 (v−v_ema) 滞后失真 ~10%、L_Q 对 a_head 的梯度随 TD 残差绝对值涨 3 倍 → 二阶污染策略通道（top1 0.811→0.807）。**处置**：① bootstrap 改用 V 的 EMA target（`iql_v_target_decay`，train.py 已实现）；② 或降 γ（0.997→0.99，margin 300×于实测 bias）；③ 或 τ→0.5（机制检查）。**方法论**：漂移时间尺度 ~3 万步，2k 步冒烟结构性门禁完全无感——**冒烟窗口必须覆盖待监测现象的时间尺度**（v3 冒烟改为 10-30k 步 + 每 1000 步 `iql scale:` 分位数门禁）。
+40. ⚠️ **慢漂移类缺陷必须靠“每存差点分位数日志”做正式轮全程监控，探针只验证短期（10-16 v3 实测沉淀）**：expectile 棘轮的倍增周期 ~32k 步——5 臂探针每臂仅 30k 步、能判定“哪项修复止漂”，但**修复在 111k 步正式轮尺度是否长稳**只能靠训练内监控：train.py 现每存盘点打一行 `iql scale: q_target p50=… p99=… | q_pred p50=… | v_ema=on/off`（由 all_q/all_q_target 分位数算出），链脚本收尾时取全程 max p50 与放行门禁（≤~5；v2 同点为 +60.8）比对。v3 实测 103 个存点：p50 从 +0.02 收敛到 +1.206 后全程平坦 → 长稳确认。**做法**：凡“数值缓慢单向蠕变”类缺陷（漂移/泄漏/尺度膨胀），监控打点间隔须 ≪ 现象时间尺度的 1/10，且正式轮链脚本要把该指标做成放行门禁，而不是训完再事后翻 TB。
 
+---
+
+## 14bis. 日志文件归置规范（强制执行）
+
+> **规则（2026-10-17 定，用户要求强制执行）**：所有新建/归档的 `.log` 文件**禁止散落在 `mortal/logs/` 顶层**，必须按下列类别放入对应子目录。写脚本时先 `mkdir -p` 目标目录（重定向目录不存在会导致 tmux 会话秒退且零日志，见 §14-34），启动前确认路径；整理旧日志时同样按本表归类。判定依据为**文件名前缀/语义**，不按时间。
+
+| 目录 | 收纳内容 | 匹配示例 |
+|---|---|---|
+| `train/` | 主模型训练与轮次链日志 | `main_train`、`main_r{2..5}_train`、`round{4,5}_chain`、`round4_resume` |
+| `grp/` | GRP 排名预测器训练与探针 | `grp_train`、`grp_v2_train`、`grp_h128_train`、`grp_capacity`、`grp_best_probe`、`grp_probe_base`、`grp_v2_launch` |
+| `read_model/` | 读牌模型训练与守护进程 | `read_model_v{1,2,2s,2x}_{train,tmux}` |
+| `iql/` | IQL/Bellman 路线全链路 | `iql_{a,b,b_v2,b_v3,probe}_chain`、`iql_a_check1`、`iql_{a,b}_launch_check`、`preflight_iql_a`、`status_iql_{a,b}`、`diag_iql_reward`、`forensic_iql_b_smoke`、`test_iql_data[_v2]`、`v3_launch` |
+| `eval/` | ladder 判定、holdout、配对/bootstrap 统计 | `ladder_{probe,r2_run,r3_run}`、`holdout_r{3,4}`、`r2_dryrun`、`pairdiff`、`bootstrap_r{3,4}` |
+| `smoke/` | 冒烟测试 | `smoke_{check1,check2,r4,round2}`、`smoke_v{2,3}_{check,final,final2}` |
+| `check/` | 代码/配置/环境项检查 | `cfg_round2_check[_2]`、`gamma_check_*`、`refac_check`、`v3_bump_check`、`xcheck[_2]`、`syntax_check`、`doccheck` |
+| `test/` | 功能/行为测试 | `bp_test[_2,_3,_final]`、`test_credit_modes` |
+| `env/` | 环境与全链路验证 | `env_e2`、`env_map`、`env_probe`、`pre4_envcheck`、`envcheck_selftest` |
+| `git/` | git 操作留痕 | `git_*`（init/fix/docs/status/verify/push_*/after_commit） |
+| `ablation/` | 奖励/超参消融链 | `hp_ablation_chain`、`hp_resume_chain` |
+| `data/` | 数据管线（榜单/白名单/扫描） | `whitelist[_v2]_build`、`toplist`、`refac_scan` |
+| `monitor/` | 训练过程监控与估算 | `progress_{check,now,tp}`、`r2_monitor`、`r2_epoch_estimate` |
+| `misc/` | 不属于以上类别 | `pack_zip`、`tensorboard` |
+
+**例外与细则**：
+1. **非 `.log` 文件不归置**（如 `agtest.out`、`commit_msg_stage_b.txt`、`reboot_handoff.txt`），留在 `mortal/logs/` 顶层或按工具约定存放。
+2. **`ladder_r2/`～`ladder_r5/`、`_agtest/`、`r2_evaldone/`、`tb_archive/` 内的 `.log` 保持原位**：它们已按轮次/用途归类，且与同目录 `.gz` 判定牌谱、mortal_step 标记文件配套，移动会造成证据链断裂。
+3. 命名规范：`{用途}_{轮次/版本}_{动作}.log`（如 `iql_b_v3_chain.log`、`main_r5_train.log`），保证他人可按前缀直接归类。
+4. 新日志落盘前先查本表；表中没有的新类别，在 `misc/` 落盘的同时**回本表补一行**（本节随目录演进）。
 
 ---
 
@@ -1805,11 +1892,20 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 
 **v2 正式轮已启动（10-15 16:24 UTC，会话 24）**：启动前对 dataloader/train/model/holdout 全链路复审确认两处修复无第三种偏差，另修掉测试幅度断言的上界错误（§14-38）；`config.iql_b_v2.toml` + `run_iql_b_v2.sh`（全新命名空间 `iql_b_v2`，种子块 200000/210000，索引复用 `iql_b_r4_v2.pth`），启动即核全绿（暖启告警恰 1 条、吞吐 2.93~2.95 batch/s、三损失初值 q=0.128/v=0.093/awr=0.411、无 non-finite）。预计 ≈10.5 h 训练 + ≈1 h 判定；结论待训完后补记。
 
+→ **后续（10-16~17）**：v2 已训完判定（δ=−3.42 显著变弱但属漂移污染、不作路线判决，会话 25/26），v3（τ=0.5 干净轮）已训完判定（δ=+0.646 无结论 → IQL 路线关闭）——完整结构、数据与归因见 §16.27 与会话 28。
+
+### 16.27 IQL Stage B v3 终局判定（10-16 18:29 UTC ALL DONE）：真 IQL 首次干净检验 = 无结论，IQL 路线关闭
+
+> 详情见 §12 会话 28。本节只归档结论。
+
+v3 = v2 + **τ=0.5**（expectile 对称化；5 臂探针唯一验证的反漂移修复，§14-39），其余与 B 组锁死；种子块 220000/230000、bseed 20261016、命名空间 `iql_b_v3`。训练 867k exit=0、无 non-finite；**价值尺度全程稳定**（max q_target p50=1.206，v2 同点 +60.8，理论界 [−5,+5]）；holdout top1 0.8167（历轮最高）/ lse +1.596。双向 ladder 各 10,000 半庄：**δ=+0.646 pt/半庄，block bootstrap SE 0.509、95%CI[−0.35,+1.63] → 无统计结论**。按预注册守则 → **IQL 路线关闭**（与 Stage A δ=−1.03 合并：目标形式改造两子路线均无可采纳增益），转 ③ 扩窗 2019+ + 重训 GRP + 按年份审计。现役最强仍 `round4/mortal.pth`（645k），基线口径仍 B/756k。
+
 ---
 
 ## 17. 进展总纲（10-01→10-11 系统性汇总）
 
 > 新会话只读本节即可接手；需细节时按小节号回查 §8～§16。
+> **写任何新 `.log` 前必读 [§14bis 日志文件归置规范](#14bis-日志文件归置规范强制执行)**（禁止散落顶层，必须按类别入目录）。
 
 ### 17.1 编年
 
@@ -1833,7 +1929,9 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | 10-15 | IQL Stage B 首轮 + 当日发现并修复实现缺陷 | 凌晨实现真 IQL（next_obs + VHead + EMA + AWR，回归 15 项过、冒烟 8/8）→ 11.5 h 训完 867k → **δ=−31.04、top1 0.692、logsumexp_q −176** → 诊断确认为 **r_t 双重计入 16×**（非零 2304 vs 应有 141）→ 首轮作废；已修（`dones[i]` 限定）+ 测试改验设计意图（八层 ALL PASS）+ 冒烟加行为门禁（会话 23/§16.26，§14-35/36）；下午冒烟 v3 10/10 全过（行为门禁当场抓出第二处缺陷 L_V 误用全体动作，已修，§14-37） |
 | 10-15 | **IQL Stage B 正式轮 v2 启动（真 IQL 首次有效检验）** | 启动前全链路复审（无第三种偏差）+ 修测试幅度断言上界（§14-38）→ `config.iql_b_v2.toml`/`run_iql_b_v2.sh` 全新命名空间 + 种子块 200000/210000，16:24 UTC 启动，预计 ≈10.5 h 训练 + ≈1 h 判定（会话 24） |
 | 10-16 | IQL v2 训完 + 发现价值尺度指数漂移 + 探针机制判决 | v2 训完 867k（top1 0.8069/lse +45）→ ladder **δ=−3.42 显著变弱**（漂移二阶污染策略通道，不作路线判决）；5 臂探针判决根因为 **expectile 不对称棘轮**（γ/v-ema 无效、τ=0.5 唯一稳定，§14-39/会话 25-26）；v3 定稿 = v2+τ=0.5，种子块 220000/230000 |
+| 10-16~17 | **IQL Stage B v3 终局判定 + IQL 路线关闭** | v3（τ=0.5 稳定版）06:26→17:41 UTC 训完 867k（价值尺度全程稳定：max q_target p50 **1.206** vs v2 同点 +60.8；holdout top1 **0.8167** 历轮最高 / lse +1.596）→ 18:29 ALL DONE：双向各 10,000 半庄 **δ=+0.646 pt/半庄、bootstrap CI[−0.35,+1.63] → 无统计结论** → 按预注册守则 **IQL 路线关闭**（会话 28/§16.27）；目标形式改造（Stage A/B）两子路线全部关闭，转扩窗 2019+ + 重训 GRP + 按年份审计 |
 | 10-16~17 | **读牌模型 v1+v2 实现并对决**（会话 27/27b，监督学习路线） | 新目录 `tools/read_model/`（零侵入 mortal/ 与 libriichi/）：4×PlayerState 回放出全知标签；v1=单帧 ResNet+H1/H2/H3（1.13M），v2=三流融合（+手切时序 Transformer+显式结构估计，1.36M，枚举器与 Rust calc_all 20.3 万手牌零不一致）；硬约束层；23 项回归 ALL PASS；同固定评估集 bootstrap CI 判决 **v2 三项显著增益**（alloc top-1 +3%、立直待牌 hit@1 +17%、听牌检测 AUC 0.628→0.686）；结构头向听估计仍弱（25.7%<28.4% 基线） |
+| 10-17 | **读牌模型 v2s 结构头专项训练+对决**（会话 27c） | 根因解剖：v2 结构头向听头**零监督**（无损失引用 + 不入瓶颈）。v2s 六改（向听分布入瓶颈 38→46 维、向听直接 CE、分解-向听一致性约束[可微软向听公式，形制门控 normal]、tenpai 一致性、aux 向听 ×3、类均衡）+ 修 v1/v2 潜在 NaN；39 项回归 ALL PASS；bootstrap CI 判决：向听 0.257→**0.526**、AUC 0.686→**0.739**、一致率 0.28→0.93、七对/国士向听 0.21/0→0.49/0.51；代价 wait hit@1 −0.014（容量成本，解药=更长训练） |
 
 ### 17.2 模型谱系与强度账（全部用 ladder 双向同牌山 ≥5000 sets 判定）
 
@@ -1846,12 +1944,16 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | R5 | R2/B 同窗 + **白名单 v3 top200**（293,416 文件、席位 344,068）+ names 修复补丁树，augmentation=true | grp_h128；奖励 **B 口径 pts=[2,1,0,-3]** | B/756k→**870,000**（fp32 4.28 it/s / ≈7.8 h） | **δ=−0.61 pt**（SE 0.594，t=−1.02，95%CI[−1.77,+0.56]；bootstrap SE 0.508、CI[−1.61,+0.36]）❌ 无结论、方向偏负 | 未测 holdout（本轮不跑） | `round5/mortal.pth`(870k) + step_800k/850k，`best.pth`=850k |
 | **IQL-B(v1)** | **`control.objective`: cql_mc→iql**（next_obs bootstrap + expectile V + AWR，CQL 关） | grp_h128；B 口径 pts=[2,1,0,-3] | B/756k→**867,000**（fp32 **2.69 it/s** / 11.5 h，3× encoder 前向） | δ=−31.04 pt（bootstrap CI[−32.13,−29.98]）**——但属无效实验：两处实现偏差（r_t 重复计入 16× + L_V 误用全体动作）** | 0.6917（比父代低 0.12）+ logsumexp_q −176.1 ← 尺度异常即缺陷本身 | `checkpoints/iql_b/`(867k) **封存不续用**；重跑走新命名空间 |
 | IQL-A | **与 B 组完全同数据/同配方**，唯一变量 `env.credit_mode`: kyoku→**game**（跨局折扣回报后缀和） | grp_h128；B 口径 pts=[2,1,0,-3] | B/756k→**867,000**（fp32 **4.52 it/s** / 7.25 h，后缀和零 GPU 成本） | **δ=−1.03 pt**（SE 0.595，t=−1.73，解析 CI[−2.20,+0.14]；**bootstrap SE 0.517、CI[−2.06,−0.02]**、ρ≈+0.19）❌ 无增益、方向偏负 | 0.8118（新口径不可横比：R² −0.373、var_q/var_t 0.92/2.42） | `iql_a/mortal.pth`(867k) + `best.pth`(800k) + step_800k/850k |
+| **IQL-B(v2)** | 同 B；`objective=iql`（next_obs bootstrap + expectile V **τ=0.7** + AWR，CQL 关） | grp_h128；B 口径 pts=[2,1,0,-3] | B/756k→**867,000**（fp32 2.7 it/s / 11.4 h，3× encoder 前向） | **δ=−3.416 pt**（SE 0.592，t=−5.77，bootstrap CI[−4.46,−2.36]）⚠ **不作路线判决**：expectile 不对称棘轮致价值指数漂移（q_target p50 +0.6→+60.8，倍增 ~32k 步，§14-39） | 0.8069 + logsumexp_q +45（尺度异常即缺陷本身） | `checkpoints/iql_b_v2/`(867k)；种子块 200000/210000 |
+| **IQL-B(v3)** | 同 B；`objective=iql`（**τ=0.5**，探针唯一验证的稳定修复；其余=v2） | grp_h128；B 口径 pts=[2,1,0,-3] | B/756k→**867,000**（fp32 ~2.74 it/s / 11.25 h，均速） | **δ=+0.646 pt**（SE 0.592，t=+1.09；**bootstrap SE 0.509、CI[−0.35,+1.63]**）❌ 无结论（CI 跨 0） | **0.8167**（历轮最高）+ lse +1.596 | `checkpoints/iql_b_v3/`(867k)+best+step_800k/850k；种子块 220000/230000、bseed 20261016 |
 
 → **三次“同分布层面挤数据”尝试全被否 + 收紧名单也被否**：R3（同池重复一个 epoch）δ=−0.03、R4（席位视角增强，+145k 步新样本）δ=+0.10、**R5（top400→top200 收紧名单）δ=−0.61**，都落在 ±1.2 pt 噪声带内（R5 还是方向偏负）；**目前唯一有效的增益仍只有 R2 的“换更强数据 + 换更好奖励”（δ=+2.86，t=4.83）**。现役最强 = `checkpoints/round4/mortal.pth`（645k）；下一轮应离开数据 reshuffle、转 **IQL/Bellman（带 next-state + target network）**。
 
 → **新增（10-14）：目标形式改造的第一子路线也已否**——**IQL-A（跨局信用分配）δ=−1.03，bootstrap CI[−2.06,−0.02]**。即“让早期动作看到整场回报”不带来强度；瓶颈不在信用分配视界，而在**无价值传播与政策改进机制**（Q 无法给未访问动作定价）。下一轮 = **Stage B 真 IQL**（next_obs + VHead + EMA target net + τ-expectile + AWR，CQL 关）；若仍无增益 → 扩窗 2019+ + 重训 GRP。**至今八次对照（R3/R4/R5/消融 A/hp×3/Stage A）+ 基线 B 全部无统计增益，仅 R2 有效。**
 
 → **新增（10-15）：Stage B 首轮 δ=−31.04 不作数**——根因是实现缺陷（r_t 被重复计入 16×，见 §16.26），**真 IQL 路线尚未被有效检验**。重跑（v2，新命名空间 + 种子 200000/210000）才是首次有效试验；若 v2 仍无增益 → ③ 扩窗 2019+。有效增益仍只有 R2 的 +2.86。
+
+→ **新增（10-16~17）：Stage B 三轮走完，IQL 路线关闭**——v1 无效（r_t 双计 16×）、v2 不作判决（τ=0.7 棘轮漂移，δ=−3.42）、**v3（τ=0.5）干净条件首次有效检验 δ=+0.646、bootstrap CI[−0.35,+1.63] 无结论**（会话 28/§16.27）。连同 Stage A（δ=−1.03 显著负）：**目标形式改造（信用分配视界 / TD 价值传播）两条子路线均无可采纳增益 → 路线关闭**；与 R3/R4/R5/augmentation/hp_ablation 的 null 合并，指向瓶颈在数据分布的信息量而非目标函数。**九次对照（R3/R4/R5/hp×3/Stage A/Stage B v3）均无统计增益，唯一有效增益仍只有 R2 的 +2.86**；现役最强仍 round4/645k，下一步 ③ 扩窗 2019+ + 重训 GRP + 按年份审计（读牌模型路径 C 注入为在途新方向，会话 27/28）。
 
 ### 17.3 可直接引用的量化事实
 
@@ -1877,6 +1979,7 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | `mortal/holdout_metrics.py` | **10-12**：与训练同奖励口径（新增三个参数的透传）并在表头打印 env 口径 | ✅ |
 | **信用分配口径（10-14，Stage A）** | `mortal/dataloader.py`：`FileDatasetsIter` 新增 `credit_mode`（`'kyoku'`/`'game'`）+ `gamma`，`populate_buffer` 沿局轴做折扣后缀和（`returns[k]=Σ_{j≥k}γ^(j−k)·r_j`），`reward_desc()` 带口径标识；`mortal/train.py`：`credit_mode` 进 `_ENV_REWARD_KEYS` 守卫（默认 `'kyoku'`，旧 ckpt 缺键不误报），game 模式 q_target **不再乘 γ^steps_to_done**；`mortal/holdout_metrics.py`：透传 credit_mode/gamma | ✅ `test_credit_modes.py` 五层 ALL PASS + 冒烟 7/7 + 全轮跑完（无 non-finite、吞吐与 B 持平） |
 | **IQL 目标族（10-15，Stage B）** | `mortal/model.py`：新增 `VHead`（1024→256 Mish→1）；`mortal/dataloader.py`：`objective`（`'cql_mc'`/`'iql'`），iql 条目 7 元组 `[obs, actions, masks, next_obs, terminal, r_t, ranks]`，**r_t 仅局边界（`dones[i]`）非零**；`mortal/train.py`：`control.objective`/`iql_tau`/`iql_beta`/`ema_decay`，三损失 L_Q/L_V/L_AWR（CQL 关），EMA target（参数 polyak + BN buffer 跟随），state 新增 `v_net/ema_mortal/ema_dqn`，NaN 守卫扩展；`holdout_metrics.py`：iql ckpt 的 q_target=None → 只出 top1/agari/lse | ✅ `test_iql_data.py` 八层 ALL PASS；⚠ 首版 r_t 双重计入缺陷已修（§16.26）；cql_mc 数学路径未变更（回归已验） |
+| **IQL 反漂移与监控（10-16，会话 25/26/28）** | `mortal/train.py`：新增 `iql_v_target_decay`（L_Q bootstrap 的 V 改用 EMA target，探针臂 B）、`iql_value_clip`（L_Q 目标钳位 ±8，探针臂 E）、**每存差点 `iql scale:` 分位数日志**（all_q/all_q_target 的 p50/p99 + q_pred + v_ema 状态，供链脚本门禁与事后取证，§14-40）；`config.iql_b_v3.toml` = v2+τ=0.5 定稿（`tools/training/prepare_iql_b_v3.py --fix tau05` 一键生成）；`run_iql_b_v3.sh` 收尾新增价值尺度放行门禁（max q_target p50 ≤ ~5，v2 同点 +60.8） | ✅ v3 全程 103 存点 max p50=1.206；探针 5 臂（`tools/training/prepare_iql_probe.py` + `run_iql_probe.sh`，各 30k 步）判定 τ=0.5 为唯一稳定修复 |
 | `libriichi/src/dataset/gameplay.rs` | **10-12**：`add_entry` 的 `apply_gamma` 注释改为实测口径（打牌+立直折扣；杠/鸣牌/和了/pass 不折扣；视界只在当前局内）——**仅注释，无行为变更，无需重编 .so** | ✅ 见 §14-31 |
 | `mortal/train_grp.py` | `grp.control.max_train_steps`、`grp_best.pth` 按 val loss 取优、固定验证抽样种子、`est. %` 日志 | ✅ 已用（grp_h128 即此产物） |
 | `mortal/player.py` | `enable_amp` / `enable_rule_based_agari_guard` 从 `[test_play]` 读；固定评测种子块 | ✅（固定块现在只用于同轮趋势，见 §17.7-坑 2） |
@@ -1915,7 +2018,9 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | `tools/training/diag_iql_reward_double_count.py` | **10-15 新增**：定位 r_t 重复计入的诊断（对比 dataset 非零 r_t 个数与“每局只计一次”应有值，并报出放大倍数 = 每局平均决策点数） |
 | `mortal/config.iql_b{,_smoke}.toml` + `mortal/run_iql_b{,_smoke}.sh` | **10-15 新增**：Stage B 链（objective=iql，γ=0.997/τ=0.7/β=3.0/ema=0.995）；冒烟链已加**行为门禁**⑥ avg_rank ≤ 2.60、⑦ holdout top1 ≥ 0.78 且 \|logsumexp_q\| ≤ 10（§14-36）；正式轮判定种子块 180000/190000（v1 已消费）/ **200000/210000（v2 在用）** |
 | `mortal/config.iql_b_v2.toml` + `mortal/run_iql_b_v2.sh` | **10-15 新增（会话 24）**：Stage B 正式轮 v2——全新命名空间 `iql_b_v2`（v1/v2 冒烟产物封存）、reset 令牌 `iql-b-v2`、种子块 200000/210000、索引复用 `indexes/iql_b_r4_v2.pth`；16:24 UTC 启动 |
-| `tools/read_model/`（dataset/model/model_v2/structure/constraints/train/evaluate/export_onnx/test_pipeline/compare_v1_v2/compare_bootstrap/run_v1.sh/run_v2.sh/README.md） | **10-16~17 新增（会话 27/27b）**：读牌模型 v1+v2（手牌暗牌预测，监督学习路线）——零侵入实现；`test_pipeline.py` 23 项回归（枚举器 vs Rust calc_all 交叉验证、时序 token 独立重算、GameplayLoader obs 逐位一致、136 牌守恒、tiles_seen 通道比对、增广等变、学习门禁）；`compare_bootstrap.py` = CI 判决对决；`run_v1.sh`/`run_v2.sh` = 15000 步训练（813k 训练文件 / 202609 固定验证） |
+| `tools/read_model/`（dataset/model/model_v2/structure/constraints/train/evaluate/export_onnx/test_pipeline/compare_v1_v2/compare_bootstrap/diag_by_form/probe_tedashi/run_v1.sh/run_v2.sh/run_v2s.sh/README.md） | **10-16~17 新增（会话 27/27b/27c）**：读牌模型 v1+v2+v2s（手牌暗牌预测，监督学习路线）——零侵入实现；`test_pipeline.py` 八层 39 项回归（枚举器 vs Rust calc_all 交叉验证、时序 token 独立重算、GameplayLoader obs 逐位一致、136 牌守恒、tiles_seen 通道比对、增广等变、学习门禁、**结构头专项门禁：软向听公式核对/v2s 前向/梯度流/v2s 小训练**）；`compare_bootstrap.py` = CI 判决对决；`run_v1.sh`/`run_v2.sh`/`run_v2s.sh` = 15000 步训练（813k 训练文件 / 202609 固定验证）；v2s = 结构头专项（向听分布入瓶颈 + 向听直接监督 + 分解-向听一致性约束 + 类均衡 + tenpai 一致性），对决判决向听 0.257→0.526、AUC +0.054、wait hit@1 −0.014 |
+| `tools/training/prepare_iql_probe.py` + `mortal/run_iql_probe.sh` | **10-16 新增（会话 25/26）**：5 臂 ×30k 步单旋钮探针（对照/τ=0.5/γ=0.99/V-EMA/clip8）——定位慢漂移根因的最便宜手段（≈4.5 h vs 烧一轮 11.5 h 正式轮）；产出 `iql_probe_chain.log` 与各臂 `iql scale:` 曲线 |
+| `tools/training/prepare_iql_b_v3.py` + `mortal/config.iql_b_v3.toml` + `mortal/run_iql_b_v3.sh` | **10-16 新增（会话 28）**：τ=0.5 稳定版正式轮（`--fix tau05` 一键生成配置）；链脚本 = env_check → B/756k 暖启 → 867k 训练（含 `iql scale:` 全程监控）→ holdout → 双向 ladder 220000/230000 → block bootstrap（bseed 20261016）→ 收尾守则自动判读 |
 
 ### 17.6 数据与产物台账
 
@@ -1925,8 +2030,8 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 | `dataset/mjai/houou4_names/` | **10-12 新增**：2026（202601~202610，130,407 文件）补 names 的**补丁树**；训练需与旧树并列 glob（见下） | 607.6 MiB |
 | `dataset/tenhou_hf/` | 18 个 HF 年度原包 | 17 GB |
 | `dataset/raw/`、`dataset/index/` | 2026 自建 mjlog；清单 CSV + **强度榜 CSV/top400** | 1.2 GB / 197 MB |
-| `mortal/checkpoints/` | R1 快照、R2、R3、**R4**、**R5(870k)**、**reward_ablation/{A,B,C}**、**hp_ablation/×3**、**iql_a(867k)**、grp×3、随机 baseline | ≈ 5 GB+ |
-| `mortal/logs/ladder_r2`、`ladder_r3`、`ladder_r4`；`mortal/{reward_ablation,hp_ablation,iql_a}/ladder*/` | 各轮 20,000 局判定牌谱（可事后重算/bootstrap）；**Stage A 判定牌谱在 `mortal/iql_a/ladder/`**（A_160000..162000 / B_170000..172000，含 `run_meta.json`） | 每轮 ≈ 0.8 GB |
+| `mortal/checkpoints/` | R1 快照、R2、R3、**R4**、**R5(870k)**、**reward_ablation/{A,B,C}**、**hp_ablation/×3**、**iql_a(867k)**、**iql_b_v2(867k，漂移轮不作基线)**、**iql_b_v3(867k+best+step_800k/850k)**、grp×3、随机 baseline | ≈ 5 GB+ |
+| `mortal/logs/ladder_r2`、`ladder_r3`、`ladder_r4`；`mortal/{reward_ablation,hp_ablation,iql_a}/ladder*/` | 各轮 20,000 局判定牌谱（可事后重算/bootstrap）；**Stage A 判定牌谱在 `mortal/iql_a/ladder/`**（A_160000..162000 / B_170000..172000，含 `run_meta.json`）；**Stage B v3 在 `mortal/iql_b_v3/ladder/`**（A_220000..222000 / B_230000..232000）、v2 在 `mortal/iql_b_v2/ladder/` | 每轮 ≈ 0.8 GB |
 | `mortal/logs/tb_archive/` | TB 坏段事件文件取证归档 | 72 KB |
 | `mortal/indexes/` | `main_r2_whitelist_v1.pth`（480,414）等文件表 | 248 MB |
 | 本地 git | 分支 `main`，基线 `33e63bc`、`5a1867f`，tag `round1-complete`；**无远端** | 4.4 MB |
@@ -1937,7 +2042,7 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 |---|---|
 | 评测与判定 | 随机 baseline 使 test_play 饱和（§14-15）；**固定种子块不能跨轮比较**（§16.15，虚高 4.5 pt）；小样本只会低估（§16.13）；`best_perf` 继承会停写 best.pth（已修）；自写解析与 Rust Stat 平分 tie-break 不同（±1.4 pt） |
 | 数据 | `file_index` 换名单/换窗必须改名；2026 部分无 `names`；exFAT 簇浪费（已迁服务器）；大文件传输必须打包 |
-| 训练 | 离线只跑一个 epoch 就静默退出（§14-22）；state_file 存在即续训；GRP 必须先行且尺寸与 checkpoint 必须同步；`grp_best.pth` 会被不同容量实验互盖；**暖启冒烟的 `max_train_steps` 是全局绝对值，必须写“父代步数+冒烟步数”否则秒退（§14-33）** |
+| 训练 | 离线只跑一个 epoch 就静默退出（§14-22）；state_file 存在即续训；GRP 必须先行且尺寸与 checkpoint 必须同步；`grp_best.pth` 会被不同容量实验互盖；**暖启冒烟的 `max_train_steps` 是全局绝对值，必须写“父代步数+冒烟步数”否则秒退（§14-33）**；**Stage B 四连坑：r_t 双重计入（§14-35）、冒烟缺行为门禁（§14-36）、L_V 对全体动作 expectile（§14-37）、expectile 棘轮慢漂移（§14-39）+ 幅度断言上界须推导（§14-38）** |
 | 环境 | `MORTAL_CFG` 必需（默认 config.toml 不存在）；`CUDA_DEVICE_ORDER=PCI_BUS_ID` 否则选卡错（§14-19）；`import libriichi` 必须在 `mortal/` 下（§14-20）；`LD_LIBRARY_PATH` 只有跑 Rust CLI 才必需（§14-21）；RAYON 必须启动前设好；**tmux 重定向目录必须预先 mkdir，否则会话秒退且零日志（§14-34）** |
 | 工程 | 长任务一律 tmux + 日志落 `mortal/logs/`；脚本内用绝对路径解释器 `$PY`；`pgrep -f` 要锚定模式；并发 ladder 必传独立 log_dir |
 
@@ -1945,15 +2050,15 @@ A 侧合计 +0.567（SE 0.844）、B 侧合计 +0.373（SE 0.835）——两个�
 
 | 类型 | 事项 |
 |---|---|
-| 已判定 | **第 4 轮 augmentation = 无增益**（δ=+0.10±0.59）；**奖励消融：C 显著变弱（−5.61）、B 方向正向未显著（+0.18，已采纳为新基线）**（会话 18）；**第 5 轮 top200 收紧名单 = 无结论、方向偏负**（δ=−0.61±0.59，bootstrap CI[−1.61,+0.36]，会话 20）。→ “同分布层面挤数据”（R3/R4/消融 A）+“换信息源的收紧名单”（R5）共 5 次否掉，**数据 reshuffle 路线到头**；**hp_ablation 便宜前置（10-14，cql/aux 小扫）也无增益（均 CI 跨 0）→ 排除“只是超参没扫对”，确认瓶颈在目标形式**；**IQL Stage A（跨局信用分配，10-14）也无增益、方向偏负（δ=−1.03，bootstrap CI[−2.06,−0.02]，会话 22/§16.25）→ “整场回报回传”这条 MC/控制变量路线关闭**；**IQL Stage B 首轮（10-15，δ=−31.04）属无效实验（两处实现偏差：r_t 双重计入 16× + L_V 误用全体动作取 expectile，均已修），不作为 IQL 路线的判决**（会话 23/§16.26） |
-| **下一步（代码已就绪，待开正式轮）** | **Stage B 正式轮（v3 修正后的重跑）= 真 IQL 的首次有效试验**：冒烟已 10/10 全过（v3：avg_rank 2.527、top1 0.8134 > 父代 0.8112、logsumexp_q +1.343）。**启动时需全新命名空间**（v1 的 `checkpoints/iql_b/`(867k)、`iql_b_smoke/`、`iql_b_smoke_v2/` 均含受损权重 → 封存不续用）：父代仍 B/756k（`reset_optimizer` 换新令牌）、预算 +111k（~11.5 h @ 2.69-2.93 batch/s）、判定种子块 **200000/210000**（180000/190000 已被 v1 消费）、bseed 换新。若仍无增益/变弱 → IQL 路线关闭，转 ③ 扩窗 2019+ + 重训 GRP + 按年份审计。**现役最强仍为 `round4/mortal.pth`（645k），基线口径仍 B/756k** |
-| **新方向（10-16~17，会话 27/27b）** | **读牌模型 v1+v2**（`tools/read_model/`，监督学习路线）：均训完 15000 步，bootstrap CI 判决 v2 显著更优（听牌检测 AUC +0.058 最大）；**下一步**：① 结构头专项（向听估计）；② 更长训练（50k+ 步）验证时序流增益是否扩大；③ **强度判定只有未来的路径 C 注入实验**（限域注入 Mortal 观测 + 微调 + ladder 双向），离线指标仅作诊断。集成前需补：规则法基线（方案 §8.1 第 2 条）、立直振听自动检测、obs 通道裁剪（或 Rust 侧 `encode_obs` 加 `with_sp_tables` 开关解决吞吐瓶颈） |
+| 已判定 | **第 4 轮 augmentation = 无增益**（δ=+0.10±0.59）；**奖励消融：C 显著变弱（−5.61）、B 方向正向未显著（+0.18，已采纳为新基线）**（会话 18）；**第 5 轮 top200 收紧名单 = 无结论、方向偏负**（δ=−0.61±0.59，bootstrap CI[−1.61,+0.36]，会话 20）。→ “同分布层面挤数据”（R3/R4/消融 A）+“换信息源的收紧名单”（R5）共 5 次否掉，**数据 reshuffle 路线到头**；**hp_ablation 便宜前置（10-14，cql/aux 小扫）也无增益（均 CI 跨 0）→ 排除“只是超参没扫对”，确认瓶颈在目标形式**；**IQL Stage A（跨局信用分配，10-14）也无增益、方向偏负（δ=−1.03，bootstrap CI[−2.06,−0.02]，会话 22/§16.25）→ “整场回报回传”这条 MC/控制变量路线关闭**；**IQL Stage B 首轮（10-15，δ=−31.04）属无效实验（两处实现偏差：r_t 双重计入 16× + L_V 误用全体动作取 expectile，均已修），不作为 IQL 路线的判决**（会话 23/§16.26）；v2（10-16 凌晨，δ=−3.42 显著变弱）属目标实现不稳定（expectile 棘轮漂移）亦不作判决（§14-39）；**v3（10-16，τ=0.5 干净条件，δ=+0.646、bootstrap CI[−0.35,+1.63]）= 真 IQL 首次有效检验，无统计结论 → 按预注册守则 IQL 路线关闭**（会话 28/§16.27）。至此目标形式改造两子路线（Stage A 跨局 MC / Stage B TD 价值传播）均关闭 |
+| **下一步（10-16~17 更新：IQL 路线已关闭，正式结论见会话 28/§16.27）** | ~~Stage B 正式轮（v3）= 真 IQL 首次有效试验~~ → **已跑完：δ=+0.646、bootstrap CI[−0.35,+1.63] 无结论 → IQL 路线关闭**（v3 冒烟曾 10/10 全过：avg_rank 2.527、top1 0.8134、lse +1.343；正式轮 holdout top1 0.8167 历轮最高但未转化为 ladder 增益）。**当前路线 = ③ 扩窗 2019+ + 重训 GRP + 按年份审计**（数据分布换信息源，而非继续换目标函数）；在途新方向 = 读牌模型 v2 → 路径 C 注入 Mortal（限域注入 obs + 微调 + ladder 双向，唯一强度标准）。父代仍 B/756k（`reset_optimizer` 换新令牌）、每轮 +111k 预算（~11.5 h @ 2.7-2.9 batch/s）、bseed 每轮换新。**现役最强仍为 `round4/mortal.pth`（645k），基线口径仍 B/756k** |
+| **新方向（10-16~17，会话 27/27b/27c/27d）** | **读牌模型 v1+v2+v2s(+v2x 消融)**（`tools/read_model/`，监督学习路线）：bootstrap CI 判决 v2 显著更优（AUC +0.058）、v2s 结构头专项成功（向听 0.257→0.526、AUC 0.686→0.739、一致率 0.28→0.93）；**A1 瓶颈归因已判决**：向听学习全靠损失（瓶颈非必要）、AUC 增益全靠瓶颈馈通（损失单独反伤 AUC −0.019）、wait 代价 55/45 混合 → **保留 46 维，v2s 架构定妆**；**下一步**：A2 v2s@50k 正式轮（定注入基线）→ A3 规则法基线 → B 路径 C 限域注入 + ladder 双向（唯一强度标准，事前门禁）。详见上方「读牌模型」节内计划块 |
 | **已完成（10-12）** | 数据侧 P0 两条（分析文档 §2.1/§2.2，详见 §12 会话 15）：① 2026 缺失 names 已修复到**补丁树** `dataset/mjai/houou4_names/`（13 万文件；validate_logs 全绿；白名单命中 20.7% 座位 / 60.6% 文件），强度榜重建为 **v3**（top400 席位 789,454 / 262k 步每 epoch；top200 席位 344,068 / 114k 步）；② `file_index` 升级为带 **manifest 校验**（`FILE_INDEX_VERSION=2` + 可选 `dataset.data_version`），回归测试 E1~E6 全过。**模型侧 P0 三条**（详见 §12 会话 16）：③ 奖励口径可切换（`env.reward_mode` = `rank_pt`/`delta_points` + `reward_scale`）并加**续训目标守卫**；④ gamma 语义实测更正（`gamma<1` **不是**跨局信用分配，见 §14-31）；⑤ `ladder.py` 执行参数改为可配置+显式记录（`[1v3.ladder]`/CLI、`run_meta.json`、ckpt sha256） |
 | 已完成（10-13） | **第 5 轮已判定（top200_v3 收紧名单 = 无结论、方向偏负，δ=−0.61）→ 详见 §12 会话 20 / §16.23** |
-| 已完成（10-15） | **Stage B 真 IQL 首轮实施 + 跑完 + 当日定位并修复实现缺陷**：① 代码接线（VHead / objective 双分支 / 三损失 / EMA target / state 新键 / holdout 适配）；② `test_iql_data.py` 首次 ALL PASS（但当时断言了实现现状，未拦住 r_t 双重计入，§14-35）；③ 正式链 03:09→15:06 UTC 跑完（867k、11.5 h、2.69 batch/s）→ **δ=−31.04**；④ 用 `diag_iql_reward_double_count.py` 定位为 **r_t 重复计入 16×**（非零 2304 vs 应有 141）→ 首轮作废；⑤ 已修第一处（`dones[i]` 限定）+ 测试改验设计意图（八层 ALL PASS）+ 冒烟加行为门禁⑥⑦（§14-36）；⑥ **新门禁当场 FAIL 了 v2 冒烟，抓出第二处偏差（L_V 误对全体合法动作取 expectile，§14-37）并修正**；⑦ **v3 冒烟 10/10 全过**（avg_rank 2.527、top1 0.8134 > 父代 0.8112、logsumexp_q +1.343）→ 真 IQL 进入可检验状态；⑧ 产物写入 §12 会话 23 / §16.26 / §17.1-17.8。**状态：两处缺陷已修，待开正式轮（种子块 200000/210000）** |
+| 已完成（10-15） | **Stage B 真 IQL 首轮实施 + 跑完 + 当日定位并修复实现缺陷**：① 代码接线（VHead / objective 双分支 / 三损失 / EMA target / state 新键 / holdout 适配）；② `test_iql_data.py` 首次 ALL PASS（但当时断言了实现现状，未拦住 r_t 双重计入，§14-35）；③ 正式链 03:09→15:06 UTC 跑完（867k、11.5 h、2.69 batch/s）→ **δ=−31.04**；④ 用 `diag_iql_reward_double_count.py` 定位为 **r_t 重复计入 16×**（非零 2304 vs 应有 141）→ 首轮作废；⑤ 已修第一处（`dones[i]` 限定）+ 测试改验设计意图（八层 ALL PASS）+ 冒烟加行为门禁⑥⑦（§14-36）；⑥ **新门禁当场 FAIL 了 v2 冒烟，抓出第二处偏差（L_V 误对全体合法动作取 expectile，§14-37）并修正**；⑦ **v3 冒烟 10/10 全过**（avg_rank 2.527、top1 0.8134 > 父代 0.8112、logsumexp_q +1.343）→ 真 IQL 进入可检验状态；⑧ 产物写入 §12 会话 23 / §16.26 / §17.1-17.8。**状态：两处缺陷已修，待开正式轮（种子块 200000/210000）**——后续：v2/v3 均已跑完并判定，**IQL 路线关闭**，终局见会话 28/§16.27 |
 | 已完成（10-14） | ① **hp_ablation 终局判定**：cql=1/10、aux=0 三分支 vs 父代全 CI 跨 0 → 超参不是瓶颈，直接支持目标形式改造（§12 会话 21 / §16.24）；② **IQL Stage A 实施完毕**：dataloader/train/holdout 三处 `credit_mode` 接线 + 守卫键扩展（`_ENV_REWARD_KEYS`），验证脚本 `tools/training/test_credit_modes.py` ALL PASS（γ=1 闭式恒等 8.9e-16、GRP 终局 one-hot、kyoku 回归等价多重集、γ=0.5 折扣生效、守卫 3 例）；③ **冒烟链 7/7 全过**（守卫告警恰 1 条、索引 manifest 复用、无 non-finite、758k 预算、快照、test_play 正常、吞吐 4.6 it/s）；④ 正式链 09:32 启动 → **16:47 训完 867k**（exit=0、无 non-finite、7.25 h）；⑤ **Stage A 终局判定（17:16 ALL DONE）：δ=−1.03、bootstrap CI[−2.06,−0.02] → 无增益、方向偏负，“整场回报回传”路线关闭**（§12 会话 22 / §16.25） |
 | 10-14 实测数值 | Stage A 吞吐 **4.52 batch/s**（与 B 持平 → 后缀和零 GPU 成本）；test_play 固定种子 800k avg_rank 2.4815/avg_pt 2.5425、850k 2.47/2.295（**仅趋势，不入强度结论**；种子块已被多轮消费）；holdout top1 0.8118 |
-| 可做未做 | akochan 外部锚点（需 JRE，本机无）；上游 `git diff` 校准补丁清单（**服务器无外网**，curl 超时）；git 无远端→推不出去（10-14 复核 `git remote -v` 为空）；checkpoint 无异地备份（10-14 复核 `backups/` 仅本机同盘打包）；两套固定 holdout 的“同分布口径”未建（时间外推口径 202609 已常态化，见分析文档 §4/S1）；带 agari-guard 的 holdout 未做（§3.5）；kan-select 训/部署口径回放对照未做（§3.3）。**已解决并移出（原条目）：**~~固定种子块轮换~~（ladder.py CLI 每轮换块，**已消费记录**：R2=60000-、R3=70000-、R4=80000-、消融=90000-/100000+110000（B）、R5=120000/130000、hp_ablation=140000/150000、**Stage A=160000/170000**、**Stage B v1=180000/190000（无效实验，块仍已消费）**；**Stage B v2 预定 200000/210000**）；~~GRP 真实点数差监督~~（C 组 10-13 测定 δ=−5.61 显著变弱，路线关闭）；~~`agg_ladder` block bootstrap 复核~~（已成每轮判定标配，bseed 记录在案） |
+| 可做未做 | akochan 外部锚点（需 JRE，本机无）；上游 `git diff` 校准补丁清单（**服务器无外网**，curl 超时）；git 无远端→推不出去（10-14 复核 `git remote -v` 为空）；checkpoint 无异地备份（10-14 复核 `backups/` 仅本机同盘打包）；两套固定 holdout 的“同分布口径”未建（时间外推口径 202609 已常态化，见分析文档 §4/S1）；带 agari-guard 的 holdout 未做（§3.5）；kan-select 训/部署口径回放对照未做（§3.3）。**已解决并移出（原条目）：**~~固定种子块轮换~~（ladder.py CLI 每轮换块，**已消费记录**：R2=60000-、R3=70000-、R4=80000-、消融=90000-/100000+110000（B）、R5=120000/130000、hp_ablation=140000/150000、**Stage A=160000/170000**、**Stage B v1=180000/190000（无效实验，块仍已消费）**；**Stage B v2=200000/210000**、**Stage B v3=220000/230000（IQL 路线已关闭，会话 28）**；下一轮扩窗 2019+ 从 240000 起）；~~GRP 真实点数差监督~~（C 组 10-13 测定 δ=−5.61 显著变弱，路线关闭）；~~`agg_ladder` block bootstrap 复核~~（已成每轮判定标配，bseed 记录在案） |
 | 文档对账 | §16.11 四项（尤其本机手册的 §4.x 代码修改章节与本节 §17.4 的逐条比对）；本地 `.md` 仍无法从服务器读取（无盘映射），需上传后才能真合并 |
 
 ### 17.9 新会话接手三步

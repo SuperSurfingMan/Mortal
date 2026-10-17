@@ -1,0 +1,171 @@
+# IQL AWR 温度 β 扫描探针 臂a（对照 = v3 原配置（β=3.0），2026-10-17）
+# 目的：30k 步同暖启/同数据/同种子对比 AWR 锐度；τ=0.5 下 β 是策略提取唯一旋钮。
+# 判据：健康五门 + awr_w 集中度随 β 单调 + avg_pt ≥ 对照+2.0 且 top1 ≥ 对照−0.005。
+# 与 v3 正式轮的差异仅：命名空间/预算(30k)/本臂旋钮；数据/名单/增强/pts/GRP/暖启/seed 全锁死。
+
+[control]
+version = 4
+online = false
+state_file = "checkpoints/iql_beta_a/mortal.pth"       # 启动前从 B 组 756k 暖启
+best_state_file = "checkpoints/iql_beta_a/best.pth"
+tensorboard_dir = "runs/iql_beta_a"
+device = "cuda:0"                # 物理卡由 CUDA_VISIBLE_DEVICES 指定：GPU2 RTX 8000
+enable_cudnn_benchmark = true
+enable_amp = false               # fp32（R4 NaN 事故后既定纪律）
+enable_compile = false
+batch_size = 512
+opt_step_every = 1
+save_every = 1000
+test_every = 30000
+submit_every = 1000
+max_train_steps = 786000         # 756k + 30k 探针预算
+snapshot_every = 30000
+seed = 20261016
+reset_best_perf = "iql-beta-a"     # 目标切换 → 一次性重置 best_perf 竞争
+reset_optimizer = "iql-beta-a"     # 目标切换 → 只继承模型权重，跳过旧 optimizer/scheduler
+objective = "iql"                # ★ 唯一实质变量
+iql_tau = 0.5                    # expectile 分位（V 学 Q̄ 的高分位）
+iql_beta = 3.0                   # AWR 优势温度
+ema_decay = 0.995                # EMA target 网络 polyak
+
+[test_play]
+games = 2000
+log_dir = "runs/iql_beta_a/test_play"
+enable_amp = false
+enable_rule_based_agari_guard = true
+
+[dataset]
+globs = [ "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202[2-5]??/**/*.json.gz", "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/20260[1-8]/**/*.json.gz",]
+player_names_files = [ "../dataset/index/top_players_400_v2.txt",]   # 与 B 一致
+file_index = "indexes/iql_b_r4_v2.pth"          # 与 v1/B 同数据集合，manifest 校验通过即复用
+file_batch_size = 16
+reserve_ratio = 0.0
+num_workers = 8
+num_epochs = 1
+enable_augmentation = true       # 与 B 一致
+augmented_first = true           # 与 B 一致
+data_version = "iql-b-r4-v2"
+
+[env]
+gamma = 0.997                    # ★ iql 模式下 γ = 每决策步折扣（一场 ≈190 步 → 整场折 0.57）
+pts = [ 2.0, 1.0, 0.0, -3.0,]    # B 口径不变
+reward_mode = "rank_pt"
+reward_scale = 1.0
+
+[resnet]
+conv_channels = 192
+num_blocks = 40
+
+[cql]
+min_q_weight = 5                 # iql 模式下不生效（objective='iql' 不计算 cql_loss），占位保持结构
+
+[aux]
+next_rank_weight = 0.2
+
+[freeze_bn]
+mortal = false
+
+[optim]
+eps = 1e-8
+betas = [ 0.9, 0.999,]
+weight_decay = 0.1
+max_grad_norm = 5.0
+
+[online]
+history_window = 50
+enable_compile = false
+
+[1v3]
+seed_key = -1
+games_per_iter = 2000
+iters = 500
+log_dir = "runs/iql_beta_a/ladder"
+
+[1v3.challenger]
+device = "cuda:0"
+name = "mortal"
+state_file = "checkpoints/iql_beta_a/mortal.pth"
+stochastic_latent = false
+enable_compile = false
+enable_amp = true
+enable_rule_based_agari_guard = true
+
+[1v3.champion]
+device = "cuda:0"
+name = "baseline"
+state_file = "checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth"   # 父代 B/756k
+stochastic_latent = false
+enable_compile = false
+enable_amp = true
+enable_rule_based_agari_guard = true
+
+[1v3.akochan]
+enabled = false
+dir = "/path/to/akochan"
+tactics = "/path/to/tactics.json"
+
+[1v3.ladder]
+device = "cuda:0"
+enable_amp = false
+enable_rule_based_agari_guard = true
+
+[grp]
+state_file = "checkpoints/grp_h128.pth"
+
+[grp.network]
+hidden_size = 128
+num_layers = 3
+
+[grp.control]
+device = "cuda:0"
+enable_cudnn_benchmark = true
+tensorboard_dir = "runs/grp_v2"
+batch_size = 512
+save_every = 2000
+val_steps = 200
+max_train_steps = 60000
+
+[grp.dataset]
+train_globs = [ "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202[2-5]??/**/*.json.gz", "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/20260[1-8]/**/*.json.gz",]
+val_globs = [ "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202609/**/*.json.gz",]
+file_index = "indexes/grp_recent_v1.pth"
+file_batch_size = 50
+
+[grp.optim]
+lr = 0.0001
+
+[train_play.default]
+games = 800
+log_dir = "runs/train_play"
+boltzmann_epsilon = 0.005
+boltzmann_temp = 0.05
+top_p = 1.0
+repeats = 1
+
+[optim.scheduler]
+peak = 0.0001
+final = 0.0001
+warm_up_steps = 2000
+max_steps = 2000                 # 暖启后恒定 1e-4（与 B/Stage A 分支一致）
+
+[baseline.train]
+device = "cuda:0"
+enable_compile = false
+state_file = "checkpoints/mortal_step_000200000.pth"
+
+[baseline.test]
+device = "cuda:0"
+enable_compile = false
+state_file = "checkpoints/mortal_step_000200000.pth"   # 与 B 一致，best_perf 可比
+
+[online.remote]
+host = "127.0.0.1"
+port = 5000
+
+[online.server]
+buffer_dir = "/path/to/buffer"
+drain_dir = "/path/to/drain"
+sample_reuse_rate = 0
+sample_reuse_threshold = 0
+capacity = 1600
+force_sequential = false

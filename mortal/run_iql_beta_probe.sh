@@ -195,7 +195,9 @@ run_smoke () {
     else
         say "  [FAIL] test_play avg_rank=$rk avg_pt=${pt:-?} 已劣化（门禁 ≤2.60）"; fail=1
     fi
-    CUDA_VISIBLE_DEVICES=$SMOKE_GPU $PY -u holdout_metrics.py \
+    # ⚠ 必须带 MORTAL_CFG（2026-10-18 修正）：holdout_metrics.py 经 config.py 读 MORTAL_CFG，
+    # 缺省会去找 ./config.toml 并以 FileNotFoundError 退出（10-18 冒烟实测）。
+    CUDA_VISIBLE_DEVICES=$SMOKE_GPU MORTAL_CFG=$CFG $PY -u holdout_metrics.py \
         --month 202609 --n 24 --seed 20261009 --workers 1 "$CK" \
         > "$SLOG/holdout_202609.log" 2>&1
     local ho t1 lq
@@ -242,7 +244,8 @@ run_arm () {   # $1=arm 字母  $2=gpu  $3=beta
     say "[$x] train 756k→786k (GPU$gpu, fp32, β=$beta)"
     train_with_retry "$CFG" "$gpu" "$log" "$x" \
         || { say "[$x] !! 训练连续失败，跳过该臂评估"; return 1; }
-    CUDA_VISIBLE_DEVICES=$gpu $PY -u holdout_metrics.py \
+    # ⚠ 必须带 MORTAL_CFG（同冒烟处修正，2026-10-18）
+    CUDA_VISIBLE_DEVICES=$gpu MORTAL_CFG=$CFG $PY -u holdout_metrics.py \
         --month 202609 --n 24 --seed 20261009 --workers 1 "$CK" \
         > "$ALOG/holdout_202609.log" 2>&1
     extract_metrics "$x" "$beta"

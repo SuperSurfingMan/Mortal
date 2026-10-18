@@ -443,6 +443,12 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 | v2s@50k（A2） | 同配置扩预算 | wait Δ(vs v2)=−0.0112 显著未回补；AUC 0.6671（−0.0184）、alloc −0.0051、立直 −0.0282；但 wait_hit5 +0.0473、deal_pure 0.0422→0.0286、riichi_deal_pure 0.0641→0.0428、向听 +0.2747 → **不按原判据作注入基线** |
 | A2b | 输出侧 tenpai BCE（`wait[34]` 拟合 `1−tenpai`，全目标，权重 0.2） | **已判决（best@43k, val 2.0924）**：AUC 0.6671→**0.9461**（+0.279，CI[+.273,+.285]）；wait_hit1 0.1343（Δ vs v2 −0.0121，达 −0.015 护栏点估计；CI 下界 −0.0207 略越界）；wait_hit5 0.5497、deal_pure 0.0245、向听 0.5330、一致率 0.9520。vs v2：deal_pure/riichi_deal_pure 显著更安全、wait_hit5 +0.0596、向听 +0.2756；代价 riichi_hit1 −0.0330、alloc −0.0067 → **预注册 (a)(b)(c) 全满足，定为注入基线** |
 
+**A2 事故（10-17）**：A2 首跑两次在 step~7500 **确定性**崩溃（DataLoader worker Bus error/Segfault，与 worker 数/墙钟无关）。根因 = 共享树 `libriichi` 被 s6a 实验改版（v5 obs 补丁）+ `mortal/libriichi.so` 未随还原重建；还原并重编后 `obs_shape(4)=(1012,34)`、39 项回归 ALL PASS。处置：作废被污染的 8000 步 checkpoint（隔离 `mortal/read_model_v2s_50k.contaminated_so/`），从头重跑。教训：libriichi 实验必须完全隔离（s6a_isolated 模式）、还原后必须重编 `.so` 并跑回归门禁；`except Exception` 捕获不了原生段错误。
+
+**A2b 实现与机制**：`--wait-tenpai-weight 0.2`（`l_wait_tenpai = BCE(wait_logits[...,34], 1−tenpai)`，全目标）；梯度验证：8 样本无听牌目标批次下 h2_out 梯度 0→0.456（复现并修复 A2 缺陷）。A2 机制 = 非听牌目标（85.5%）对 `wait[34]` 无直接监督，长训练 P(未听) 集体塌缩（非听牌均值 0.0122→0.0080、中位 0.0030→0.0013）→ AUC 0.739→0.667；A2b 后非听牌 P(未听) 回到 0.058–0.082、AUC 0.946。预注册判据（已满足）：AUC≥0.72、deal_pure≤0.0408、wait_hit5≥0.50、wait_hit1 Δ≥−0.015。
+
+**P1 分层诊断（10-18，`strat_metrics.py`，A2b@20000 固定集）**：头部 AUC 0.946 被"简单局"抬高——按公开信息分层：无立直 0.898、无立直且无鸣牌 **0.833**、**无立直无鸣牌且 turn≥8 仅 0.683**（该子集 hit1 0.073、hit5 0.461、alloc 信息增益 0.163 最高）；called=1 AUC **0.775**（开手判别更难）vs called=0 0.966；**riichi=1 的 hit1 0.112 反而低于 riichi=0 的 0.155**（立直后本应最准 → 明显改进点）、riichi deal 3.56% vs 非立直 0.96%。hit1 随机基线 0.049（模型 2.75×）；turn0-3 的 hit1≈随机（该段听牌率仅 0.6%）；**alloc top-1 0.715≈众数 0.707**（该指标信息量极低，应看 CE 0.662/信息增益 0.115/MAE 0.422）。**结论：进步空间集中在 ① 困难局听牌判别、② 精确点名（尤其立直后）、③ 开手（called=1）判别**；全量 AUC 已近饱和。产物 `strat_report.json`。
+
 **工程资产**：回归 39 项 ALL PASS（枚举器 vs Rust `calc_all` 20.3 万手牌零不一致、时序 token 独立重算、与 GameplayLoader obs 逐位一致、136 牌守恒、tiles_seen、增广等变、学习门禁、结构头专项）；`compare_bootstrap.py` 做 CI 判决；`run_v1.sh/run_v2.sh/run_v2s.sh/run_v2s_a2b.sh`。下一步：A3 规则法基线（现物/筋/壁 + 立直枚举 + 见逃排除）→ B0 立直振听/吞吐（`with_sp_tables`）→ B1 限域注入（读牌冻结，wait_probs 35 维 + exp_counts + 向听分布作额外特征；防守/全决策两档）→ B2 ladder 门禁（CI 下界>0 采纳，跨 0 无结论，<0 回滚）。
 
 ### 3.13 项目准备期（2026-10-01~10-09，压缩）

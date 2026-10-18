@@ -114,7 +114,7 @@ gen('smoke', '冒烟 = a 臂(β=3.0) + 2k 步预算', {}, 'smoke', 758000, 2000,
     '# 目的：验证 train.py 新增 awr_w 集中度与 behavior 日志行 + v3 同款健康门禁全过。\n'
     '# test_play 用 256 局（与 v3 冒烟同口径；2000 局在并发负载下过长易被外部干扰打断）。\n'
     '# 通过后才由 run_iql_beta_probe.sh 启动 4 臂 30k 探针。\n',
-    extra_subs={'games = 2000                  # 每 50k 步评测，2k 局': 'games = 256                   # 冒烟：每次 test_play 只打 64 sets'})
+    extra_subs={'games = 2000': 'games = 256                   # 冒烟：每次 test_play 只打 64 sets'})
 
 for x, arm in ARMS.items():
     gen(x, arm['desc'], arm['subs'], x, 786000, 30000, f'iql-beta-{x}',

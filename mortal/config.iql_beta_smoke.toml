@@ -1,5 +1,6 @@
 # IQL β 扫描预检冒烟（2026-10-17）：= 臂a(β=3.0=v3 原配置) + 2k 步预算。
 # 目的：验证 train.py 新增 awr_w 集中度与 behavior 日志行 + v3 同款健康门禁全过。
+# test_play 用 256 局（与 v3 冒烟同口径；2000 局在并发负载下过长易被外部干扰打断）。
 # 通过后才由 run_iql_beta_probe.sh 启动 4 臂 30k 探针。
 
 [control]
@@ -28,7 +29,7 @@ iql_beta = 3.0                   # AWR 优势温度
 ema_decay = 0.995                # EMA target 网络 polyak
 
 [test_play]
-games = 2000
+games = 256                   # 冒烟：每次 test_play 只打 64 sets
 log_dir = "runs/iql_beta_smoke/test_play"
 enable_amp = false
 enable_rule_based_agari_guard = true

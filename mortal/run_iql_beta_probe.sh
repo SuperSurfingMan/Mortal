@@ -97,13 +97,22 @@ wait_gpu_free () {   # $1=gpu_idx  $2=max_minutes
     return 1
 }
 
+# 一次训练尝试是否"跑完且健康"（2026-10-18 修正）：原判据只认 'training budget reached'，
+# 但该行发生在 test_play **之后**——test_play 被外部信号打断时（10-17 实测到一次 SIGINT
+# 静默 exit=0）会被误判为失败并白白重训。改认两种预算消息，且必须无异常栈。
+# 续训场景（checkpoint 已达 max_train_steps）train.py 打的是 'training budget already reached'。
+train_ok () {   # $1=log
+    grep -aqE 'training budget (reached|already reached)' "$1" \
+        && ! grep -aqE 'Traceback|Segmentation fault|exited unexpectedly' "$1"
+}
+
 # 训练 + 崩溃自动续训（2026-10-17）：偶发 DataLoader worker 段错误（fork 多线程进程的
-# 已知风险，历史 111k 步正式轮 0 次，本次冒烟遇到 1 次）会让 4h 探针白跑。train.py 每
-# 1000 步存盘且能从 state_file 的 steps 续训，故最多重试 3 次；每次重试把旧日志轮转为
-# <log>.pre-retry-N（保留取证，且避免旧 Traceback 污染门禁）。
+# 已知风险，历史 111k 步正式轮 0 次，10-17 并发环境下遇到 2 次）会让 4h 探针白跑。
+# train.py 每 1000 步存盘且能从 state_file 的 steps 续训，故最多重试 5 次；每次重试把
+# 旧日志轮转为 <log>.pre-retry-N（保留取证，且避免旧 Traceback 污染门禁）。
 train_with_retry () {   # $1=cfg $2=gpu $3=log $4=tag
     local cfg=$1 gpu=$2 log=$3 tag=$4 attempt=1
-    while [ "$attempt" -le 3 ]; do
+    while [ "$attempt" -le 5 ]; do
         (
             export CUDA_VISIBLE_DEVICES=$gpu MORTAL_CFG=$cfg
             echo "---- $(date '+%F %T') $tag train attempt=$attempt start ----" >> "$log"
@@ -113,15 +122,15 @@ train_with_retry () {   # $1=cfg $2=gpu $3=log $4=tag
             exit "$rc"
         )
         local rc=$?
-        if grep -aq 'training budget reached' "$log" && ! grep -aqE 'non-finite|Traceback' "$log"; then
+        if train_ok "$log"; then
             return 0
         fi
         say "[$tag] !! train 第 $attempt 次未完成（rc=$rc，异常见 $log），10s 后从最近 checkpoint 续训"
-        [ "$attempt" -lt 3 ] && mv "$log" "$log.pre-retry-$attempt"
+        [ "$attempt" -lt 5 ] && mv "$log" "$log.pre-retry-$attempt"
         attempt=$((attempt+1))
         sleep 10
     done
-    say "[$tag] !! train 连续 3 次失败，放弃该臂"; return 1
+    say "[$tag] !! train 连续 5 次失败，放弃该臂"; return 1
 }
 
 run_smoke () {
@@ -135,7 +144,9 @@ run_smoke () {
         > "$SLOG/env_check.log" 2>&1 \
         || { say "!! env_check 未通过，终止（见 $SLOG/env_check.log）"; exit 1; }
     say "env_check OK"
-    # 冒烟必须"从父代全新开始"（v_net/EMA 告警门禁依赖首次暖启）→ 崩溃即清盘重跑而非续训
+    # 冒烟必须"从父代全新开始"（v_net/EMA 告警门禁依赖首次暖启）→ 崩溃即清盘重跑而非续训。
+    # 成功判据（2026-10-18 修正）：预算消息 + **test_play 结果已产出**（冒烟本身要验证 test_play
+    # 与 behavior 行；10-17 曾出现跑完 758k 但在 test_play 中被外部 SIGINT 打断 → 误判为通过的风险）。
     local attempt=1
     while :; do
         rm -rf checkpoints/iql_beta_smoke
@@ -149,13 +160,13 @@ run_smoke () {
             $PY -u train.py >> "$log" 2>&1
             echo "---- $(date '+%F %T') iql_beta_smoke train attempt=$attempt exit=$? ----" >> "$log"
         )
-        if grep -aq 'training budget reached' "$log" && ! grep -aqE 'non-finite|Traceback' "$log"; then
+        if train_ok "$log" && grep -aq 'avg rank:' "$log"; then
             break
         fi
         mv "$log" "$SLOG/train.attempt-$attempt.log"
         say "!! 冒烟第 $attempt 次未跑完（异常见 $SLOG/train.attempt-$attempt.log）"
         attempt=$((attempt+1))
-        if [ "$attempt" -gt 3 ]; then say "冒烟连续 3 次失败，终止"; exit 1; fi
+        if [ "$attempt" -gt 5 ]; then say "冒烟连续 5 次失败，终止"; exit 1; fi
         sleep 15
     done
     local fail=0
@@ -167,8 +178,8 @@ run_smoke () {
     if grep -aqE 'non-finite|Traceback' "$log"; then
         say "  [FAIL] 出现 non-finite/Traceback"; fail=1
     else say "  [OK] 无 non-finite / 无异常栈"; fi
-    grep -aq 'training budget reached' "$log" && say "  [OK] 到达 758k 预算" \
-        || { say "  [FAIL] 未到 758k 预算"; fail=1; }
+    if train_ok "$log"; then say "  [OK] 到达 758k 预算"
+    else say "  [FAIL] 未到 758k 预算"; fail=1; fi
     grep -aq 'avg rank' "$log" && say "  [OK] test_play 输出 avg rank/avg pt" \
         || { say "  [FAIL] test_play 无输出"; fail=1; }
     # train.py 新增日志行必须出现（awr_w 集中度 + behavior 分解）

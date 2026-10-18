@@ -542,9 +542,10 @@ def test_structure_head_special(files, tmp_out='/tmp/read_model_test_train_v2s')
           f'|grad|={0.0 if g_head is None else float(g_head.abs().sum()):.3e}')
     check('G3c 分解头获得一致性梯度（consist_decomp 经公式回流）',
           g_cnt is not None and float(g_cnt.abs().sum()) > 0)
-    check('G3d 新损失项进入 parts',
-          all(k in parts for k in ('struct_shanten', 'consist_head',
-                                   'consist_decomp', 'tenpai_tie')))
+    check('G3d 新损失项进入 parts（含 A2b 输出侧 tenpai）',
+          all(k in parts for k in ('wait_tenpai', 'struct_shanten', 'consist_head',
+                                   'consist_decomp', 'tenpai_tie'))
+          and np.isfinite(parts['wait_tenpai']) and parts['wait_tenpai'] > 0)
     # v2 原状存档：关闭全部新损失后，结构头向听梯度严格为 0/None——
     # 这正是 25.7% < 28.4% 多数类基差的机制原因，防止回归。
     net2 = M2.build_model_v2()

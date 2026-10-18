@@ -85,6 +85,7 @@ DEFAULT_LOSS_CFG = {
     'consist_head': LAMBDA_CONSIST_HEAD,
     'consist_decomp': LAMBDA_CONSIST_DECOMP,
     'tenpai_tie': W_TENPAI_TIE,
+    'wait_tenpai': 0.2,                    # 输出侧 tenpai 监督（A2b：wait[34] 拟合 1-tenpai）
     'struct_balance': True,                # 向听/形制类均衡
 }
 
@@ -229,6 +230,16 @@ def compute_loss(out, batch, loss_cfg: dict | None = None):
         l_wait = torch.nan_to_num(out['wait_logits'],
                                   posinf=0.0, neginf=0.0).sum() * 0.0
 
+    # ---- 输出侧 tenpai 监督（A2b）：wait[-1]（未听）拟合 1-tenpai，全目标 ----
+    # A2 发现的机制缺陷：l_wait 只在结构听牌目标（约 14.5%）上激活，其余 85.5%
+    # 的 not-tenpai 目标对 H2 的 wait[-1]（无可荣牌/未听）输出**没有任何直接监督**。
+    # 长训练中"听牌目标 P(未听)→0"的梯度单向传递，导致 P(未听) 在全体目标上集体
+    # 塌缩（v2s 50k：非听牌目标 P(未听) 中位数 0.0030→0.0013），tenpai 检测 AUC
+    # 0.739→0.667 显著退化。该项对全目标直接监督"未听"输出，口径与 AUC 一致
+    # （tenpai 标签、score=1-P(未听)）；权重可调，0 即关闭（消融）。
+    l_wait_tenpai = nn.functional.binary_cross_entropy_with_logits(
+        out['wait_logits'][..., -1], 1.0 - batch['tenpai'])
+
     # ---- L_aux ----
     log_next = torch.log_softmax(out['next_logits'], dim=-1)
     l_next = -log_next.gather(-1, batch['next_discard'][..., None]).squeeze(-1).mean()
@@ -241,11 +252,13 @@ def compute_loss(out, batch, loss_cfg: dict | None = None):
     l_aux = (W_NEXT_DISCARD * l_next + cfg['w_shanten'] * l_sh
              + W_RIICHI * l_riichi + W_CALLED * l_called)
 
-    total = l_alloc + LAMBDA_WAIT * l_wait + LAMBDA_AUX * l_aux
+    total = (l_alloc + LAMBDA_WAIT * l_wait + LAMBDA_AUX * l_aux
+             + cfg['wait_tenpai'] * l_wait_tenpai)
     parts = {
         'loss': float(total.detach()),
         'alloc': float(l_alloc.detach()),
         'wait': float(l_wait.detach()),
+        'wait_tenpai': float(l_wait_tenpai.detach()),
         'aux': float(l_aux.detach()),
         'next': float(l_next.detach()),
         'shanten': float(l_sh.detach()),
@@ -447,6 +460,10 @@ def main():
     ap.add_argument('--tenpai-tie-weight', type=float,
                     default=DEFAULT_LOSS_CFG['tenpai_tie'],
                     help='向听-听牌一致性（shanten==0 ⟺ tenpai）权重')
+    ap.add_argument('--wait-tenpai-weight', type=float,
+                    default=DEFAULT_LOSS_CFG['wait_tenpai'],
+                    help='输出侧 tenpai 监督（wait[34] 拟合 1-tenpai，全目标）权重；'
+                         'A2b 机制修复，0 关闭（等价 v2s）')
     ap.add_argument('--no-struct-balance', action='store_true',
                     help='关闭向听/形制的类均衡加权（默认开启）')
     ap.add_argument('--eval-samples', type=int, default=8192)
@@ -522,6 +539,7 @@ def main():
         'consist_head': args.consist_head_weight,
         'consist_decomp': args.consist_decomp_weight,
         'tenpai_tie': args.tenpai_tie_weight,
+        'wait_tenpai': args.wait_tenpai_weight,
         'struct_balance': not args.no_struct_balance,
     }
     print(f'[loss] cfg={loss_cfg}', flush=True)
@@ -605,6 +623,7 @@ def main():
                          if 'struct_shanten' in parts else '')
                 print(f"step {step} (stage {stage}) loss {parts['loss']:.4f} "
                       f"alloc {parts['alloc']:.4f} wait {parts['wait']:.4f} "
+                      f"w_ten {parts['wait_tenpai']:.4f} "
                       f"aux {parts['aux']:.4f}{extra} lr {rec['lr']:.2e} "
                       f"[{rec['elapsed']}s]", flush=True)
 

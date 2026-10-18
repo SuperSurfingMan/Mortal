@@ -133,7 +133,8 @@ class ReadIterDataset(IterableDataset):
 def collate(samples):
     batch = {}
     for key in ('obs', 'unseen', 'alloc', 'wait', 'next_discard', 'shanten',
-                'riichi', 'called', 'turn', 'tiles_left', 'tenpai',
+                'riichi', 'called', 'meld_counts', 'dora_indicators',
+                'turn', 'tiles_left', 'tenpai',
                 'river', 'post_riichi_river', 'own_hand'):
         batch[key] = torch.from_numpy(np.stack([s[key] for s in samples]))
     batch['alloc'] = batch['alloc'].long()

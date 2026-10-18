@@ -32,6 +32,10 @@
     struct_counts (3,7,5)    f32   搭子构造软分布（最小向听分解上的边际直方图）
     riichi        (3,)       f32   是否已立直（accepted）
     called        (3,)       f32   是否已鸣牌（吃/碰/杠）
+    meld_counts   (3,)       i64   各家吃/碰/大明杠/暗杠数（公开副露；加杠净贡献 0
+                                 不计）。手牌数 = 13 - 3*meld_counts（静止态硬事实），
+                                 供规则法基线/硬约束层使用；注意暗杠不破门清，
+                                 立直家可能有暗杠（此时手牌 10 张）
     turn          ()         i64   观察者 at_turn（样本权重/课程用）
     tiles_left    ()         i64   牌山剩余（70 - 本局摸牌数）
     tenpai        (3,)       f32   目标家是否**结构性**听牌（waits 非空；注意与 wait
@@ -39,6 +43,8 @@
                                  wait 损失仍在其上激活，监督模型学会识别振听）
     river         (3, 34)    bool  各家全部打牌集合（H2 硬掩码用）
     post_riichi_river (3, 34) bool 各家立直后的打牌（诊断用；掩码已统一按 river）
+    dora_indicators (34,)     i64   当前宝牌指示牌计数（deaka；实际宝牌 = 后继牌，
+                                 规则法基线的宝牌先验用；与 c_total 同口径）
     _observer/_event/_kyoku    调试元数据（collate 前剔除）
 """
 from __future__ import annotations
@@ -171,6 +177,12 @@ class GameReplayer:
     - ``riichi[p]``     ：p 是否已立直 accepted。
     - ``meld_tiles[p]`` ：p 手牌之外的 tile 数（吃/碰/大明杠 3、暗杠 4、加杠 1），
                          仅供守恒校验。
+    - ``n_melds[p]``    ：p 的吃/碰/大明杠/暗杠次数（加杠不计——净贡献 0）。
+                         手牌数 = 13 - 3*n_melds（静止态硬事实；暗杠不破门清，
+                         立直家可能有暗杠）。逐局重置。
+    - ``dora_count``    ：当前宝牌**指示牌**计数（deaka tile id，含杠后新增；
+                         实际宝牌 = 指示牌的后继，见 rule_baseline.dora_successor）。
+                         逐局重置；与 c_total 中的宝牌指示分量同口径。
     - ``timeline[p]``   ：p 的公开动作 token 序列（v2 时序流输入；逐局重置）。
                          每条 token = (事件序号, 牌 tid 或 -1, 是否摸切, 动作类别)。
                          全部来自公开事件（打牌/鸣牌/立直宣言都是明信息），
@@ -184,10 +196,12 @@ class GameReplayer:
         self.states = [PlayerState(i) for i in range(4)]
 
         self.c_total = np.zeros(NUM_TILES, dtype=np.int64)
+        self.dora_count = np.zeros(NUM_TILES, dtype=np.int64)   # 宝牌指示牌计数（逐局重置）
         self.river = [np.zeros(NUM_TILES, dtype=bool) for _ in range(4)]
         self.post_riichi = [np.zeros(NUM_TILES, dtype=bool) for _ in range(4)]
         self.riichi = [False] * 4
         self.meld_tiles = [0] * 4
+        self.n_melds = [0] * 4                # 吃/碰/大明杠/暗杠次数（加杠不计）
         self.n_tsumo = 0                 # 本局摸牌数（含岭上）
         self.kyoku = 0
         self.event_kyoku = np.zeros(len(events), dtype=np.int64)
@@ -204,19 +218,23 @@ class GameReplayer:
         etype = ev.get('type')
         if etype == 'start_kyoku':
             # 与 PlayerState.start_kyoku 一致：所有逐局台账在新一局重置
-            # （tiles_seen/river/riichi/meld 都是局内概念，漏重置会跨局累积）
+            # （tiles_seen/river/riichi/meld/dora 都是局内概念，漏重置会跨局累积）
             self.kyoku += 1
             self.n_tsumo = 0
             self.c_total = np.zeros(NUM_TILES, dtype=np.int64)
+            self.dora_count = np.zeros(NUM_TILES, dtype=np.int64)
             self.river = [np.zeros(NUM_TILES, dtype=bool) for _ in range(4)]
             self.post_riichi = [np.zeros(NUM_TILES, dtype=bool) for _ in range(4)]
             self.riichi = [False] * 4
             self.meld_tiles = [0] * 4
+            self.n_melds = [0] * 4
             self.timeline = [[] for _ in range(4)]
             self.c_total[tile_id(ev['dora_marker'])] += 1
+            self.dora_count[tile_id(ev['dora_marker'])] += 1
             return
         if etype == 'dora':
             self.c_total[tile_id(ev['dora_marker'])] += 1
+            self.dora_count[tile_id(ev['dora_marker'])] += 1
             return
         if etype == 'tsumo':
             self.n_tsumo += 1
@@ -238,6 +256,7 @@ class GameReplayer:
             for t in ev['consumed']:
                 self.c_total[tile_id(t)] += 1
             self.meld_tiles[actor] += 3
+            self.n_melds[actor] += 1
             self._tl_push(ev_idx, actor, tile_id(ev['pai']), False, etype)
         elif etype == 'kakan':
             self.c_total[tile_id(ev['pai'])] += 1
@@ -247,6 +266,7 @@ class GameReplayer:
             for t in ev['consumed']:
                 self.c_total[tile_id(t)] += 1
             self.meld_tiles[actor] += 4
+            self.n_melds[actor] += 1
             self._tl_push(ev_idx, actor, tile_id(ev['consumed'][0]), False, 'ankan')
         elif etype == 'reach':
             # 立直宣言（随后必有同 actor 的 dahai）——单独一个 token，
@@ -346,7 +366,9 @@ class GameReplayer:
         wait = np.zeros((3, NUM_WAIT_CLASSES), dtype=np.float32)
         next_discard = np.full(3, NO_DISCARD, dtype=np.int64)
         called_flag = np.zeros(3, dtype=np.float32)
+        meld_counts = np.zeros(3, dtype=np.int64)
         tenpai_flag = np.zeros(3, dtype=np.float32)
+        dora_count = self.dora_count.copy()
         river = np.zeros((3, NUM_TILES), dtype=bool)
         post_riichi_river = np.zeros((3, NUM_TILES), dtype=bool)
 
@@ -375,6 +397,7 @@ class GameReplayer:
             next_discard[rel - 1] = self._next_discard_label(ev_idx, tgt)
             riichi_flag[rel - 1] = 1.0 if self.riichi[tgt] else 0.0
             called_flag[rel - 1] = 1.0 if self.meld_tiles[tgt] > 0 else 0.0
+            meld_counts[rel - 1] = self.n_melds[tgt]
             river[rel - 1] = self.river[tgt]
             post_riichi_river[rel - 1] = self.post_riichi[tgt]
 
@@ -403,6 +426,8 @@ class GameReplayer:
             'shanten': struct_shanten,
             'riichi': riichi_flag,
             'called': called_flag,
+            'meld_counts': meld_counts,
+            'dora_indicators': dora_count,
             'turn': np.int64(st_obs.at_turn),
             'tiles_left': np.int64(70 - self.n_tsumo),
             'tenpai': tenpai_flag,

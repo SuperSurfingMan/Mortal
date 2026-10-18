@@ -18,7 +18,7 @@
 | 代码/运行目录 | `/mnt/data8/mortal/Mortal`；训练必须在 `mortal/` 下执行 |
 | 现役最强 | `mortal/checkpoints/round4/mortal.pth`（645k，fp32） |
 | 判定基线 | B/756k：`reward_ablation/B_rank_pt_aligned/mortal.pth`；top400_v2 + `pts=[2,1,0,-3]` + augmentation |
-| 当前阶段 | IQL 路线已关闭；S6a 已判定；读牌模型 A2b 已判决（AUC 0.946，**定为注入基线**）；下一步 A3 规则基线 + 路径 C 注入 / S6b+S6c 合并 v6 探针 / 扩窗 2019+ |
+| 当前阶段 | IQL 路线已关闭；S6a 已判定；读牌模型 A2b 已判决（AUC 0.946，**定为注入基线**）；读牌 **Bayes 上界已估计**（§3.14：数牌信息≈无听牌信息，参考生成式读牌器总体已达 A2b，未测出大块剩余空间；A2b 的 P(听牌) 过标定 6.3×）；下一步 路径 C 注入（注入前重标定）/ 立直专项（新地板 hit@1 0.100、CE 3.35）/ 扩窗 2019+ |
 | 数据 | 全树 2,630,640 局（200902~202610，16 GB）；训练窗 813,145 局；holdout = 202609+ |
 | 硬件 | Ubuntu 18.04 容器，56 线程，251 GB 内存，4×P100-16GB + 1×RTX 8000-48GB |
 
@@ -442,6 +442,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 | v2x | 38 维瓶颈 + v2s 新损失（A1 归因） | wait 0.1386、AUC 0.6670、向听 0.5257、alloc 0.5719、立直 0.1295 → 向听学习全靠损失；AUC 增益全靠瓶颈馈通（损失单独反伤 AUC −0.019）→ **保留 46 维，v2s 定妆** |
 | v2s@50k（A2） | 同配置扩预算 | wait Δ(vs v2)=−0.0112 显著未回补；AUC 0.6671（−0.0184）、alloc −0.0051、立直 −0.0282；但 wait_hit5 +0.0473、deal_pure 0.0422→0.0286、riichi_deal_pure 0.0641→0.0428、向听 +0.2747 → **不按原判据作注入基线** |
 | A2b | 输出侧 tenpai BCE（`wait[34]` 拟合 `1−tenpai`，全目标，权重 0.2） | **已判决（best@43k, val 2.0924）**：AUC 0.6671→**0.9461**（+0.279，CI[+.273,+.285]）；wait_hit1 0.1343（Δ vs v2 −0.0121，达 −0.015 护栏点估计；CI 下界 −0.0207 略越界）；wait_hit5 0.5497、deal_pure 0.0245、向听 0.5330、一致率 0.9520。vs v2：deal_pure/riichi_deal_pure 显著更安全、wait_hit5 +0.0596、向听 +0.2756；代价 riichi_hit1 −0.0330、alloc −0.0067 → **预注册 (a)(b)(c) 全满足，定为注入基线** |
+| A3 | 规则法基线（纯 numpy 零学习：现物/筋/壁 + 立直枚举 + 见逃排除；A2b 的「vs 人类规则」参照） | **已判决（2026-10-18，同 20000 固定评估集 + bootstrap 200 CI，`compare_a3.py`）**：alloc_ce 0.6996（均匀二项 0.7271 / A2b 0.6617）、alloc_top1 0.5204、wait_hit1 0.1166、hit@5 0.4857、wait_ce 3.6582、**tenpai_auc 0.9468**、**riichi_hit1 0.1121**、deal_pure 0.0574（不过滤口径 deal_pure_all 0.0091）、随机弃牌点炮 0.0709。判定：A2b 全指标优或统计打平，规则法达 A2b 的 87%~96%（hit1 87% / hit5 88% / alloc CE 质量 96%）；**tenpai_auc 与 riichi_hit1 统计打平**（CI 跨 0）——巡目+摸切尾逻辑回归追平神经网络的「该不该防」，筋/壁/宝牌+枚举支撑集追平「点名立直家听牌」；A2b 真实优势在 hit@5（−0.064）、wait CE（−0.758）与防守选牌（deal_pure_all 0.0041 vs 0.0091）。**标定证伪的经典先验**（202508 非评估月，`calibrate_a3.py`）：字牌危险只成立于初盘（turn≤3 字牌等待占比 17.3% → turn≥8 仅 1.2%）；「留幺九」不适用于持有倾向（字牌持有率仅中张 45%）；晚切筋无效（条件于听牌后归 1，+2.3 表观效应全是巡目混杂）；壁对持有率强（×0.57）对等待只是弱效应（×0.75） |
 
 **A2 事故（10-17）**：A2 首跑两次在 step~7500 **确定性**崩溃（DataLoader worker Bus error/Segfault，与 worker 数/墙钟无关）。根因 = 共享树 `libriichi` 被 s6a 实验改版（v5 obs 补丁）+ `mortal/libriichi.so` 未随还原重建；还原并重编后 `obs_shape(4)=(1012,34)`、39 项回归 ALL PASS。处置：作废被污染的 8000 步 checkpoint（隔离 `mortal/read_model_v2s_50k.contaminated_so/`），从头重跑。教训：libriichi 实验必须完全隔离（s6a_isolated 模式）、还原后必须重编 `.so` 并跑回归门禁；`except Exception` 捕获不了原生段错误。
 
@@ -449,7 +450,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 
 **P1 分层诊断（10-18，`strat_metrics.py`，A2b@20000 固定集）**：头部 AUC 0.946 被"简单局"抬高——按公开信息分层：无立直 0.898、无立直且无鸣牌 **0.833**、**无立直无鸣牌且 turn≥8 仅 0.683**（该子集 hit1 0.073、hit5 0.461、alloc 信息增益 0.163 最高）；called=1 AUC **0.775**（开手判别更难）vs called=0 0.966；**riichi=1 的 hit1 0.112 反而低于 riichi=0 的 0.155**（立直后本应最准 → 明显改进点）、riichi deal 3.56% vs 非立直 0.96%。hit1 随机基线 0.049（模型 2.75×）；turn0-3 的 hit1≈随机（该段听牌率仅 0.6%）；**alloc top-1 0.715≈众数 0.707**（该指标信息量极低，应看 CE 0.662/信息增益 0.115/MAE 0.422）。**结论：进步空间集中在 ① 困难局听牌判别、② 精确点名（尤其立直后）、③ 开手（called=1）判别**；全量 AUC 已近饱和。产物 `strat_report.json`。
 
-**工程资产**：回归 39 项 ALL PASS（枚举器 vs Rust `calc_all` 20.3 万手牌零不一致、时序 token 独立重算、与 GameplayLoader obs 逐位一致、136 牌守恒、tiles_seen、增广等变、学习门禁、结构头专项）；`compare_bootstrap.py` 做 CI 判决；`run_v1.sh/run_v2.sh/run_v2s.sh/run_v2s_a2b.sh`。下一步：A3 规则法基线（现物/筋/壁 + 立直枚举 + 见逃排除）→ B0 立直振听/吞吐（`with_sp_tables`）→ B1 限域注入（读牌冻结，wait_probs 35 维 + exp_counts + 向听分布作额外特征；防守/全决策两档）→ B2 ladder 门禁（CI 下界>0 采纳，跨 0 无结论，<0 回滚）。
+**工程资产**：回归 39 项 ALL PASS（枚举器 vs Rust `calc_all` 20.3 万手牌零不一致、时序 token 独立重算、与 GameplayLoader obs 逐位一致、136 牌守恒、tiles_seen、增广等变、学习门禁、结构头专项）+ A3 专属 40+ 项 ALL PASS（`test_rule_baseline.py`：alloc 不变式与 flat 不动点、wait 硬/软规则方向、**立直枚举暴力重算**——独立「精确划分」判据 vs 被测「子集搜索」语义，6 随机小池+构造案例+5 张同牌容量边界+暗杠参数化+见逃排除、dora 映射、真实数据门禁）；`compare_bootstrap.py` 做 CI 判决；`calibrate_a3.py` 权重标定（只用非评估月，常数冻结）；`run_v1.sh/run_v2.sh/run_v2s.sh/run_v2s_a2b.sh/run_a3.sh`。dataset 增补 `meld_counts`/`dora_indicators` 两个公开信息样本字段（39 项回归复跑 ALL PASS，训练语义零变化）。下一步：B0 立直振听/吞吐（`with_sp_tables`）→ B1 限域注入（读牌冻结，wait_probs 35 维 + exp_counts + 向听分布作额外特征；防守/全决策两档）→ B2 ladder 门禁（CI 下界>0 采纳，跨 0 无结论，<0 回滚）。
 
 ### 3.13 项目准备期（2026-10-01~10-09，压缩）
 
@@ -459,6 +460,84 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 - 10-07：HF 18 包 merge-hf + prune --apply → 2,630,640 局；GRP 30k 步（21 min）；R1 200k 步（22.9h）。
 - 10-09：首次复盘——评测饱和、best.pth 陷阱、吞吐瓶颈、代码补丁清单；建本地 git 基线、玩家强度榜、holdout_metrics/ladder/bench_pipe；R2 启动。
 - 采集预算存档（2026-10-01 精算）：2026 YTD 实测 129,475 局、raw+mjai≈1.53 GiB；历史 2009–2025 约 340–680 万局，仅粗估 40–80 GiB（未落地；最终走 HF 年度包）。
+
+### 3.14 读牌 Bayes 上界（2026-10-18，`tools/read_model/bayes_bound.py`）
+
+**目的**：A2b 的分层诊断（§3.12）只说明「未饱和」，不能区分 **(a) 模型没学到** 与
+**(b) 可观测信息本身只有这么多**。本实验构造 Bayes 可达性能估计来分开两者。
+
+**三个信息集（tier）**
+
+| tier | 条件化信息 | 求解 |
+|---|---|---|
+| `counts` | 观察者手牌 + 全部可见牌**张数** | ✅ 精确：未知牌在「三家暗牌（张数=13−3·副露）+ 牌山」上均匀（洗牌⇒超几何），无任何行为假设 |
+| `hard` | `counts` + **立直⇒听牌** | ✅ 立直家从 tenpai 手牌流形抽样（完整和牌形−1 张，按 1/#待牌 纠偏） |
+| `behave` | `hard` + 舍牌行为似然 | MH（非立直）/ 重要性采样（立直） |
+
+**行为似然**：`L(H)=Π_k P(d_k|H+d_k)`，`P(舍 x|手牌)∝exp(−β·value(x))`，
+`value` = 对子/刻子 + 同色 ±1/±2 邻接（ukeire 代理）。语义 = 「打掉的都是废牌」。
+
+**两条被实测否掉的设计（重要，勿重走）**
+1. **弃后向听当主信号**：14 张手牌向听对几乎每张舍牌都不退化，无法区分「留住有用
+   摸牌」与「打了无用摸牌」，且贵 34×。
+2. **完整轨迹滤波**：前向粒子滤波因「手切⇒该牌当时在手里」逐巡死亡（每巡存活
+   ~15%，连续 10 次手切 ~1e-8，实测必然全灭）；反向轨迹滤波虽不死，但「被留住的
+   摸牌」是隐变量，随机抽样会把 tenpai 手牌组合打散（实测 tenpai 反而 −6 nats）。
+   改静态似然后 tenpai vs 随机手牌平均对数似然 **+8 nats（β=1）/ +17 nats（β=3）**。
+3. β 在 **202608（非评估月）** 标定：β=1 时后验均值 P(听)≈经验听牌率（1.3×）。
+
+**结果（202609，2500 快照 / 7500 目标；`mortal/read_model_bayes/`）**
+
+| 分层 | 指标 | A2b | counts | hard | behave |
+|---|---|---|---|---|---|
+| all (n=7500, 听14.7%) | 听牌 AUC | **0.946** | 0.640 | 0.856 | 0.942 |
+| | wait hit@1 / hit@5 | **0.137/0.542** | 0.057/0.266 | 0.079/0.314 | 0.120/0.442 |
+| | alloc CE / MAE | **0.661/0.422** | 0.735/0.467 | 0.737/0.465 | 0.755/0.425 |
+| | mean P(听) vs 实际 | **0.916 vs 0.146**（全量 20000） | 0.001 | 0.069 | 0.141 |
+| riichi=1 (n=508) | hit@1 / hit@5 | **0.120/0.518** | 0.077/0.311 | 0.100/0.404 | 0.108/0.419 |
+| | wait CE | **2.98** | 27.1 | 3.35 | 3.89 |
+| called=1 (n=1305) | 听牌 AUC | **0.778** | 0.651 | 0.646 | 0.721 |
+| riichi=0&called=0 (n=5693) | 听牌 AUC | **0.840** | 0.540 | 0.530 | 0.818 |
+| 干净困难局 turn≥8 (n=1744) | 听牌 AUC | **0.690** | 0.515 | 0.500 | 0.581 |
+| 干净困难局 full-set（n=13779，`counts_full/`） | 听牌 AUC | 0.683 | **0.519** | — | — |
+
+**结论（回答「还能提取多少」）**
+1. **数牌信息几乎不含听牌信息**：干净局 `counts` AUC 0.52（≈无信息），全量 0.640 的
+   来源只有手牌张数/副露数。⇒ A2b 的 0.683（干净局）/0.946（全量）是**真实的行为
+   读牌能力**，不是计数/规则占的便宜。alloc 侧同理：`counts` CE 0.735 vs A2b 0.661，
+   **行为信息带来 0.073 nats/列（10%）**。
+2. **参考生成式读牌器（counts+立直+价值策略）总体已达 A2b 水平**：全量 AUC 0.942 vs
+   0.946、alloc MAE 0.425 vs 0.422、`called=0` hit@1 0.103 vs 0.101。⇒ **没有测出
+   「模型还有一大块可挖」的证据**；离注入前的「容量探针」应当按「已接近参考上限」
+   预期，而不是「4× 参数就能涨」。
+3. **三个仍落后于 A2b 的分层**（参考模型更差 ⇒ 模型确有额外信息，但参考不构成上界）：
+   干净困难局 AUC 0.581 vs 0.690、`called=1` 0.721 vs 0.778、wait hit@1 0.120 vs 0.137。
+   ⇒ 这三处「上界未咬住」，需更强的人类策略模型才能定论；不能用本实验声称还有多少。
+4. **立直家的问题被量化**：只要知道「立直⇒听牌」+ 数牌先验（零学习），hit@1 就有
+   **0.100 / CE 3.35 / hit@5 0.404**；A2b 是 0.120/2.98/0.518。⇒ A2b 在立直家上
+   **只比「听牌先验」多 0.02 hit@1**，手牌特异性信息极少。立直专项的目标应当以
+   `hard` 的 0.100/3.35 为**新地板**，而不是以 0.112 的随机对比自我安慰。
+5. **A2b 的 P(听牌) 严重过标定**：全量均值 0.916 vs 实际 0.146（6.3×），turn0-3
+   为 0.760 vs 0.006（125×）。排序（AUC）不受影响，但**作为概率直接注入/设阈值会
+   错**（作为特征喂给主模型可自行重标定）。⇒ 注入前必须做 Platt/isotonic 重标定，
+   或只注入排序分位。参考模型 `behave` 的均值 0.141 ≈ 实际 0.147，可作校准参照。
+6. **`called=1` 的 AUC 瓶颈更像信息上限**：model 0.778 vs 参考 0.721，两者都远低于
+   `called=0`（0.96/0.96）。「0.775→0.85」的目标缺乏参考支持，先做特征/辅助任务
+   前应先确认不是信息上限。
+
+**方法论**：`tenpai_mi_nats`（= H_emp − E[H(p)]）在该实验里**不可用作信息量**——
+它奖励「过度自信且错误」的后验（`counts` 的 p≈0.001 使 E[H]≈0 而 MI 反而最高）。
+判读一律用 AUC（序不变）与 CE/MAE（水平），并同时看 meanP vs 实际率。
+
+**自检**：`--leak-test` PASS（重排非观察者配牌后后验逐位不变）；`shanten_fast` 与
+`structure.structure_labels` 交叉验证 4000 手牌零不一致；张数守恒（136=13+1+39+83）
+由构造保证；`hard` 在非立直目标上严格退化为 `counts`（CE 0.7355/0.7373）。
+
+**资产**：`tools/read_model/bayes_bound.py`、`tools/read_model/shanten_fast.py`（numpy
+向量化的 tomohxx 查表，4096 手牌 3.7 ms）、`mortal/read_model_bayes/{report,tables.txt}`、
+`counts_full/report.json`（全 20000 快照的精确 counts 口径）、日志
+`mortal/logs/read_model/bayes_bound.log`。成本：2500 快照 3 tier ≈ 23 min（192 链 ×
+100 步 MH）。
 
 ---
 
@@ -476,15 +555,18 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 | IQL Stage A 跨局信用 | ❌ 关闭 | −1.03，bootstrap CI[−2.06,−0.02] |
 | IQL Stage B 真 IQL | ❌ 关闭（干净否证） | v3 +0.646，CI[−0.35,+1.63] |
 | S6a 紧迫度特征 | ❌ 无结论（零新信息） | +0.182，CI[−0.82,+1.20] |
-| S6b 读牌后验 | ⏳ 当前信息侧主线 | 尚未注入；v2s/A2b 在途 |
+| 读牌 Bayes 上界（MCMC） | ✅ 已判定（§3.14） | 数牌信息≈无听牌信息（干净局 AUC 0.519）；参考生成式读牌器总体已达 A2b（0.942 vs 0.946）；**未测出大块剩余空间** |
+| 读牌 P(听牌) 概率标定 | ❌ 严重过标定 | A2b 均值 0.921 vs 实际 0.147（6.3×）；作概率注入前必须重标定 |
+| S6b 读牌后验 | ⏳ 当前信息侧主线 | 尚未注入；A2b 已定为基线（§3.12），但注入特征需重标定 |
 | 扩窗 2019+ + 重训 GRP | ⏳ 数据侧主线 | 成本最高，IQL 关闭后接棒 |
 
 ### 4.2 下一步优先级
 
 | 优先级 | 事项 | 要点 |
 |---|---|---|
-| **P0** | S6b+S6c 合并 v6 注入 | 读牌后验 + SP 盲区 acceptance/牌型潜力；先 30k 步探针（~2h，门禁 holdout/行为画像）；种子块 260000/270000；通过后再开正式轮 |
-| **P0** | 读牌模型 A2b 收尾 | **已完成**：AUC 0.9461、wait_hit5 0.5497、deal_pure 0.0245、wait_hit1 Δ −0.0121 → 预注册全满足，A2b 定为注入基线；下一步 A3 规则基线 + 路径 C 注入（A2b 与 v2s_50k 各一臂） |
+| **P0** | S6b+S6c 合并 v6 注入 | 读牌后验 + SP 盲区 acceptance/牌型潜力；先 30k 步探针（~2h，门禁 holdout/行为画像）；种子块 260000/270000；通过后再开正式轮。**注入前必须先重标定 P(听牌)**（§3.14：均值 0.921 vs 实际 0.147），否则防守门控会全时开 |
+| **P0** | 读牌模型 A2b 收尾 | **已完成**：AUC 0.9461、wait_hit5 0.5497、deal_pure 0.0245、wait_hit1 Δ −0.0121 → 预注册全满足，A2b 定为注入基线。**A3 规则法基线已完成**（§3.12：A2b 全指标优/平，tenpai_auc 与 riichi_hit1 统计打平，规则法达 87%~96%）→ 下一步路径 C 注入（B0 立直振听/吞吐 → B1 限域注入 → B2 ladder 门禁） |
+| **P0** | 立直专项（基线已换） | §3.14 给出新地板：counts 0.077 / hard（听牌先验）**0.100 hit@1、CE 3.35** / A2b 0.120。目标改为「显著高于 0.100 且 CE < 3.35」，而不是对照 0.112 |
 | **P1** | 数据扩窗 2019+ | 与 GRP 重训、按年份审计同步做；主模型 holdout 仍用 202609+ |
 | **P1** | 读牌路径 C 注入 | B0 立直振听/吞吐（`with_sp_tables`）→ B1 限域注入（防守/全决策两档）→ B2 ladder 双向 ≥5000 sets 判定 |
 | **P2** | 外部锚点 akochan | 需 JRE + `AKOCHAN_DIR`/`AKOCHAN_TACTICS`；人类牌谱不能当 arena 对手（无 seed） |
@@ -492,6 +574,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 | **P2** | 工程债 | git push（本地 ahead）、异地备份、上游 `git diff` 校准、两套 holdout 同分布口径、agari-guard holdout、kan-select 回放对照、文档对账（`TRAINING_MANUAL.md` §4.x/健康判据） |
 | **P3** | 在线自博弈（M5） | 仅在评测可信后开；`online=true` + `freeze_bn.mortal=true`；子进程规避卡死；P100×4 可当 client 集群 |
 | **P3** | 防守行为专项 | 流局 10.9% vs 人类 15.3%、放铳 0.1405 vs 0.1255 → 弃和不足；试 cql 权重/奖励平滑/oracle 特征 |
+| **P3** | 更强行为先验（若要继续压上界） | §3.14 的参考策略弱于 A2b；要真正回答「还剩多少」需 ukeire/安全度策略或学习型 policy（如用 A2b 之外的人类舍牌模型），并保留 `hard` 作为下界 |
 
 ### 4.3 当前资产与基线
 
@@ -630,7 +713,9 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 | `tools/training/prepare_iql_probe.py` + `run_iql_probe.sh` | 5 臂×30k 步单旋钮探针 |
 | `tools/training/prepare_iql_b_v3.py` | `--fix tau05` 一键生成 v3 配置 |
 | `tools/training/prepare_hp_ablation.py` / `run_hp_ablation.sh` / `resume_and_judge_hp.sh` | 超参消融/挪卡续训 |
-| `tools/read_model/` | 读牌模型 v1/v2/v2s/v2x/A2b + 39 项回归 + ONNX 导出 |
+| `tools/read_model/` | 读牌模型 v1/v2/v2s/v2x/A2b + 39 项回归 + ONNX 导出 + A3 规则法基线（rule_baseline/a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3） |
+| `tools/read_model/bayes_bound.py` | 读牌 Bayes 上界（§3.14）：counts（精确超几何）/hard（立直⇒听牌）/behave（MH + 静态逆规划似然）三档 + `--leak-test`/`--calibrate` |
+| `tools/read_model/shanten_fast.py` | numpy 向量化的 tomohxx 向听查表（与 Rust 逐位同口径，4096 手牌 3.7 ms；MCMC/上界专用） |
 | `s6a_isolated/`（`tools/expand_ckpt_v5.py`、`tools/test_urgency_features.py`、`run_s6a{,_smoke}.sh`、`patches/v5_obs_features.patch`） | S6a 隔离工作区：v4→v5 手术、回归、冒烟、正式链 |
 
 ### 6.2 关键文件（Linux 路径）
@@ -659,7 +744,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 | `libriichi/src/dataset/gameplay.rs` | `apply_gamma` 注释改为实测口径（仅注释，无行为变更） |
 | `libriichi/src/consts.rs` / `state/obs_repr.rs` | S6a v5（仅隔离区）：`MAX_VERSION=5`、`obs_shape(5)=(1018,34)`、6 行 `encode_urgency` |
 | 配置/脚本 | `config.round{2,3,4,5}.toml`、`config.iql_{a,b,b_v2,b_v3}.toml`、各 `run_*.sh`、`prepare_*.py`、`test_*.py` |
-| 读牌模型 | `tools/read_model/`：dataset/model/model_v2/model_v2s/structure/constraints/train/evaluate/export_onnx/compare_bootstrap 等 |
+| 读牌模型 | `tools/read_model/`：dataset/model/model_v2/model_v2s/structure/constraints/train/evaluate/export_onnx/compare_bootstrap 等；A3 规则法基线（rule_baseline.py + a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3.sh），dataset 增补 meld_counts/dora_indicators 公开字段 |
 
 ### 6.3 数据与产物台账
 
@@ -670,6 +755,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 | `dataset/tenhou_hf/` | 18 个 HF 年度 tar | 17 GB |
 | `dataset/raw/`、`dataset/index/` | 2026 原始 mjlog；清单/榜单/manifest | 1.2 GB / 197 MB |
 | `mortal/checkpoints/` | R1–R5、reward_ablation A/B/C、hp_ablation×3、iql_a、iql_b_v2/v3、grp×3、baseline | ≈5 GB+ |
+| `mortal/read_model_bayes/` | §3.14 Bayes 上界报告（2500 快照三档分层表）+ `counts_full/report.json`（20000 快照精确 counts 口径） | 104 KB |
 | `mortal/logs/ladder_r{2,3,4,5}/`、`mortal/{reward_ablation,hp_ablation,iql_a,iql_b_v2,iql_b_v3}/ladder*/` | 各轮判定牌谱（每轮约 20,000 局） | 每轮 ≈0.8 GB |
 | `s6a_isolated/code/{checkpoints/s6a,s6a,logs,runs}` | S6a 隔离产物（867k+best+step_800/850k、判定牌谱、TB、链日志） | ≈1 GB |
 | `mortal/logs/tb_archive/` | TB 坏段取证 | 72 KB |

@@ -18,7 +18,7 @@
 | 代码/运行目录 | `/mnt/data8/mortal/Mortal`；训练必须在 `mortal/` 下执行 |
 | 现役最强 | `mortal/checkpoints/round4/mortal.pth`（645k，fp32） |
 | 判定基线 | B/756k：`reward_ablation/B_rank_pt_aligned/mortal.pth`；top400_v2 + `pts=[2,1,0,-3]` + augmentation |
-| 当前阶段 | IQL 路线已关闭；S6a 已判定；读牌模型 A2b 已启动、结果未归档；下一步 S6b+S6c 合并 v6 探针 / 扩窗 2019+ |
+| 当前阶段 | IQL 路线已关闭；S6a 已判定；读牌模型 A2b 已判决（AUC 0.946，**定为注入基线**）；下一步 A3 规则基线 + 路径 C 注入 / S6b+S6c 合并 v6 探针 / 扩窗 2019+ |
 | 数据 | 全树 2,630,640 局（200902~202610，16 GB）；训练窗 813,145 局；holdout = 202609+ |
 | 硬件 | Ubuntu 18.04 容器，56 线程，251 GB 内存，4×P100-16GB + 1×RTX 8000-48GB |
 
@@ -441,7 +441,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 | v2s | 六改：向听分布入瓶颈（38→46 维）、向听直接 CE、分解-向听一致性（可微软向听+形制门控 normal）、tenpai 一致性、aux 向听×3、类均衡 | 向听 0.2574→**0.5263**；AUC 0.6855→**0.7392**；头↔分解一致率 0.28→0.93；代价 wait hit@1 −0.014、立直 −0.017、alloc −0.007 |
 | v2x | 38 维瓶颈 + v2s 新损失（A1 归因） | wait 0.1386、AUC 0.6670、向听 0.5257、alloc 0.5719、立直 0.1295 → 向听学习全靠损失；AUC 增益全靠瓶颈馈通（损失单独反伤 AUC −0.019）→ **保留 46 维，v2s 定妆** |
 | v2s@50k（A2） | 同配置扩预算 | wait Δ(vs v2)=−0.0112 显著未回补；AUC 0.6671（−0.0184）、alloc −0.0051、立直 −0.0282；但 wait_hit5 +0.0473、deal_pure 0.0422→0.0286、riichi_deal_pure 0.0641→0.0428、向听 +0.2747 → **不按原判据作注入基线** |
-| A2b | 输出侧 tenpai BCE（`wait[34]` 拟合 `1−tenpai`，全目标，权重 0.2） | 预注册：AUC≥0.72、deal_pure≤0.0408、wait_hit5≥0.50、wait_hit1 Δ≥−0.015；**已启动 50k，结果未归档** |
+| A2b | 输出侧 tenpai BCE（`wait[34]` 拟合 `1−tenpai`，全目标，权重 0.2） | **已判决（best@43k, val 2.0924）**：AUC 0.6671→**0.9461**（+0.279，CI[+.273,+.285]）；wait_hit1 0.1343（Δ vs v2 −0.0121，达 −0.015 护栏点估计；CI 下界 −0.0207 略越界）；wait_hit5 0.5497、deal_pure 0.0245、向听 0.5330、一致率 0.9520。vs v2：deal_pure/riichi_deal_pure 显著更安全、wait_hit5 +0.0596、向听 +0.2756；代价 riichi_hit1 −0.0330、alloc −0.0067 → **预注册 (a)(b)(c) 全满足，定为注入基线** |
 
 **工程资产**：回归 39 项 ALL PASS（枚举器 vs Rust `calc_all` 20.3 万手牌零不一致、时序 token 独立重算、与 GameplayLoader obs 逐位一致、136 牌守恒、tiles_seen、增广等变、学习门禁、结构头专项）；`compare_bootstrap.py` 做 CI 判决；`run_v1.sh/run_v2.sh/run_v2s.sh/run_v2s_a2b.sh`。下一步：A3 规则法基线（现物/筋/壁 + 立直枚举 + 见逃排除）→ B0 立直振听/吞吐（`with_sp_tables`）→ B1 限域注入（读牌冻结，wait_probs 35 维 + exp_counts + 向听分布作额外特征；防守/全决策两档）→ B2 ladder 门禁（CI 下界>0 采纳，跨 0 无结论，<0 回滚）。
 
@@ -478,7 +478,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 | 优先级 | 事项 | 要点 |
 |---|---|---|
 | **P0** | S6b+S6c 合并 v6 注入 | 读牌后验 + SP 盲区 acceptance/牌型潜力；先 30k 步探针（~2h，门禁 holdout/行为画像）；种子块 260000/270000；通过后再开正式轮 |
-| **P0** | 读牌模型 A2b 收尾 | 50k + `wait_tenpai` BCE 0.2；预注册 AUC≥0.72、deal_pure≤0.0408、wait_hit5≥0.50、wait_hit1 Δ≥−0.015；满足则定为注入基线 |
+| **P0** | 读牌模型 A2b 收尾 | **已完成**：AUC 0.9461、wait_hit5 0.5497、deal_pure 0.0245、wait_hit1 Δ −0.0121 → 预注册全满足，A2b 定为注入基线；下一步 A3 规则基线 + 路径 C 注入（A2b 与 v2s_50k 各一臂） |
 | **P1** | 数据扩窗 2019+ | 与 GRP 重训、按年份审计同步做；主模型 holdout 仍用 202609+ |
 | **P1** | 读牌路径 C 注入 | B0 立直振听/吞吐（`with_sp_tables`）→ B1 限域注入（防守/全决策两档）→ B2 ladder 双向 ≥5000 sets 判定 |
 | **P2** | 外部锚点 akochan | 需 JRE + `AKOCHAN_DIR`/`AKOCHAN_TACTICS`；人类牌谱不能当 arena 对手（无 seed） |

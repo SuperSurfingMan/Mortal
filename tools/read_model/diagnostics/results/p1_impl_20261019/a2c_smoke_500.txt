@@ -1,0 +1,8 @@
+A2c smoke（500 步，tile 头 + CE34，seed 20261016，2026-10-19，P100 GPU0，NW=16）：
+[model] v2s | 参数量 1,346,576（flat 1,371,017）| wait_head=tile
+step 100 loss 3.0120 → step 400 loss 2.9421（wait CE34 2.9229 → 2.8885）
+[eval] step 250: val_score 2.2988, tenpai_auc 0.9461, meanP(ten) 0.1681, wait_hit1 0.1381
+[eval] step 500: val_score 2.2571, tenpai_auc 0.9575, meanP(ten) 0.1564, wait_hit1 0.1358
+吞吐 0.286 s/步 → 200k 步预计 ~16h
+备注：wait_hit1 在 250 步即达 A2b 端到端 43k 步水平（0.1343），与 RM5 探针证据
+（冻结骨干 1 epoch 超过端到端 43k）方向一致；最终结论以 200k 正式轮验收为准。

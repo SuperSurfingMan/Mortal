@@ -18,7 +18,7 @@
 | 代码/运行目录 | `/mnt/data8/mortal/Mortal`；训练必须在 `mortal/` 下执行 |
 | 现役最强 | `mortal/checkpoints/round4/mortal.pth`（645k，fp32） |
 | 判定基线 | B/756k：`reward_ablation/B_rank_pt_aligned/mortal.pth`；top400_v2 + `pts=[2,1,0,-3]` + augmentation |
-| 当前阶段 | IQL 路线已关闭；S6a 已判定；**读牌模型已判决并定为注入基线（A2b），但其全部记录已从本文迁出**——实验史 / Bayes 上界 / 复核修正 / 改进路线 RM1~RM16 / 坑位 / 产物台账统一在 `tools/read_model/README.md`，本文只留 §3.12 摘要。**读牌 P0 零成本项（RM1~RM3+RM16）已于 2026-10-19 落地并复跑验收**（README §13.3），注入特征口径可冻结。下一步：读牌 P1 单次重训（RM4 输出层因子化 + RM5 H2 逐牌打分头 + RM7 吞吐/扩步数）与 S6b 注入（路径 C：B0 吞吐 → B1 限域 → B2 ladder 双向 ≥5000 sets）并行；数据侧扩窗 2019+ 并重训 GRP |
+| 当前阶段 | IQL 路线已关闭；S6a 已判定；**读牌模型已判决并定为注入基线（A2b），P0 口径修正已落地，P1（RM4+RM5+RM7）已实现且 A2c 200k 训练中**，全部记录已从本文迁出**——实验史 / Bayes 上界 / 复核修正 / 改进路线 RM1~RM16 / 坑位 / 产物台账统一在 `tools/read_model/README.md`，本文只留 §3.12 摘要。**读牌 P0 零成本项（RM1~RM3+RM16）已于 2026-10-19 落地并复跑验收**（README §13.3），注入特征口径可冻结。下一步：等 A2c 训练验收（hit@1≥0.16、立直 hit@1≥0.135、val_score 显著低于 2.0924）后跑新口径三报告+order_metrics 对照，达标则与 S6b 注入（路径 C：B0 吞吐 → B1 限域 → B2 ladder 双向 ≥5000 sets）并行；读侧顺序通路（RM6+RM12+RM13+RM14）列 P1b；数据侧扩窗 2019+ 并重训 GRP |
 | 数据 | 全树 2,630,640 局（200902~202610，16 GB）；训练窗 813,145 局；holdout = 202609+ |
 | 硬件 | Ubuntu 18.04 容器，56 线程，251 GB 内存，4×P100-16GB + 1×RTX 8000-48GB |
 
@@ -491,7 +491,7 @@ R-P 双口径）+ RM16（`order_metrics.py`）已实现，三份报告 + Bayes �
 |---|---|---|
 | **P0** ✅ | 读牌 RM1~RM3 + RM16（零训练成本）——**2026-10-19 已完成** | 实现与验收全录见 `tools/read_model/README.md` **§13.3**：因子化读法收口模型层、val_score v2（H2 门禁验证 A2 型塌缩必被拒）、CE 拆分/决策分层/R-P 双口径、`order_metrics.py`（RM12~RM15 判据，A2b 基线全 FAIL 存档）。复跑改判：net tenpai AUC 显著胜 rule；⑦「precision/recall bug」实证否决（0.1087 确为 recall，chiitoi precision 0.413，桶 5 从不预测）|
 | **P0** | S6b+S6c 合并 v6 注入 | 读牌后验 + SP 盲区 acceptance/牌型潜力；先 30k 步探针（~2h，门禁 holdout/行为画像）；种子块 260000/270000；通过后再开正式轮。**~~注入前必须先重标定 P(听牌)~~ → 已由 RM1 解决**（`tools/read_model/README.md` §11.1：sigmoid 口径标定比值 0.998，可直接当概率注入，防守门控不会全时开）。建议 RM1 完成后再冻结注入特征口径 |
-| **P1** | 读牌 RM4~RM7 + RM12~RM15（需一次重训） | 同上 §13.2。RM4 输出层因子化、RM5 H2 逐牌打分头、RM6 时序 token 补字段、RM7 吞吐+扩步数、RM12 时序流改 tile-indexed、RM13 H1 补 per-(target,tile) 特征、RM14 顺序敏感损失加权、RM15 立直层专项；⚠️ **RM6 与 RM12 必须同做**（单独任一项已被实测否证）。P2/P3：RM8~RM11（结构/标签/决策级门禁） |
+| **P1** ⏳ | 读牌 RM4~RM7 + RM12~RM15（需一次重训）——**RM4+RM5+RM7 已实现，A2c 200k 训练中**（tmux `read_a2c`，~16h；README §13.4） | 同上 §13.2。RM4 输出层因子化（CE34 条件损失 + tenpai 独立头）、RM5 H2 逐牌打分头（`--wait-head tile`，参数 1.371M→1.347M）、RM7 扩步数 50k→200k+NW16（SP 表开关越界未做）已落地；验收 hit@1≥0.16、立直 hit@1≥0.135、val_score<2.0924。**RM6/RM12~RM15 未动**（顺序通路须同做，列 P1b） |
 | **P1** | 数据扩窗 2019+ | 与 GRP 重训、按年份审计同步做；主模型 holdout 仍用 202609+ |
 | **P1** | 读牌路径 C 注入 | B0 立直振听/吞吐（`with_sp_tables`）→ B1 限域注入（防守/全决策两档）→ B2 ladder 双向 ≥5000 sets 判定 |
 | **P2** | 外部锚点 akochan | 需 JRE + `AKOCHAN_DIR`/`AKOCHAN_TACTICS`；人类牌谱不能当 arena 对手（无 seed） |

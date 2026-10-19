@@ -13,10 +13,10 @@
 | 模型（1D ResNet + H1/H2/H3） | ✅ `model.py`（1.13M 参数） |
 | 模型 v2（+时序流+结构估计流） | ✅ `model_v2.py`（1.36M；v2s 结构头专项 1.371M） |
 | 硬约束层 | ✅ `constraints.py` |
-| 训练（课程学习/增广/holdout/AdamW+cosine/fp32） | ✅ `train.py` |
+| 训练（课程学习/增广/holdout/AdamW+cosine/fp32；--wait-head flat/tile 双 H2 参数化） | ✅ `train.py` + `run_v2s.sh`/`run_a2c.sh` |
 | 离线诊断（log-loss/ECE/hit@k/信息增益 + 均匀先验基线） | ✅ `evaluate.py` |
 | ONNX 导出（路径 B 前置） | ✅ `export_onnx.py` |
-| 回归测试（9 层 52 项，含与 Rust loader 逐位一致性、枚举器交叉验证、梯度流门禁、P0 口径门禁 H 层） | ✅ `test_pipeline.py`（P0 落地后 52 项 ALL PASS） |
+| 回归测试（10 层 67 项，含与 Rust loader 逐位一致性、枚举器交叉验证、梯度流门禁、P0 口径门禁 H 层、P1 架构门禁 I 层） | ✅ `test_pipeline.py`（P1 落地后 67 项 ALL PASS） |
 | A3 规则法基线（纯 numpy：现物/筋/壁+立直枚举+见逃排除，A2b 的人类规则参照） | ✅ `rule_baseline.py` + `a3_eval.py` + `compare_a3.py` + `calibrate_a3.py` + `test_rule_baseline.py`（§0quinquies） |
 | 复核与判决修正（RM1~RM11 + RM12~RM16） | ✅ `diagnostics/`（10 脚本 + `results/*.json`），结论见 §11/§12；⚠️ 已推翻本文 §0quinquies/§9 的 4 条旧陈述（映射见 §16） |
 | **P0 口径修正落地（RM1 因子化读法 + RM2 选型判据 v2 + RM3 CE 拆分/分层/R-P 双口径 + RM16 顺序级常规诊断）** | ✅ **2026-10-19 已实现并复跑验收**（§13.3）：AUC 0.9685 / 标定 1.0137 / cond_ce 2.8961 逐位复现诊断值；三份报告 + `order_metrics.py` 全部按新口径重生成 |
@@ -136,6 +136,9 @@ alloc CE / 信息增益      0.6705    0.6655   +0.0051  （20000 样本单次�
 同预算）。所有新损失都有 CLI 权重旋钮（置 0 即关闭，便于消融）；best 判据仍是
 `alloc_ce + 0.5·wait_ce`（与 v2 同口径，保证对决公平）；旧 v1/v2 checkpoint
 不受影响（`struct_shanten_belief=False` 时形状与 v2 逐位一致，已加载验证）。
+⚠️ 2026-10-19 更新：best 判据已升级为 **val_score v2**（+ tenpai AUC + 标定项，
+RM2/§13.3），v2s 轮当时的 `2.0924` 是旧判据值，与 A2c 的 val_score 比较需注意
+版本（ckpt 内 `val_score_version` 字段护航，resume 自动重置 best_val）。
 
 **诊断新增**（`evaluate.py` 结构头段）：向听头准确率 vs 多数类基线 + 逐桶
 召回（0..7）、自洽向听（分解暗含）准确率、头↔分解一致率、形制 per-class
@@ -291,6 +294,8 @@ bash tools/read_model/run_v1.sh
 bash tools/read_model/run_v2.sh
 # v2s（tmux 会话 read_v2s）：v2 + 结构头专项（向听监督/一致性/类均衡），同预算
 bash tools/read_model/run_v2s.sh
+# A2c（P1：RM5 tile 头 + RM4 CE34 + 200k 步，tmux 会话 read_a2c）：
+bash tools/read_model/run_a2c.sh
 # 或手动：
 python tools/read_model/train.py \
   --train-globs 'dataset/mjai/houou4/202[2-5]??/**/*.json.gz' \
@@ -760,17 +765,20 @@ A2b 的 H2 输入 = `cat(g, e_T, s_belief, exp_counts)` 240 维，**没有任何
   （turn≥8 / 立直 / 鸣牌 / 干净中盘）；⑦ 经复跑**实证否决**（recall 确为 recall），
   处置改为 R/P 双列 + n_true/n_pred 同报。**证据** §11.2。
 
-**P1 — 一次重训、小改架构（预期最大单点收益）**
+**P1 — 一次重训、小改架构（预期最大单点收益）✅ 已实现，A2c 训练中（§13.4）**
 
-- **RM4 输出层因子化**：35 类 softmax → 34 类条件分布 + 1 个 tenpai 标量，各自独立损失。
+- **RM4 输出层因子化** ✅：损失侧 35 类 softmax CE → 34 类条件分布 CE（softmax34，
+  与 evaluate 的 `cond_ce` 同口径）；模型侧 tile 头天然因子化（tenpai 标量独立头）。
   **证据** §11.1（两个损失抢同一归一化：BCE 把 `l34` 钉在标定值，其余 34 个 logit 在 85.4%
-  的非听牌目标上完全无约束 → 配分函数 sd 1.94 同时污染判别与标定）；规则法本来就是因子化
-  的，AUC 0.9468 已高于 A2b 的坏读法。**验收**：AUC ≥0.9685（不低于换读法）、
-  meanP(听)/实际 ∈[0.95,1.05]、cond_ce ≤2.896、hit@1 不退。
-- **RM5 H2 换成逐牌打分头**：`logit_x = f(h_x, q(z), exp_counts_x, unseen_x, wait_bias_x)`，
-  复用 H1 的 `GroupedLinear` 逐列套路（约 +0.08M 参数）。**证据** §11.3（同预算 P0→P1
-  cond_ce −0.152、hit@1 +35% 相对、立直 hit@1 +34% 相对）。**验收**：端到端 hit@1 ≥0.16、
-  立直 hit@1 ≥0.135（显著高于 §9 `hard` 地板 0.100 与 A2b 0.1116）。
+  的非听牌目标上完全无约束 → 配分函数 sd 1.94 同时污染判别与标定）。**验收**：AUC ≥0.9685（不低于换读法）、
+  meanP(听)/实际 ∈[0.95,1.05]、cond_ce ≤2.896、hit@1 不退（以 A2c 200k 正式轮为准）。
+- **RM5 H2 换成逐牌打分头** ✅（`--wait-head tile`）：`logit_x = f(h_x, q(z), exp_counts_x,
+  unseen_x, wait_bias_x)` 落地为与 H1 同构的逐列 `GroupedLinear`（每列 128 维表示 → 1 个
+  cond logit）+ 独立 tenpai 标量头。**参数量不增反降**：1,371,017 → 1,346,576（预估
+  +0.08M 有误，逐列打分不需要更大——h2_out 35 类变每列 1 类省得更多）。**证据** §11.3
+  （同预算 P0→P1 cond_ce −0.152、hit@1 +35% 相对、立直 hit@1 +34% 相对）。**验收**：端到端
+  hit@1 ≥0.16、立直 hit@1 ≥0.135（显著高于 §9 `hard` 地板 0.100 与 A2b 0.1116）。
+  ⚠️ 数值教训见坑 56：`wait_bias` 作输入特征必须 tanh 压缩。
 - **RM6 时序 token 补字段**（与 RM5 的逐牌注意力配合才有意义）：逐 token 巡目 / 与上一动作的
   间隔；chi/pon 的 `consumed` 两张；每 token 的观察者相对属性（是否 dora/赤、对观察者与各
   立直家是否现物、是否筋/壁、该牌未见张数、是否立直后打出、是否被鸣）。**证据** ①② +
@@ -779,14 +787,19 @@ A2b 的 H2 输入 = `cat(g, e_T, s_belief, exp_counts)` 240 维，**没有任何
 
 **P2 — 规模（工程杠杆，非研究赌注）**
 
-- **RM7 吞吐 + 扩步数**：`encode_obs(with_sp_tables=False)`（119 通道对读牌无用）→ 降 CPU/
-  磁盘/DataLoader 开销；步数 50k→200k+，重设 cosine 终点。**证据** §11.4（数据只用
-  4.05%，平台与 LR 退火混淆）。**验收**：it/s 提升可测；200k 的 val_score 显著低于 50k 的
-  2.0924 —— 否则才可判「数据/容量到顶」。
+- **RM7 吞吐 + 扩步数** ✅（部分）：步数 50k→**200k** 且 cosine 终点随 `--steps` 自动重设
+  （A2c，`run_a2c.sh`）；DataLoader worker 8→16（obs 编码是吞吐瓶颈，实测 0.286 s/步，
+  200k 预计 ~16h）。~~`encode_obs(with_sp_tables=False)`~~ **本次未做**：SP 表调用在
+  libriichi Rust 内（`obs_repr.rs` version==4 分支无条件 `single_player_tables()`），
+  关闭需改 `libriichi/` 并重编 `.so`——越过读牌模型边界且有 A2 事故教训（.so 与代码
+  不同步），留待主模型侧统一做。**证据** §11.4（数据只用 4.05%，平台与 LR 退火混淆）。
+  **验收**：200k 的 val_score 显著低于 50k 的 2.0924——否则才可判「数据/容量到顶」。
 
 **P3 — 结构/标签（中期）**
 
-- **RM8 chiitoi 专项**：7.2% 目标是七对，form 头 precision 仅 0.109；更糟的是 `s_belief` 的
+- **RM8 chiitoi 专项**：7.2% 目标是七对，form 头对该类 **recall 仅 0.1087**（P0 复跑裁决：
+  0.109 是 recall 不是 precision，precision 实为 0.4126、n_pred=1333——问题定义是「漏报
+  89%」而非「乱报」）；更糟的是 `s_belief` 的
   7 个搭子计数标签对七对手取的是 **normal 分解的边际**（`structure.py:255-258`），一致性项
   也被 `normal` 门控关掉 ⇒ **瓶颈里没有七对的可表达维度**，而筋/壁/待牌逻辑对七对全部失效。
   补「#对子数、#不同牌种数」作为额外 belief 维度并监督；形制/向听损失换 focal 或提高逆频
@@ -1035,7 +1048,7 @@ json 产物在 `diagnostics/results/`（`diag1/probe/local_order_report/local_or
 | 读牌训练规模 | ⏳ 未探边界（§11.4） | 50k×512 = 全量 6.32 亿样本的 **4.05%**；val 到 43k 仍在降，最后 7k 步是 cosine LR 归零区 ⇒「平台」与退火混淆 |
 | 读牌局部手牌信息（顺序级） | 🔶 **集合级充分、顺序级不充分**（§12） | 集合级「切了 x ⇒ x±1 不太可能有」A2b 已学 **75~79%**（A3 仅 13~19%），CE 增益集中在邻接手切列（超出规则 +0.0573 vs +0.0367）；但**顺序级**：非立直层扣 A3 顺序盲地板后仅 67%（+0.0256 张）、**立直层（效应最大 +0.1895 张）为 −0.0171（零）**、**区域级（±2 窗口）−0.0236（显著为负）**；配对反事实（只对调 `tl_tokens` 两 token、obs 不变）斜率 **b=0.0144**、r²=3.3% ⇒ 时序流空转，那点顺序敏感性全来自 obs 空间流的按槽牌河通道 |
 | 诊断脚本资产 | ✅ 已入仓（§12.9） | `tools/read_model/diagnostics/`（10 个脚本 + `_common.py` + `README.md` + `results/*.json`）；路径全部由 `_common` 解析，`RM_CKPT`/`RM_VAL_GLOB`/`RM_TRAIN_GLOB`/`RM_OUT_DIR`/`RM_CACHE_DIR` 可覆盖；120 MB `cache.npz` 落仓库外 scratch |
-| S6b 读牌后验 | ⏳ 当前信息侧主线 | 尚未注入；A2b 已定为基线（§10）；**P(听牌) 已可直接当概率注入**（§11.1：sigmoid 口径标定比值 0.998，不再需要重标定）；**RM1~RM3+RM16 已落地（§13.3）**，三份报告已按新口径重跑 ⇒ **注入特征口径可以冻结**，下一步是路径 C（B0→B1→B2）与 P1 重训（RM4+RM5+RM7）并行 |
+| S6b 读牌后验 | ⏳ 当前信息侧主线 | 尚未注入；A2b 已定为基线（§10）；**P(听牌) 已可直接当概率注入**（§11.1：sigmoid 口径标定比值 0.998，不再需要重标定）；**RM1~RM3+RM16 已落地（§13.3）**，三份报告已按新口径重跑 ⇒ **注入特征口径可以冻结**；**P1（RM4+RM5+RM7）已实现，A2c 200k 训练中（§13.4）**，验收达标后与路径 C 注入（B0→B1→B2）并行推进 |
 
 ### 13.2 优先级（P0 零成本 → P1 需重训 → P2/P3）
 
@@ -1045,7 +1058,7 @@ json 产物在 `diagnostics/results/`（`diag1/probe/local_order_report/local_or
 | **P0** | 读牌模型 A2b 收尾 | **已完成**：预注册全满足，A2b 定为注入基线。**A3 规则法基线已完成**（§10）。⚠️ **§11 复核修正两处判决**：tenpai_auc 实为 **0.9685 vs 规则 0.9468**（不是打平）；wait_ce 的 +0.758 nats 优势里 **71% 是听牌因子伪影**，真实待牌条件分布优势 **+0.217 nats**。→ 下一步路径 C 注入（B0 吞吐 → B1 限域注入 → B2 ladder 门禁） |
 | **P0** | 立直专项（基线已换） | §9 地板：counts 0.077 / hard（听牌先验）**0.100 hit@1、CE 3.35** / A2b 0.1116。**§11.3 已给出可达路径**：冻结骨干探针加逐牌列特征即得立直 hit@1 **0.1338**（只训 1 epoch）→ RM5 端到端验收线设 **≥0.135**，而不是对照 0.112。**§12 补一条机制线索**：立直层的切牌顺序效应是非立直的 **2.9 倍**（+0.1895 vs +0.0660 张）而 A2b 超出顺序盲地板为 **−0.0171** ⇒ 立直读不准很可能与「顺序信息没通路」同源（见 RM15） |
 | **P0** ✅ | **读牌 RM16：区域级/顺序级评测指标**（§12.8） | **2026-10-19 已落地**：三项指标（① 单张格内分层 ΔΔ 扣 A3 地板、② ±2 窗口版、③ 配对反事实回归 b/r²）沉淀为常规工具 **`tools/read_model/order_metrics.py`**（一条命令 → `<ckpt>/order_metrics.json` + RM12~RM15 四项 PASS/FAIL 判据；cache 复用 s3158 extract + sidecar 防串）。**验收** ✅：对 A2b 逐位再现 §12 数字（b=0.0144、r²=3.3%、扣地板复现 all +41%/非立直 +67%/立直 −12%、立直窗口超地板 CI [−0.198,−0.099]），判据全 FAIL 作为基线存档（§13.3） |
-| **P1** | **读牌 RM4~RM6：一次重训、小改架构**（§11.7，预期最大单点收益） | RM4 **输出层因子化**（35 类 softmax → 34 类条件分布 + 1 个 tenpai 标量；验收 AUC≥0.9685、meanP(听)/实际∈[0.95,1.05]、cond_ce≤2.896）；RM5 **H2 换逐牌打分头**（`logit_x=f(h_x,q(z),exp_counts_x,unseen_x,wait_bias_x)`，复用 `GroupedLinear` 逐列套路，+0.08M 参数；验收 hit@1≥0.16、立直 hit@1≥0.135）；RM6 **时序 token 补字段**（逐 token 巡目/间隔、chi/pon 的 `consumed`、每 token 的 dora/现物/筋/壁/未见张数/立直后打出/被鸣 等相对属性；验收单变量对照 RM5，立直 hit@1 与 `called=1` AUC 同时提升） |
+| **P1** ⏳ | **读牌 RM4~RM6：一次重训、小改架构**（§11.7，预期最大单点收益） | **RM4+RM5 已实现，A2c 200k 训练中（§13.4，tmux `read_a2c`，P100 GPU0，预计 ~16h，10-19 夜启动）**：RM4 输出层因子化（CE34 条件损失 + tenpai 标量独立头；验收 AUC≥0.9685、meanP(听)/实际∈[0.95,1.05]、cond_ce≤2.896）；RM5 H2 逐牌打分头（`--wait-head tile`，参数量 1,371,017→1,346,576；验收 hit@1≥0.16、立直 hit@1≥0.135）；RM7 扩步数 50k→200k + NW16（SP 表开关越界未做，§11.7 注）；**RM6 未动**（时序 token 补字段，须与 RM12 tile-indexed 同做，留作下一轮 P1b） |
 | **P1** | **读牌 RM12~RM15：局部手牌信息（顺序级）通路**（§12.8） | 判定＝**架构能表达、损失没压力、时序流空转、per-target 表示被共享**。RM12 **时序流改 tile-indexed**（`e_T` 从 mean-pool `[B,3,64]` 改为 `[B,3,C,34]` 逐列时序图，token 在其牌列 ±1/±2 散射写入 + 逐 token 真实巡目 + tedashi/riichi/被鸣标记 + turn 衰减；证据＝反事实斜率 **0.0144**、r² **3.3%**；验收 b≥0.3、r²≥0.2）。RM13 **H1 补 per-(target,tile) 特征**（当前 `h_j = h.expand(B,3,…)` 三家共享同一份 `h`，目标家身份只经 tile-agnostic 的 `e_T`/`s_belief` 注入；验收 非立直层扣地板复现率 67%→≥90%）。RM14 **顺序敏感的损失放大**（alloc CE 按「是否邻接目标家最近 k 巡手切牌」加权 1.5~3×，或加「预测下一张手切牌」辅助任务；证据＝顺序项只占总增益 **1~3%**、对 `alloc_ce` 贡献 ≈0.001~0.003 nats 完全不可见；验收 立直层 −12%→≥+30% 且总 alloc_ce 不退）。RM15 **立直层专项**（顺序效应 2.9× 而捕捉为零，疑与「立直 hit@1 0.1116 < 非立直 0.155」同源；验收 立直层窗口 ΔΔ 超出地板 CI 下界>0）。⚠️ **RM6 与 RM12 需一起做**：RM6 补 token 内容、RM12 改输出形态，单独做任一项都已被实测否证（§11.3 P3 注意力零增量 / §12.5 斜率 0.0144） |
 | **P1** | **读牌 RM7：吞吐 + 扩步数**（§11.4） | `encode_obs(with_sp_tables=False)`（SP 表 119 通道对读牌无用却是 2.2ms/样本大头）→ 步数 50k→200k+ 并重设 cosine 终点。**验收**：200k 的 val_score 显著低于 2.0924，否则才可判「数据/容量到顶」。当前只用了全量数据的 **4.05%** |
 | **P2** | **读牌 RM11：决策级离线门禁**（§11.7） | 现有指标全是单帧/逐家/边际，且 29% 样本是 turn≤3（听牌率 0.6%）→ 不敏感。补：固定一个防守策略（按 `Σ_j P(听_j)·P(wait_x\|听_j)` 给自家 13 张排序取最安全），分别用 A2b 与 A3 的后验驱动，比放铳率/期望失点。这是唯一能预测 ladder 收益的离线量，作注入前的门槛 |
@@ -1109,7 +1122,33 @@ tenpai AUC model 显著高于 behave（CI 不相交），alloc_ce/wait_ce 亦全
 弱点（§11.3 探针 / §12 顺序级 / RM5+RM15）。「三方汇合⇒读侧近天花板」的第二条证据
 （自上而下）至此**正式失效**。
 
-## 14. 读牌坑位总表（编号沿用 MEMORY.md §5.2 的 **42~55**，便于历史回查）
+### 13.4 P1 实施记录（2026-10-19；A2c 训练中）
+
+**改动文件**（`mortal/`、`libriichi/` 零改动；回归 **67 项 ALL PASS**，新增 I 层 15 项）：
+
+| 文件 | 改动 |
+|---|---|
+| `model_v2.py` | RM5：`ReadNetV2` 增 `wait_head` 参数化。`tile` 模式 = 逐牌列打分头（每列输入 `[h_x, e_T, s_belief, exp_counts_x, unseen_x, tanh(wait_bias_x)]`，与 H1 同构的 `GroupedLinear` 128→1）+ 独立 `tenpai_head`（输入 z+s_belief，输出 P(未听)=sigmoid 标量）；`flat` = 旧 tile-agnostic 头。输出接口（含 ONNX）两模式一致 |
+| `train.py` | RM4：`L_wait` 从 35 类 softmax CE 改为 34 类条件 CE（`softmax34(wait_logits[:34])`，与 cond_ce 同口径；tenpai 标量归 BCE 独占）；新增 `--wait-head {flat,tile}`（默认 tile，新训练）；ckpt config 记录 `wait_head` |
+| 各工具 | `evaluate/compare_a3/compare_v1_v2/strat_metrics(经 compare_v1_v2.load_net)/bayes_bound/export_onnx/order_metrics` + `diagnostics/_common` + 4 个 `s315_*` 脚本：模型构建一律 `wait_head=cfg.get('wait_head','flat')`——旧 ckpt 缺省 flat 严格加载（I4 门禁双验：A2b flat 成功 / tile 拒绝） |
+| `run_a2c.sh` | 新增：A2c 正式训练脚本（v2s + tile 头 + 200k 步 + NW16，同数据同种子同 batch 同阶段表） |
+| `test_pipeline.py` | 新增 I 层 15 项（tile 头前向/掩码/参数、逐列通路主导 near≫far 7.1×、因子化隔离 tenpai↔h2 零互梯度、CE34 损失与无听牌批 NaN 防护、A2b 兼容双验、flat smoke 小训练）；G4 小训练随默认值自动切 tile 头且向听 CE 下降 |
+
+**Smoke（500 步）**：val_score 2.2988→2.2571，tenpai_auc 0.9461→0.9575，meanP(听)
+0.1681→0.1564（实际 0.145），wait CE34 2.9229→2.8885；吞吐 0.286 s/步（NW=16, P100）。
+wait_hit1 250 步即达 A2b 端到端 43k 水平（0.1381 vs 0.1343），与 RM5 探针证据方向一致
+（存档 `diagnostics/results/p1_impl_20261019/a2c_smoke_500.txt`）。
+
+**A2c 正式轮**（2026-10-19 夜启动，tmux `read_a2c`，P100 GPU0）：200k 步、batch 512、
+seed 20261016、阶段表 [(1,54000),(2,60000),(3,86000)]、eval-every 1000、
+out-dir `mortal/read_model_v2s_a2c`、日志 `mortal/logs/read_model/read_model_v2s_a2c_train.log`。
+预计 ~16h。**验收判据**（README §11.7，训练完成后跑三报告 + order_metrics + 与 A2b/A3 对照）：
+RM4：AUC ≥0.9685、meanP(听)/实际 ∈[0.95,1.05]、cond_ce ≤2.896、hit@1 不退；
+RM5：hit@1 ≥0.16、立直 hit@1 ≥0.135；RM7：200k val_score 显著低于 2.0924。
+RM6（时序 token 补字段）未动——按 §11.6 否证结论须与 RM12（tile-indexed 时序流）同做，
+留作 P1b（下一轮顺序通路专项）。
+
+## 14. 读牌坑位总表（编号沿用 MEMORY.md §5.2 的 **42~56**，便于历史回查）
 
 | # | 主题 | 坑与处置 |
 |---|---|---|
@@ -1127,6 +1166,7 @@ tenpai AUC model 显著高于 behave（CI 不相交），alloc_ce/wait_ce 亦全
 | 53 | 建模 | **tile-agnostic 的池化向量承载不了逐牌局部信息**：`e_T` mean-pool 成 `[B,3,64]` 后在 34 列上复制粘贴，对「8s 这一列」无法表达"9s 比 7s 先切"；`s_belief` 的搭子计数跨花色池化同理。局部信息必须走 **tile-indexed** 通路（`[B,C,34]`）。实测反事实斜率仅 0.0144 ⇒ 该通路空转（§12.1/8.5） |
 | 54 | 建模 | **多家共享同一份逐列特征 = 缺 per-(target, tile) 表示**：`h_j = h.unsqueeze(1).expand(B,3,C,34)`，三家拿到**同一份** `h`，目标家身份只经 tile-agnostic 的 `e_T`/`s_belief` 注入 ⇒「目标家 j 在牌 x 附近的切牌顺序」在架构里没有专属表示，只能指望通道里自发分出玩家子空间再靠 `GroupedLinear(3,…)` 各自挑（§12.1） |
 | 55 | 领域 | **麻将读牌直觉的方向可能是反的，且会随牌位翻折**：用户举的「先手切 9s 再手切 7s ⇒ 更可能持有 8s」实测**相反**（索 m=8 真值 ΔΔ **−0.2956**，CI[−0.364,−0.226]）。正确的一般规律是「**非自然切序 ⇒ 更可能持有中间张**」，而"自然序"随 m 翻折：m∈{2,3,4} 自然是**内侧先**、m∈{6,7,8} 自然是**外侧先**（`d(x)=min(x−1,9−x)` 更小者先切）。机制：先切 7s 时还留着 9s ⇒ 9s 更有用（8s9s 搭子/8s 对子）；先切 9s 是孤立幺九的自然处理，之后再切 7s 说明 7s8s 已拆（§12.4） |
+| 56 | 模型 | **极端值特征进 Linear 前必须 squash**（RM5 实测，2026-10-19）：tile 头把 `wait_bias`（值域 `{0, -inf}` 硬掩码 / `{0, -1}` 软振驾）直接作输入特征时，kaiming 初始化（`a=√5`，权重有正有负）会把 `-1e9/-inf` 经正权重侧放大成 `+inf`——**gelu 对大正值近似恒等、不饱和**，h2_out 输出 inf/NaN（「负掩码×负权重得正大数」被初始化正负混合掩蔽）。处置：输入侧 `torch.tanh(wait_bias)`（有界 [-1,0]、三档量级可辨），硬性仍由 logit 直接加法保证；测试 I1c 门禁覆盖两种口径。教训：**「加性偏置」与「输入特征」是两条通路，后者永远先 squash** |
 
 ## 15. 读牌工具与产物台账（迁自 MEMORY.md §6.1/§6.2/§6.3）
 
@@ -1134,7 +1174,8 @@ tenpai AUC model 显著高于 behave（CI 不相交），alloc_ce/wait_ce 亦全
 
 | 工具 | 用途 |
 |---|---|
-| `tools/read_model/` | 读牌模型 v1/v2/v2s/v2x/A2b + 52 项回归（含 H 层 P0 口径门禁）+ ONNX 导出 + A3 规则法基线（rule_baseline/a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3）+ **`order_metrics.py`（RM16 顺序级/区域级常规诊断，§13.3）** |
+| `tools/read_model/` | 读牌模型 v1/v2/v2s/v2x/A2b/**A2c(训练中)** + 67 项回归（含 H/I 层 P0/P1 门禁）+ ONNX 导出 + A3 规则法基线（rule_baseline/a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3）+ `order_metrics.py`（RM16 顺序级常规诊断）+ `run_v2.sh`/`run_v2s.sh`/`run_a2c.sh` 训练脚本 |
+| `tools/read_model/run_a2c.sh` | A2c 正式训练（v2s + RM5 tile 头 + RM4 CE34 + RM7 200k 步/NW16；tmux `read_a2c`） |
 | `tools/read_model/bayes_bound.py` | 读牌 Bayes 上界（§9）：counts（精确超几何）/hard（立直⇒听牌）/behave（MH + 静态逆规划似然）三档 + `--leak-test`/`--calibrate` |
 | `tools/read_model/shanten_fast.py` | numpy 向量化的 tomohxx 向听查表（与 Rust 逐位同口径，4096 手牌 3.7 ms；MCMC/上界专用） |
 
@@ -1144,7 +1185,7 @@ tenpai AUC model 显著高于 behave（CI 不相交），alloc_ce/wait_ce 亦全
 
 | 文件 | 主要改动 |
 |---|---|
-| 读牌模型 | `tools/read_model/`：dataset/model/model_v2/model_v2s/structure/constraints/train/evaluate/export_onnx/compare_bootstrap 等；A3 规则法基线（rule_baseline.py + a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3.sh），dataset 增补 meld_counts/dora_indicators 公开字段 |
+| 读牌模型 | `tools/read_model/`：dataset/model/model_v2（**P1: `wait_head` flat/tile 双参数化，tile=RM5 逐牌列 H2 头 + tenpai 标量头**）/model_v2s/structure/constraints/train（**P1: L_wait 改 34 类条件 CE；`--wait-head` CLI**）/evaluate/export_onnx/compare_bootstrap 等；A3 规则法基线（rule_baseline.py + a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3.sh）；P0：model.factorized_wait_probs/val_score v2/order_metrics.py；dataset 增补 meld_counts/dora_indicators 公开字段 |
 
 ### 15.3 产物
 
@@ -1154,6 +1195,8 @@ tenpai AUC model 显著高于 behave（CI 不相交），alloc_ce/wait_ce 亦全
 
 | `mortal/read_model_v2s_a2b/` | A2b 注入基线（best@43k，val 2.0924）+ **新口径 `eval_report.json`/`strat_report.json`/`order_metrics.json`（§13.3）** | ckpt + 报告 |
 | `tools/read_model/diagnostics/results/` | `diag1/probe/local_order_report{,_report2}.json`，§11/§12 表格数字的原始出处 | 21 KB |
+| `mortal/read_model_v2s_a2c/` | **A2c 训练中**（v2s + RM4/RM5 + 200k 步，2026-10-19 夜启动，~16h；验收数字待出） | ckpt(进行中) |
+| `tools/read_model/diagnostics/results/p1_impl_20261019/` | P1 smoke 500 步记录 + A2c 训练启动参数，§13.4 的原始出处 | ~5 KB |
 | `tools/read_model/diagnostics/results/p0_rerun_20261019/` | P0 复跑全档：4 份日志 + 旧口径报告存档（`*.prerm1.json`）+ 旧 bayes tables，§13.3 表格数字的原始出处 | ~400 KB |
 
 ## 16. 章节映射（旧 MEMORY.md 编号 → 本文）

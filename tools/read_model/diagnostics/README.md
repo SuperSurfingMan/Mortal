@@ -56,6 +56,13 @@
 > `s3158_local_strata.py` 会打印明确提示并跳过回归（不吐 nan）。**默认 40000 是复现
 > §3.15.8 数字的必要条件**（改成别的 n 得到的值不可与文档比较）。
 
+> 📌 **已常规化（RM16，2026-10-19）**：Phase 2b/2c 的三项指标（格内分层 ΔΔ 扣 A3 地板、
+> ±2 窗口版、配对反事实 b/r²）已沉淀为常规工具 **`tools/read_model/order_metrics.py`**
+> ——一条命令产出 `<ckpt>/order_metrics.json` + RM12~RM15 四项 PASS/FAIL 判据，
+> 自动复用/重建本目录 extract 的 cache（sidecar 记 ckpt 身份）。对 A2b 逐位再现
+> §3.15.8 全部数字（见主 README §13.3）。本目录的 s3158 脚本仍是**数字的原始出处**，
+> 保留不动；日常验收跑 `order_metrics.py` 即可。
+
 ### 工具
 
 | 脚本 | 用途 |

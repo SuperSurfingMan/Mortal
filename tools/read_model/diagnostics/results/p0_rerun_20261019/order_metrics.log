@@ -1,0 +1,30 @@
+[order] cache 身份不符（cache: None n=None | 请求: /mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2b/best.pth n=40000），重建
+[order] Phase 1：/mnt/data8/mortal/Mortal/tools/read_model/diagnostics/s3158_local_extract.py 40000（RM_CKPT=/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2b/best.pth，需 GPU，~2.5 min）
+[eval] 固定验证集 40000 样本（来自 15892 个候选文件）
+[data] holdout 文件 15892 → n=40000  123s
+[model] A2b+A3 134s
+[cf] 反事实样本 12636  136s
+[done] → /tmp/read_model_diag_cache/cache.npz  148s
+[order] Phase 1 完成 152s
+[order] n=40000（202609 holdout，seed 20261016）  ckpt=/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2b/best.pth
+
+① 单张 m 格内分层 ΔΔ(非自然−自然)，扣 A3 顺序盲地板
+  [single/all      ] 格 18  真值ΔΔ +0.0799  模型 +0.0504  地板 +0.0299  超地板 +0.0206 CI95[+0.0144,+0.0264]  扣地板复现 +41%
+  [single/nonriichi] 格 18  真值ΔΔ +0.0661  模型 +0.0535  地板 +0.0279  超地板 +0.0256 CI95[+0.0197,+0.0318]  扣地板复现 +67%
+  [single/riichi   ] 格  9  真值ΔΔ +0.1901  模型 +0.0313  地板 +0.0485  超地板 -0.0171 CI95[-0.0389,+0.0027]  扣地板复现 -12%
+
+② ±2 窗口（5 张合计）同口径
+  [window/all      ] 格 18  真值ΔΔ +0.0537  模型 +0.0110  地板 +0.0348  超地板 -0.0238 CI95[-0.0374,-0.0107]  扣地板复现 -126%
+  [window/nonriichi] 格 18  真值ΔΔ +0.0575  模型 +0.0285  地板 +0.0328  超地板 -0.0043 CI95[-0.0185,+0.0090]  扣地板复现 -17%
+  [window/riichi   ] 格  9  真值ΔΔ +0.0332  模型 -0.1010  地板 +0.0448  超地板 -0.1458 CI95[-0.1981,-0.0987]  扣地板复现 +1264%
+
+③ 配对反事实：对调 tl_tokens (m−1, m+1) 两 token，回归 Δexp_counts[m]
+  样本 12636  斜率 b = +0.0144（1=完美, 0=无响应）  r² = 0.03349
+
+---- 判据（RM12~RM15 验收）----
+  RM12: FAIL   反事实斜率 b>=0.3 且 r2>=0.2（时序流真的在用顺序）   value={'b': 0.014419830153578825, 'r2': 0.033486536503519904}
+  RM13: FAIL   非立直层 单张扣地板复现率 >= 90%（A2b 现状 67%）   value=67.0047482323598
+  RM14: FAIL   立直层 单张扣地板复现率 >= +30%（A2b 现状 ≈0/−12%）   value=-12.09445416135522
+  RM15: FAIL   立直层 窗口超地板 CI95 下界 > 0（A2b 现状显著为负）   value=-0.19805294018333425
+
+[out] /mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2b/order_metrics.json

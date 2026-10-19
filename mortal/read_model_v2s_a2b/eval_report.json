@@ -1,5 +1,5 @@
 {
-  "state": "/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2b/best.pth",
+  "state": "mortal/read_model_v2s_a2b/best.pth",
   "step": 43000,
   "n_samples": 20000,
   "alloc": {
@@ -50,16 +50,84 @@
     }
   },
   "wait": {
-    "ce_active": 2.899867296218872,
+    "wait_read": "factorized（RM1）：p34 = sigmoid(l34) = P(未听)，p_x = P(听)·softmax34(l_x)；*_softmax_legacy 为旧读法参照",
+    "ce_active": 3.4808990955352783,
+    "neg_logp_t_active": 0.5847645998001099,
+    "cond_ce_active": 2.896134614944458,
     "hit1": 0.13430623646106488,
     "hit3": 0.39824421388667197,
-    "tenpai_auc": 0.9461050090574743,
+    "tenpai_auc": 0.9685162651207609,
+    "tenpai_auc_softmax_legacy": 0.9461049979413356,
+    "mean_p_tenpai": 0.14836803078651428,
+    "p_tenpai_calib_ratio": 1.0136736631393433,
+    "p_tenpai_calib_ratio_softmax_legacy": 6.261321354944008,
     "structural_tenpai_frac": 0.14636666666666667,
     "furiten_frac": 0.0012525620587565474,
     "riichi_target_frac": 0.06911666666666667,
     "riichi_hit1": 0.11164697371593924,
     "riichi_hit3": 0.3520617313720762,
-    "riichi_ce": 2.9802134037017822
+    "riichi_ce": 2.9939422607421875,
+    "riichi_neg_logp_t": 0.014043870382010937,
+    "riichi_cond_ce": 2.979898691177368,
+    "strata": {
+      "all": {
+        "n_targets": 60000,
+        "tenpai_rate": 0.14636666666666667,
+        "tenpai_auc": 0.9685162651207609,
+        "mean_p_tenpai": 0.14836803078651428,
+        "n_active": 8771,
+        "ce_active": 3.4808990955352783,
+        "neg_logp_t": 0.5847645998001099,
+        "cond_ce": 2.896134614944458,
+        "hit1": 0.13430623646106488,
+        "hit3": 0.39824421388667197
+      },
+      "turn>=8": {
+        "n_targets": 23697,
+        "tenpai_rate": 0.30033337553276784,
+        "tenpai_auc": 0.9406577558651341,
+        "mean_p_tenpai": 0.30599328875541687,
+        "n_active": 7109,
+        "ce_active": 3.337453603744507,
+        "neg_logp_t": 0.5019612312316895,
+        "cond_ce": 2.8354923725128174,
+        "hit1": 0.14995076663384443,
+        "hit3": 0.42790828527219016
+      },
+      "riichi": {
+        "n_targets": 4147,
+        "n_active": 4147,
+        "ce_active": 2.9939422607421875,
+        "neg_logp_t": 0.014043870382010937,
+        "cond_ce": 2.979898691177368,
+        "hit1": 0.11164697371593924,
+        "hit3": 0.3520617313720762
+      },
+      "called=1": {
+        "n_targets": 10331,
+        "tenpai_rate": 0.3488529667989546,
+        "tenpai_auc": 0.8364712366402591,
+        "mean_p_tenpai": 0.3588377833366394,
+        "n_active": 3593,
+        "ce_active": 3.4499378204345703,
+        "neg_logp_t": 0.6978350281715393,
+        "cond_ce": 2.7521026134490967,
+        "hit1": 0.1817422766490398,
+        "hit3": 0.4892847202894517
+      },
+      "clean_turn>=8": {
+        "n_targets": 13779,
+        "tenpai_rate": 0.06190579867914943,
+        "tenpai_auc": 0.7799033328683666,
+        "mean_p_tenpai": 0.06405710428953171,
+        "n_active": 853,
+        "ce_active": 5.265408515930176,
+        "neg_logp_t": 2.232036828994751,
+        "cond_ce": 3.033371925354004,
+        "hit1": 0.07268464243845252,
+        "hit3": 0.30363423212192264
+      }
+    }
   },
   "struct": {
     "shanten_label_hist": [
@@ -80,35 +148,51 @@
     "shanten_head_by_bucket": {
       "0": {
         "n": 8797,
-        "recall": 0.7403660338751847
+        "recall": 0.7403660338751847,
+        "n_pred": 7541,
+        "precision": 0.8636785572205278
       },
       "1": {
         "n": 15193,
-        "recall": 0.5268215625617061
+        "recall": 0.5268215625617061,
+        "n_pred": 13741,
+        "precision": 0.5824903573247944
       },
       "2": {
         "n": 16950,
-        "recall": 0.5920353982300885
+        "recall": 0.5920353982300885,
+        "n_pred": 21414,
+        "precision": 0.4686186606892687
       },
       "3": {
         "n": 12471,
-        "recall": 0.42554726966562423
+        "recall": 0.42554726966562423,
+        "n_pred": 11796,
+        "precision": 0.44989827060020343
       },
       "4": {
         "n": 5316,
-        "recall": 0.39879608728367194
+        "recall": 0.39879608728367194,
+        "n_pred": 5508,
+        "precision": 0.3848946986201888
       },
       "5": {
         "n": 1155,
-        "recall": 0.0
+        "recall": 0.0,
+        "n_pred": 0,
+        "precision": null
       },
       "6": {
         "n": 118,
-        "recall": 0.0
+        "recall": 0.0,
+        "n_pred": 0,
+        "precision": null
       },
       "7": {
         "n": 0,
-        "recall": null
+        "recall": null,
+        "n_pred": 0,
+        "precision": null
       }
     },
     "shanten_soft_mae": 0.5724307617863019,
@@ -116,15 +200,21 @@
     "form_by_class": {
       "normal": {
         "n": 54858,
-        "recall": 0.9857085566371359
+        "recall": 0.9857085566371359,
+        "n_pred": 58619,
+        "precision": 0.9224654122383528
       },
       "chiitoi": {
         "n": 5058,
-        "recall": 0.10873863187030447
+        "recall": 0.10873863187030447,
+        "n_pred": 1333,
+        "precision": 0.41260315078769694
       },
       "kokushi": {
         "n": 84,
-        "recall": 0.2976190476190476
+        "recall": 0.2976190476190476,
+        "n_pred": 48,
+        "precision": 0.5208333333333334
       }
     },
     "struct_counts_l1": 0.8627963066101074

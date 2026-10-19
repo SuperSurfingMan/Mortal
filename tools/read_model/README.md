@@ -16,10 +16,11 @@
 | 训练（课程学习/增广/holdout/AdamW+cosine/fp32） | ✅ `train.py` |
 | 离线诊断（log-loss/ECE/hit@k/信息增益 + 均匀先验基线） | ✅ `evaluate.py` |
 | ONNX 导出（路径 B 前置） | ✅ `export_onnx.py` |
-| 回归测试（8 层 39 项，含与 Rust loader 逐位一致性、枚举器交叉验证、梯度流门禁） | ✅ `test_pipeline.py`（v2s 后 39 项 ALL PASS） |
+| 回归测试（9 层 52 项，含与 Rust loader 逐位一致性、枚举器交叉验证、梯度流门禁、P0 口径门禁 H 层） | ✅ `test_pipeline.py`（P0 落地后 52 项 ALL PASS） |
 | A3 规则法基线（纯 numpy：现物/筋/壁+立直枚举+见逃排除，A2b 的人类规则参照） | ✅ `rule_baseline.py` + `a3_eval.py` + `compare_a3.py` + `calibrate_a3.py` + `test_rule_baseline.py`（§0quinquies） |
 | 复核与判决修正（RM1~RM11 + RM12~RM16） | ✅ `diagnostics/`（10 脚本 + `results/*.json`），结论见 §11/§12；⚠️ 已推翻本文 §0quinquies/§9 的 4 条旧陈述（映射见 §16） |
-| 注入 Mortal（路径 C/A/B） | ⬜ 未做（本版不碰 `mortal/` 与 `libriichi/` 任何文件） |
+| **P0 口径修正落地（RM1 因子化读法 + RM2 选型判据 v2 + RM3 CE 拆分/分层/R-P 双口径 + RM16 顺序级常规诊断）** | ✅ **2026-10-19 已实现并复跑验收**（§13.3）：AUC 0.9685 / 标定 1.0137 / cond_ce 2.8961 逐位复现诊断值；三份报告 + `order_metrics.py` 全部按新口径重生成 |
+| 注入 Mortal（路径 C/A/B） | ⬜ 未做（本版不碰 `mortal/` 与 `libriichi/` 任何文件）；RM1 已落地 ⇒ P(听牌) 可直接当概率注入，无需 Platt/isotonic |
 
 ## 0ter. v2：融合手切时序 + 显式结构估计（2026-10-16 追加）
 
@@ -298,9 +299,16 @@ python tools/read_model/train.py \
   --out-dir mortal/read_model_v1 --steps 15000 --batch-size 512 \
   --stage-schedule 1:0.27,2:0.30,3:0.43 --augment random
 
-# 离线诊断
+# 离线诊断（P0 后口径：wait_probs 为因子化读法，p34 = sigmoid(l34) = P(未听)；
+# CE 一律同报 −logP(t)+cond_ce 拆分与决策分层，见 §13.3）
 python tools/read_model/evaluate.py --state mortal/read_model_v1/best.pth \
   --val-globs 'dataset/mjai/houou4/202609/**/*.json.gz' --samples 20000
+# 决策分层 + bootstrap CI
+python tools/read_model/strat_metrics.py --state <ckpt> --samples 20000 --out <strat.json>
+# 对 A3 规则法（含 CE 拆分列）
+python tools/read_model/compare_a3.py --samples 20000 --n-boot 200
+# 顺序级/区域级常规诊断（RM16：三项指标 + RM12~RM15 PASS/FAIL 判据）
+python tools/read_model/order_metrics.py            # 默认 A2b；--state 换模型，--rebuild 强制重建 cache
 
 # ONNX 导出（含 onnxruntime 数值校验，若已安装）
 python tools/read_model/export_onnx.py --state mortal/read_model_v1/best.pth \
@@ -507,8 +515,14 @@ python tools/read_model/bayes_bound.py --calibrate --root .../202608 --no-model
 > `riichi=0&called=0` **0.8953**（原 0.840）、干净困难局 turn≥8 **0.7799**（原 0.690）、
 > 干净困难局 full-set **0.7799**（原 0.683）。结论 5「注入前必须 Platt/isotonic 重标定」
 > **作废**（sigmoid 口径已标定，比值 0.998）。结论 1（数牌≈无听牌信息，`counts` 0.52）
-> 与结论 4（立直 `hard` 地板 0.100/CE 3.35）**不受影响，仍成立**。结论 2/3/6 需用正确读法
-> 重跑 `bayes_bound.py` 才能定论。
+> 与结论 4（立直 `hard` 地板 0.100/CE 3.35）**不受影响，仍成立**。~~结论 2/3/6 需用正确读法
+> 重跑 `bayes_bound.py` 才能定论~~ **✅ 已于 2026-10-19 重跑定论（§13.3）**：三档参考逐位不变
+> （本就因子化），仅 model 行修正——全量 AUC **0.9646** CI [0.960,0.969]（原 0.9463）、
+> wait_ce **3.5271**（原 2.9005）、hit@1/alloc_ce 逐位不变。⇒ **结论 2「参考已达 A2b」推翻**
+> （AUC model 显著高于 behave 0.9423，CI 不相交；alloc_ce 0.6614 vs 0.7546、wait_ce 3.5271
+> vs 4.7134 全面领先）；结论 3 的「参考不构成上界」**加强**；结论 6 的数字更新为
+> model 0.9114 vs behave 0.8822（called=1）。唯一例外仍指向立直层弱点：riichi=1 分层
+> hit@1 behave **0.1068** > model **0.0728**（与 §11.3/§12 一致）。
 
 1. **数牌信息几乎不含听牌信息**：干净局 `counts` AUC 0.52（≈无信息），全量 0.640 的
    来源只有手牌张数/副露数。⇒ A2b 的 0.683（干净局）/0.946（全量）是**真实的行为
@@ -588,7 +602,7 @@ python tools/read_model/bayes_bound.py --calibrate --root .../202608 --no-model
 
 | 指标 | 均匀二项 | A2b | A3-rule | Δ(rule−net) [95% CI] | 规则已拿「均匀→A2b」增益的 | 判定 |
 |---|---|---|---|---|---|---|
-| tenpai_auc | 0.5000 | ~~0.9461~~ **0.9685**⚠️ | 0.9468 | ~~+0.0007 [−0.0019,+0.0033]~~ **−0.0217** | — | ~~打平~~ **net 显著优**（§11.1：原 A2b 值用坏读法，需重跑 bootstrap CI） |
+| tenpai_auc | 0.5000 | ~~0.9461~~ **0.9685**⚠️ | 0.9468 | ~~+0.0007 [−0.0019,+0.0033]~~ **−0.0217 CI [−0.0232,−0.0201]** | — | ~~打平~~ **net 显著优**（§11.1：原 A2b 值用坏读法；✅ 2026-10-19 已按正确读法重跑 bootstrap，CI 不跨 0，§13.3） |
 | riichi_hit1 | 0.0875 | 0.1116 | 0.1121 | +0.0005 [−0.0132,+0.0121] | —（点估计规则反超） | **打平** |
 | wait_hit1 | 0.0659 | 0.1343 | 0.1166 | −0.0177 [−0.0285,−0.0074] | **74%** | net 优但增量小 |
 | wait_hit5 | 0.3262 | 0.5497 | 0.4857 | −0.0640 [−0.0773,−0.0536] | 71% | net 优（最大绝对差） |
@@ -604,7 +618,7 @@ python tools/read_model/bayes_bound.py --calibrate --root .../202608 --no-model
 ③ **A2b 的两个实质优势**：(a) wait_ce_active +0.758 nats——规则把概率质量摊在规则/枚举支撑的 ~20 个候选上（支撑集均值 23.5 张），A2b 分布锐利，这是最大的相对差距；(b) alloc_ce +0.038 nats——规则只拿 42%，是其最弱项：乘性先验-二项无法表达「具体搭子」级的持有结构（中张/字牌/宝牌粗粒度倾向 + 河牌/筋覆盖不了），此处神经网络 genuinely 增量最大。
 ④ **防守指标必须看口径**：deal_pure 项目口径 0.0245 vs 0.0574（差 2.3×）有误导性——该口径过滤「所选牌概率>0」的场合，系统性滤掉规则法的枚举证明安全牌/genbutsu（规则纯子集 n=1394，A2b 几乎全量）；换不过滤口径 deal_pure_all 后仅差 0.0050（0.41% vs 0.91%），统计显著但实战量级小。
 
-**三方汇合（~~一致结论：读侧已近公共信息天花板~~ ⚠️ 2026-10-19 复核后降级为「证据不足」，§11）**：原三条证据链 = A3（自下而上：手写规则 = A2b 的 87%~96%）+ §9 Bayes 上界（自上而下：参考生成式读牌器总体已达 A2b）+ P1 分层（剩余增益集中在 无立直无鸣牌 turn≥8 的 AUC 0.683、called=1 的 0.775、riichi hit1 0.112 < 非立直 0.155）。**复核后三条都要打折**：① A3 那条的「87%~96%」里，wait_ce 项的 64% 是听牌因子伪影（真实条件分布优势 +0.217 而非 +0.758），tenpai_auc 项的「打平」是坏读法造成的（实为 0.9685 vs 0.9468）；② §9 的 A2b 侧 AUC 全部用坏读法，与 `counts/hard/behave` 三档（其 `tenpai_score` 无 softmax 耦合，本身是因子化的）不同口径 ⇒「参考已达 A2b」需重跑；③ P1 分层的 0.683 正确值是 **0.780**、called=1 的 0.775 是 **0.837**、0.833 是 **0.895**。⇒ **「全量读牌指标已近饱和」不再成立**；已实测到的剩余空间在输出层参数化（RM4）、H2 逐牌特征（RM5，探针 hit@1 +35% 相对）与训练规模（RM7，只用了 4.05% 数据）。
+**三方汇合（~~一致结论：读侧已近公共信息天花板~~ ⚠️ 2026-10-19 复核后降级为「证据不足」，§11）**：原三条证据链 = A3（自下而上：手写规则 = A2b 的 87%~96%）+ §9 Bayes 上界（自上而下：参考生成式读牌器总体已达 A2b）+ P1 分层（剩余增益集中在 无立直无鸣牌 turn≥8 的 AUC 0.683、called=1 的 0.775、riichi hit1 0.112 < 非立直 0.155）。**复核后三条都要打折**：① A3 那条的「87%~96%」里，wait_ce 项的 64% 是听牌因子伪影（真实条件分布优势 +0.217 而非 +0.758），tenpai_auc 项的「打平」是坏读法造成的（实为 0.9685 vs 0.9468）；② §9 的 A2b 侧 AUC 全部用坏读法，与 `counts/hard/behave` 三档（其 `tenpai_score` 无 softmax 耦合，本身是因子化的）不同口径 ⇒「参考已达 A2b」需重跑（**✅ 已重跑，结论 2 推翻：A2b AUC 0.9646 显著高于 behave 0.9423，CI 不相交，§13.3**）；③ P1 分层的 0.683 正确值是 **0.780**、called=1 的 0.775 是 **0.837**、0.833 是 **0.895**。⇒ **「全量读牌指标已近饱和」不再成立**；已实测到的剩余空间在输出层参数化（RM4）、H2 逐牌特征（RM5，探针 hit@1 +35% 相对）与训练规模（RM7，只用了 4.05% 数据）。
 
 **对 B1 注入的期望校准（⚠️ 2026-10-19 按 §11 修订）**：① 注入增益的来源需**重新分配**——原判「不应是读得更准」的依据（读侧近饱和）已被削弱，但仍不宜把宝全押在读牌精度上：RM1~RM3 是零训练成本、RM4~RM6 需一次重训，两者都应在 B1 之前或并行完成；② 「后验的用法」这条**依然成立但前置消失**：~~防守门控标定（A2b 的 P(听牌) 过标定 6.3×，注入前必须重标定否则门控全时开）~~ → **改用 `1−sigmoid(wait_logits[34])` 即已标定（比值 0.998），无需 Platt/isotonic**；攻/守分档、与 SP/牌型潜力融合照旧；③ 若继续投读侧，瞄准分层诊断的三个困难子集（困难局听牌判别、立直后精确点名、called=1 开手判别）而非全量 AUC —— **但先按正确读法重算这三者的现值**（0.780/0.1116/0.837），再定目标；④ ladder 门禁判读仍按 MEMORY.md §2.4 铁律（CI 下界>0 采纳、跨 0 无结论、<0 回滚）；⑤ **新增前置**：注入特征口径必须在 RM1 落地后冻结，否则 offline 报告与在线注入用的不是同一个 P(听牌)。
 
@@ -707,8 +721,8 @@ A2b 的 H2 输入 = `cat(g, e_T, s_belief, exp_counts)` 240 维，**没有任何
 | ④ | `train.py:288-290` | 课程 stage 2 是 `turn<4 → drop`，**不是「stage1 ∪ 中盘」**；注释「含阶段 1」不准确（前 3 巡的立直样本在 stage 2 被排除） |
 | ⑤ | `model_v2.py:build_model_v2/v2s` | 不透传 `pool` ⇒ **`--pool attention` 对 v2/v2s 静默失效**，`ReadBackbone` 恒为 mean。「H2 可考虑 attention pooling」在 v2 从未测过（v1 已 A/B 无差异） |
 | ⑥ | `export_onnx.py:43-45` | ONNX 只导出 `alloc_probs/exp_counts/wait_probs`，**`struct_*`/`s_belief` 未导出** ⇒「注入时 46 维结构语义更好用」目前只是设想，通道未打通 |
-| ⑦ | `evaluate.py:193-199,254-263` | **报告 bug**：`struct_form`/`struct_shanten` 分桶的 `support` 统计的是「**预测**为该类的数量」，因此输出的 `recall` 实际是 **precision**。「向听 0.5330」「form_acc 0.9108」是准确率（无误），但「chiitoi 召回 0.109」「向听桶 5/6 召回 0」须按 precision 理解（桶 5 = 1155 次预测**全错**，比"从不预测"更糟）。真实形制分布（12 文件抽样）normal 92.65% / chiitoi 7.18% / kokushi 0.16% |
-| ⑧ | `train.py:556` `val_score` | `= alloc_ce + 0.5·wait_ce_active`，**不含 tenpai AUC**；而 `wait_ce_active` 只在听牌目标上算 ⇒ A2 那次「P(未听) 集体塌缩、AUC 0.739→0.667」**在选型判据上依然不可见**（当时是靠额外跑 evaluate.py 撞见的） |
+| ⑦ | `evaluate.py:193-199,254-263` | ~~**报告 bug**：分桶 `support` 统计的是「预测数」，`recall` 实际是 `precision`~~ **⚠️ 2026-10-19 P0 复跑实证否决本条**：提交版代码的 `n`/`recall` 一直是真值口径（`(sh_true==k)` 索引），行号引用亦对不上任何历史版本。复跑裁决：**chiitoi 0.1087 确为 recall**（precision 实为 **0.4126**，n_pred=1333）；**向听桶 5 = 真值 1155、recall 0、n_pred=0（从不预测）**，而非「1155 次预测全错」——§0quater 的原始解读（"最稀有桶从不预测"）才是对的。教训反转：单列指标连**审阅者本人**都会误读口径，P0 已把 R/P 双列 + n_true/n_pred 同时输出（§13.3），此类争议从此可事后裁决 |
+| ⑧ | `train.py:556` `val_score` | ~~`= alloc_ce + 0.5·wait_ce_active`，不含 tenpai AUC~~ **✅ 已修（RM2，2026-10-19）**：`val_score` v2 `= alloc_ce + 0.5·wait_ce_active + (1−tenpai_auc) + |meanP(听)−实际听牌率|`；ckpt 记录 `val_score_version`，resume 换代自动重置 `best_val`；H2 门禁用 A2 事故实数验证「v1 判据复现盲区、v2 必拒绝塌缩」（§13.3） |
 | ⑨ | 文档口径 | `struct_shanten_acc` 官方 20000 集是 **0.5330**（0.5544 是训练期 8192 集在 best step 的值，勿混）；§10 表的 `alloc_top1 0.5763` 与 `evaluate.py` 的 `top1 0.7149` 是**两个不同指标**（前者=argmax exp_count 是否命中持有；后者=argmax_k P(k) 是否等于真张数），同名不同义 |
 
 另核实：`tl` 长度 max 23 / p99 19 ⇒ `TL_MAX_LEN=26` 从不溢出（左对齐+右 padding 的截断
@@ -728,17 +742,23 @@ A2b 的 H2 输入 = `cat(g, e_T, s_belief, exp_counts)` 240 维，**没有任何
 > **编号约定**：读牌改进项一律用 **`RM1`~`RM11`**（Read-Model），与 MEMORY.md §3.1~§3.8 的
 > **主模型训练轮次 `R1`~`R5`** 严格区分，勿混。已实测否证的方向见 §11.6。
 
-**P0 — 零训练成本（改读法 + 改判据 + 改报告口径）**
+**P0 — 零训练成本（改读法 + 改判据 + 改报告口径）✅ 已全部落地（2026-10-19，实现与验收记录见 §13.3）**
 
-- **RM1 换 P(听牌) 读法**：`P(听)=1−sigmoid(wait_logits[...,34])`、
+- **RM1 换 P(听牌) 读法** ✅：`P(听)=1−sigmoid(wait_logits[...,34])`、
   `P(待牌|听)=softmax34(wait_logits[...,:34])`、`p_x=P(听)·P(x|听)`（后两项供 35 维口径
   兼容）。落进 `evaluate.py`/`strat_metrics.py`/`compare_a3.py`/`bayes_bound.py` 与注入侧。
-  **证据** §11.1。**验收**：AUC 0.9461→0.9685、meanP(听)/实际=0.998；重跑三份报告并改判
-  §10「tenpai_auc 打平」与 §9「天花板」；注入侧删除重标定前置。
-- **RM2 `val_score` 加 tenpai AUC 项**（或加「非听牌目标 P(未听) 均值偏离」），把 A2 型塌缩
-  变成选型可见。**证据** ⑧。**验收**：构造一个 P(未听) 塌缩的假 checkpoint 能被 val_score 拒掉。
-- **RM3 报告口径拆分**：`wait_ce_active` 一律同报 `−logP(t)` + `cond_ce`；主指标改在决策相关
-  分层（turn≥8、有立直或鸣牌）报；修 ⑦ 的 precision/recall 命名。**证据** §11.2。
+  **证据** §11.1。**验收** ✅：AUC 0.9461→**0.9685**、meanP(听)/实际=**1.0137**（诊断口径
+  P(未听) 侧 0.998）；三份报告已重跑（§13.3 表）；注入侧重标定前置已解除。
+  实现方式：读法收口在 `model.factorized_wait_probs`，v1/v2/v2s forward 的 `wait_probs`
+  输出即为因子化读法（ONNX 同语义），全部消费方自动切换、不留双口径。
+- **RM2 `val_score` 加 tenpai AUC 项** ✅：v2 判据 `= alloc_ce + 0.5·wait_ce_active +
+  (1−tenpai_auc) + |meanP(听)−实际听牌率|`，A2 型塌缩变成选型可见；ckpt 记录
+  `val_score_version`，resume 换代重置 `best_val`。**证据** ⑧。**验收** ✅：test_pipeline
+  H2 用 A2 事故实数构造塌缩 ckpt——v1 判据复现盲区（塌缩得分更低）、v2 判据必拒绝。
+- **RM3 报告口径拆分** ✅：`wait_ce_active` 在 evaluate/strat_metrics/compare_a3 一律同报
+  `−logP(t)` + `cond_ce`（active 上恒等式，H3 门禁）；evaluate 主指标补决策相关分层
+  （turn≥8 / 立直 / 鸣牌 / 干净中盘）；⑦ 经复跑**实证否决**（recall 确为 recall），
+  处置改为 R/P 双列 + n_true/n_pred 同报。**证据** §11.2。
 
 **P1 — 一次重训、小改架构（预期最大单点收益）**
 
@@ -957,9 +977,13 @@ tile-agnostic pooling），H1 的 per-target 表示**是共享的**（无 per-(t
 - **RM15 立直层专项**：立直层顺序效应是非立直的 2.9 倍而模型捕捉为零，与 §11.3
   「立直 hit@1 0.1116 < 非立直 0.155」很可能是**同一机制**。**验收**：立直层窗口 ΔΔ 的
   超出地板值 CI 下界 > 0。
-- **RM16 区域级评测指标**：现有指标全是逐列边际，测不出「区域密度」。把 **±2 窗口
-  counts 残差 ΔΔ** 与 **格内分层 ΔΔ（扣 A3 地板）** 纳入常规诊断（脚本已可直接复用）。
-  **验收**：进入 `evaluate.py` 或独立报告，成为 RM12~RM15 的判据。
+- **RM16 区域级评测指标** ✅（2026-10-19）：三项顺序级/区域级指标已沉淀为常规工具
+  **`tools/read_model/order_metrics.py`**（单张格内 ΔΔ 扣 A3 地板 / ±2 窗口版 / 配对反事实
+  回归 b、r²），一条命令产出 `<ckpt>/order_metrics.json` + RM12~RM15 四项 PASS/FAIL 判据；
+  cache 复用 `s3158_local_extract.py`（sidecar 记录 ckpt 身份，防串 cache）。**验收** ✅：
+  对 A2b 复跑逐位再现 §12 全部数字（b=0.0144、r²=3.3%、扣地板复现率 all +41% /
+  非立直 +67% / 立直 −12%、立直层窗口超地板 CI [−0.198,−0.099]），四项判据全 FAIL
+  ——与 §12 结论一致，作为基线存档供 RM12~RM15 重训后对照。
 
 ### 12.9 诊断脚本已入仓 + 方法学纪律
 
@@ -1011,16 +1035,16 @@ json 产物在 `diagnostics/results/`（`diag1/probe/local_order_report/local_or
 | 读牌训练规模 | ⏳ 未探边界（§11.4） | 50k×512 = 全量 6.32 亿样本的 **4.05%**；val 到 43k 仍在降，最后 7k 步是 cosine LR 归零区 ⇒「平台」与退火混淆 |
 | 读牌局部手牌信息（顺序级） | 🔶 **集合级充分、顺序级不充分**（§12） | 集合级「切了 x ⇒ x±1 不太可能有」A2b 已学 **75~79%**（A3 仅 13~19%），CE 增益集中在邻接手切列（超出规则 +0.0573 vs +0.0367）；但**顺序级**：非立直层扣 A3 顺序盲地板后仅 67%（+0.0256 张）、**立直层（效应最大 +0.1895 张）为 −0.0171（零）**、**区域级（±2 窗口）−0.0236（显著为负）**；配对反事实（只对调 `tl_tokens` 两 token、obs 不变）斜率 **b=0.0144**、r²=3.3% ⇒ 时序流空转，那点顺序敏感性全来自 obs 空间流的按槽牌河通道 |
 | 诊断脚本资产 | ✅ 已入仓（§12.9） | `tools/read_model/diagnostics/`（10 个脚本 + `_common.py` + `README.md` + `results/*.json`）；路径全部由 `_common` 解析，`RM_CKPT`/`RM_VAL_GLOB`/`RM_TRAIN_GLOB`/`RM_OUT_DIR`/`RM_CACHE_DIR` 可覆盖；120 MB `cache.npz` 落仓库外 scratch |
-| S6b 读牌后验 | ⏳ 当前信息侧主线 | 尚未注入；A2b 已定为基线（§10）；**P(听牌) 已可直接当概率注入**（§11.1：sigmoid 口径标定比值 0.998，不再需要重标定），但建议先做 RM1（换读法重跑三份报告）再冻结注入特征口径 |
+| S6b 读牌后验 | ⏳ 当前信息侧主线 | 尚未注入；A2b 已定为基线（§10）；**P(听牌) 已可直接当概率注入**（§11.1：sigmoid 口径标定比值 0.998，不再需要重标定）；**RM1~RM3+RM16 已落地（§13.3）**，三份报告已按新口径重跑 ⇒ **注入特征口径可以冻结**，下一步是路径 C（B0→B1→B2）与 P1 重训（RM4+RM5+RM7）并行 |
 
 ### 13.2 优先级（P0 零成本 → P1 需重训 → P2/P3）
 
 | 优先级 | 事项 | 要点 |
 |---|---|---|
-| **P0** | **读牌 RM1~RM3：换读法 / 改选型判据 / 拆报告口径**（§11.7） | **零训练成本，先做**：RM1 `P(听)=1−sigmoid(wait_logits[34])` 落进 `evaluate.py`/`strat_metrics.py`/`compare_a3.py`/`bayes_bound.py` + 注入侧，重跑三份报告并改判 §10「tenpai_auc 打平」与 §9「天花板」；RM2 `val_score` 加 tenpai AUC 项（当前不含 ⇒ A2 型塌缩在选型上不可见）；RM3 `wait_ce_active` 一律同报 `−logP(t)`+`cond_ce`，主指标改在决策相关分层报，修 `evaluate.py` 的 precision/recall 命名 bug |
+| **P0** ✅ | **读牌 RM1~RM3：换读法 / 改选型判据 / 拆报告口径**（§11.7） | **2026-10-19 已落地并复跑验收（§13.3）**：RM1 读法收口 `model.factorized_wait_probs`（v1/v2/v2s forward + ONNX 同语义），四份报告重跑——AUC 0.9461→**0.9685**、标定 6.26×→**1.0137**、§10「tenpai_auc 打平」已改判（正确口径 net **显著胜** rule，Δ −0.0217 CI 不跨 0）；RM2 `val_score` v2 =「alloc_ce + 0.5·wait_ce_active + (1−tenpai_auc) + \|meanP(听)−实际率\|」+ 版本护栏（H2 门禁验证 A2 型塌缩必被拒）；RM3 三报告一律同报 `−logP(t)`+`cond_ce` + evaluate 补 5 个决策分层；⑦ 的 precision/recall「bug」经复跑**实证否决**（0.1087 确为 recall；桶 5 从不预测），处置改为 R/P 双列同报 |
 | **P0** | 读牌模型 A2b 收尾 | **已完成**：预注册全满足，A2b 定为注入基线。**A3 规则法基线已完成**（§10）。⚠️ **§11 复核修正两处判决**：tenpai_auc 实为 **0.9685 vs 规则 0.9468**（不是打平）；wait_ce 的 +0.758 nats 优势里 **71% 是听牌因子伪影**，真实待牌条件分布优势 **+0.217 nats**。→ 下一步路径 C 注入（B0 吞吐 → B1 限域注入 → B2 ladder 门禁） |
 | **P0** | 立直专项（基线已换） | §9 地板：counts 0.077 / hard（听牌先验）**0.100 hit@1、CE 3.35** / A2b 0.1116。**§11.3 已给出可达路径**：冻结骨干探针加逐牌列特征即得立直 hit@1 **0.1338**（只训 1 epoch）→ RM5 端到端验收线设 **≥0.135**，而不是对照 0.112。**§12 补一条机制线索**：立直层的切牌顺序效应是非立直的 **2.9 倍**（+0.1895 vs +0.0660 张）而 A2b 超出顺序盲地板为 **−0.0171** ⇒ 立直读不准很可能与「顺序信息没通路」同源（见 RM15） |
-| **P0** | **读牌 RM16：区域级/顺序级评测指标**（§12.8，**零训练成本，且是 RM12~RM15 的判据前置**） | 现有指标全是**逐列边际**，测不出「区域密度」与「切牌顺序」⇒ 集合级 75~79% 的好成绩把顺序级 0~22% 的失败完全遮住了。纳入常规诊断：① **±2 窗口 counts 残差 ΔΔ**；② **格内（花色×中间张）分层 ΔΔ 并扣除 A3 顺序盲地板**；③ **配对反事实回归斜率 b**（对调 `tl_tokens` 两 token，obs 不变）。脚本已可直接复用：`tools/read_model/diagnostics/s3158_local_{extract,report,strata,window}.py`（Phase 2 三个只需 CPU）。**验收**：三项进入 `evaluate.py` 或独立报告，并作为 RM12~RM15 的通过判据 |
+| **P0** ✅ | **读牌 RM16：区域级/顺序级评测指标**（§12.8） | **2026-10-19 已落地**：三项指标（① 单张格内分层 ΔΔ 扣 A3 地板、② ±2 窗口版、③ 配对反事实回归 b/r²）沉淀为常规工具 **`tools/read_model/order_metrics.py`**（一条命令 → `<ckpt>/order_metrics.json` + RM12~RM15 四项 PASS/FAIL 判据；cache 复用 s3158 extract + sidecar 防串）。**验收** ✅：对 A2b 逐位再现 §12 数字（b=0.0144、r²=3.3%、扣地板复现 all +41%/非立直 +67%/立直 −12%、立直窗口超地板 CI [−0.198,−0.099]），判据全 FAIL 作为基线存档（§13.3） |
 | **P1** | **读牌 RM4~RM6：一次重训、小改架构**（§11.7，预期最大单点收益） | RM4 **输出层因子化**（35 类 softmax → 34 类条件分布 + 1 个 tenpai 标量；验收 AUC≥0.9685、meanP(听)/实际∈[0.95,1.05]、cond_ce≤2.896）；RM5 **H2 换逐牌打分头**（`logit_x=f(h_x,q(z),exp_counts_x,unseen_x,wait_bias_x)`，复用 `GroupedLinear` 逐列套路，+0.08M 参数；验收 hit@1≥0.16、立直 hit@1≥0.135）；RM6 **时序 token 补字段**（逐 token 巡目/间隔、chi/pon 的 `consumed`、每 token 的 dora/现物/筋/壁/未见张数/立直后打出/被鸣 等相对属性；验收单变量对照 RM5，立直 hit@1 与 `called=1` AUC 同时提升） |
 | **P1** | **读牌 RM12~RM15：局部手牌信息（顺序级）通路**（§12.8） | 判定＝**架构能表达、损失没压力、时序流空转、per-target 表示被共享**。RM12 **时序流改 tile-indexed**（`e_T` 从 mean-pool `[B,3,64]` 改为 `[B,3,C,34]` 逐列时序图，token 在其牌列 ±1/±2 散射写入 + 逐 token 真实巡目 + tedashi/riichi/被鸣标记 + turn 衰减；证据＝反事实斜率 **0.0144**、r² **3.3%**；验收 b≥0.3、r²≥0.2）。RM13 **H1 补 per-(target,tile) 特征**（当前 `h_j = h.expand(B,3,…)` 三家共享同一份 `h`，目标家身份只经 tile-agnostic 的 `e_T`/`s_belief` 注入；验收 非立直层扣地板复现率 67%→≥90%）。RM14 **顺序敏感的损失放大**（alloc CE 按「是否邻接目标家最近 k 巡手切牌」加权 1.5~3×，或加「预测下一张手切牌」辅助任务；证据＝顺序项只占总增益 **1~3%**、对 `alloc_ce` 贡献 ≈0.001~0.003 nats 完全不可见；验收 立直层 −12%→≥+30% 且总 alloc_ce 不退）。RM15 **立直层专项**（顺序效应 2.9× 而捕捉为零，疑与「立直 hit@1 0.1116 < 非立直 0.155」同源；验收 立直层窗口 ΔΔ 超出地板 CI 下界>0）。⚠️ **RM6 与 RM12 需一起做**：RM6 补 token 内容、RM12 改输出形态，单独做任一项都已被实测否证（§11.3 P3 注意力零增量 / §12.5 斜率 0.0144） |
 | **P1** | **读牌 RM7：吞吐 + 扩步数**（§11.4） | `encode_obs(with_sp_tables=False)`（SP 表 119 通道对读牌无用却是 2.2ms/样本大头）→ 步数 50k→200k+ 并重设 cosine 终点。**验收**：200k 的 val_score 显著低于 2.0924，否则才可判「数据/容量到顶」。当前只用了全量数据的 **4.05%** |
@@ -1029,7 +1053,61 @@ json 产物在 `diagnostics/results/`（`diag1/probe/local_order_report/local_or
 
 > **注入侧任务不在本表**：S6b+S6c 合并 v6 注入、路径 C 的 B0→B1→B2 属主模型工作，优先级仍记在
 > `MEMORY.md` §4.2；本文只提供它们的**读牌依据**（§11.1 标定、§10 基线、§9 上界、§12 顺序通路）。
-> RM1~RM3 落地前不要冻结注入特征口径。
+> ~~RM1~RM3 落地前不要冻结注入特征口径~~ **RM1~RM3+RM16 已于 2026-10-19 落地（§13.3），注入特征口径可冻结**。
+
+### 13.3 P0 实施与验收记录（2026-10-19）
+
+**改动文件**（全在 `tools/read_model/`，`mortal/`、`libriichi/` 零改动；回归 52 项 ALL PASS）：
+
+| 文件 | 改动 |
+|---|---|
+| `model.py` | 新增 `factorized_wait_probs()`——RM1 读法的**唯一实现**：`P(未听)=sigmoid(l34)`、`P(待x\|听)=softmax34(l[:34])`、`p_x=P(听)·P(x\|听)`；v1 forward 接入 |
+| `model_v2.py` | v2/v2s forward 接入同一读法 ⇒ **所有模型 `wait_probs` 输出语义统一变更**（ONNX 导出同语义；训练损失走 `wait_logits`，不受影响；`test_pipeline` E2/E4 与 H1 门禁覆盖） |
+| `train.py` | RM2：`VAL_SCORE_VERSION=2`、`val_score_of()`＝`alloc_ce + 0.5·wait_ce_active + (1−tenpai_auc) + \|meanP(听)−实际听牌率\|`、`_rank_auc()`；`evaluate()` 增 `tenpai_auc`/`mean_p_tenpai`；ckpt 记录 `val_score_version`，resume 换代自动重置 `best_val`；`[eval]` 日志增 AUC/标定 |
+| `evaluate.py` | RM1+RM3：wait 段双口径（sigmoid 主口径 + `*_softmax_legacy` 参照）；`wait_ce_decomposition()` 恒等拆分；wait_report 增 5 个决策分层（all/turn≥8/riichi/called=1/干净中盘 turn≥8）；向听/形制逐桶 R/P 双列（`n`/`recall` 真值口径 + `n_pred`/`precision` 预测口径） |
+| `strat_metrics.py` | RM3：各分层增 `wait_nlt`/`wait_cond_ce`（表格加 cond_ce 列）；RM1 口径注记；JSON 记录 `wait_read` |
+| `compare_a3.py` | RM3：增 `wait_nlt_active`/`wait_cond_ce_active` 两列（进 bootstrap CI）；RM1：net `tenpai_auc` 与 rule 同口径可比 |
+| `bayes_bound.py` | RM1 口径注释（`model_probs` 的 `1−wait_p[...,34]` 自动成为 sigmoid 读法，与三档参考模型同口径） |
+| `export_onnx.py` | docstring：`wait_probs` 语义为因子化读法（注入侧直接拿标定 P(未听)） |
+| `order_metrics.py` | **新增**（RM16）：单张格内 ΔΔ 扣 A3 地板 / ±2 窗口版 / 配对反事实 b、r² + RM12~RM15 四项 PASS/FAIL；cache 复用 `s3158_local_extract.py`（sidecar 记 ckpt 身份防串） |
+| `test_pipeline.py` | 新增 H 层「P0 口径门禁」13 项：H1a-f 因子化恒等式（−1e9/−inf 两种硬掩码 + v1/v2s 真实前向）；H2a-d val_score v2 塌缩门禁（A2 事故实数：v1 复现盲区、v2 必拒、nan 退化）；H3a-c CE 拆分恒等式 + 过度自信识破 |
+
+**复跑验收**（A2b best@43k，202609 holdout 20000 快照 seed 20261016；日志与旧版报告存档
+`diagnostics/results/p0_rerun_20261019/`，旧 eval/strat 报告以 `*.prerm1.json` 留档）：
+
+| 指标 | 旧口径（softmax35 坏读法） | 新口径（因子化读法） | 对照诊断预估 |
+|---|---|---|---|
+| tenpai AUC（全量） | 0.9461 | **0.9685** | s315_strat_auc 0.9685 ✓ 逐位一致 |
+| 标定 meanP(听)/实际 | 6.2613× | **1.0137**（0.1484/0.1464） | s315_wait_calib 0.998（未听侧口径）✓ |
+| wait_ce_active | 2.8999（虚假优势） | **3.4809 = −logP(t) 0.5848 + cond 2.8961** | cond 2.8961 ✓ 逐位一致；nlt 实测 0.5848 高于诊断粗估 0.3226（诊断用 −log meanP 近似 mean −logP，Jensen 低估） |
+| 分层 AUC | all 0.9461 / called=1 0.7748 / 干净 0.8334 | **all 0.9685 / called=1 0.8365 / 干净 0.8953 / 干净 turn≥8 0.7799** | ✓ 与 s315_strat_auc 逐位一致 |
+| compare_a3 tenpai_auc | net 0.9373 < rule 0.9468（「打平或更差」） | **net 0.9685 > rule 0.9468，Δ −0.0217 CI [−0.0232,−0.0201] net 显著胜** | §11.1「改判」预判兑现 |
+| compare_a3 CE 拆分 | — | nlt：rule 0.5454 < net 0.5848（rule 略胜 Δ +0.0393）；**cond：net 2.8961 vs rule 3.1128（Δ −0.2167 CI [−0.2285,−0.2023] net 显著胜）** | net 真实优势全来自条件分布，+0.2167 与 §11.1 复算逐位一致 |
+| order_metrics（RM16） | — | b=0.0144、r²=3.3%；扣地板复现 all +41% / 非立直 +67% / 立直 −12%；立直窗口超地板 CI [−0.198,−0.099]；**RM12~RM15 判据全 FAIL（基线存档）** | ✓ 逐位再现 §12 |
+| struct R/P（⑦ 裁决） | 单列、口径争议 | chiitoi **recall 0.1087 / precision 0.4126**（n_true 5058 / n_pred 1333）；向听桶 5 **n_pred=0 从不预测**（真值 1155、recall 0） | ⑦ 原主张**实证否决**（§11.5-⑦、坑 44 已修订） |
+
+**排序类与 alloc 指标全部不变**（因子化读法的条件分布与旧读法恒等）：hit@1 0.1343、
+hit@3 0.3982、立直 hit@1 0.1116、alloc ce_overall 0.6617、info_gain 0.0654 逐位复现 ✓。
+
+**两条改判**：
+1. §10「tenpai_auc net 不如/打平 rule」→ **正确口径下 net 显著胜 rule**（听牌判别是 net 的真实强项；
+   劣势仅在 nlt 项 0.0393 nats，源于 rule 的 P(听) 在立直家硬置 1 的先验优势）。
+2. §11.5-⑦/坑 44 → 实证否决（见上表）。**RM8 的问题定义随之修正**：chiitoi 是「召回低
+   （漏掉 89%）」而非「预测精度仅 0.109」；precision 0.413 说明预测出的 chiitoi 四成对，
+   改进方向是补 recall（belief 维度 + 类平衡），不是压 precision。
+
+**Bayes 上界重跑（RM1 收尾）**：`bayes_bound.py --samples 20000 --max-snapshots 2500
+--chains 192 --iters 100`（1317s，正确读法下 A2b 行与三档同口径；旧产物存档
+`mortal/read_model_bayes/prerm1/`）。结果——**三档参考逐位不变**（counts 0.6397 /
+hard 0.8557 / behave 0.9423，本就因子化，验证了改动只影响 model 行），model 行修正为
+**AUC 0.9646 CI [0.960,0.969]**（原 0.9463）、**wait_ce 3.5271**（原 2.9005）、
+hit@1 0.1374 与 alloc_ce 0.6614 **逐位不变**（排序不变性再验证）、meanP(听) 0.1472 vs
+听牌率 14.7%（标定 ✓）。**改判**：结论 2「参考生成式读牌器总体已达 A2b」**推翻**——
+tenpai AUC model 显著高于 behave（CI 不相交），alloc_ce/wait_ce 亦全面领先；结论 3
+「参考不构成上界」加强；结论 6（called=1）数字更新为 model 0.9114 vs behave 0.8822。
+唯一例外：**riichi=1 分层 hit@1 behave 0.1068 > model 0.0728**，再次把矛头指向立直层
+弱点（§11.3 探针 / §12 顺序级 / RM5+RM15）。「三方汇合⇒读侧近天花板」的第二条证据
+（自上而下）至此**正式失效**。
 
 ## 14. 读牌坑位总表（编号沿用 MEMORY.md §5.2 的 **42~55**，便于历史回查）
 
@@ -1037,7 +1115,7 @@ json 产物在 `diagnostics/results/`（`diag1/probe/local_order_report/local_or
 |---|---|---|
 | 42 | 评测 | **「一个损失监督 logit、指标读 softmax」= 隐形口径分裂**：BCE 把 logit 标定好了，softmax 却会把其余未受约束 logit 的配分函数噪声混进分数。读牌 P(听牌)：sigmoid 口径 AUC 0.9685 / 标定比值 0.998，softmax 口径 0.9461 / 过标定 6.26×，差在 `logsumexp(其余 34 logit)` 的 **sd 1.94**。凡是「N 类里塞一个二元类」的设计，必须逐个核对每个损失实际归一化在哪一层（§11.1） |
 | 43 | 评测 | **多模型比 CE 类指标必须先分解** `CE = −logP(触发) + 条件CE`：读牌 wait_ce_active 的「+0.758 nats 优势」有 0.542 来自「在真阳性上更过度自信」（A2b P(t)=0.9963 vs 规则 0.6986），真实条件分布优势只有 **+0.217**。谁更过度自信谁占便宜（§11.2） |
-| 44 | 评测 | 分桶报告里 `support` 若统计「**预测**为该类」的数量，则 `tp/support` 是 **precision 不是 recall**（`evaluate.py` 的 `struct_form`/`struct_shanten` 就是）。命名错会让「召回 0」被误读成「从不预测」，实际是「预测 1155 次全错」——处置方向完全相反 |
+| 44 | 评测 | **分桶报告必须 R/P 双口径同报（2026-10-19 实证修订）**：原坑位声称 `evaluate.py` 的 `struct_form`/`struct_shanten` 分桶 `support` 统计预测数、`recall` 实为 precision——**P0 复跑否决**：提交版代码一直是真值口径（chiitoi 0.1087 确为 **recall**，precision 实为 0.4126、n_pred=1333；向听桶 5 = 真值 1155、**n_pred=0 从不预测**，而非「预测 1155 次全错」）。教训反而升级：**单列指标连审阅者本人都误读了口径**（本坑位与 §11.5-⑦ 即误读产物，且被 MEMORY 引用）。处置：分桶报告现在同时输出 `n`/`recall`（真值口径）与 `n_pred`/`precision`（预测口径），「从不预测 vs 预测全错」从报告本身即可裁决 |
 | 45 | 训练 | **选型判据必须覆盖所有曾被观测到退化的指标**：读牌 `val_score = alloc_ce + 0.5·wait_ce_active` 不含 tenpai AUC，而 `wait_ce_active` 只在听牌目标上算 ⇒ A2 那次「P(未听) 集体塌缩、AUC 0.739→0.667」在 `best.pth` 选择上完全不可见（靠额外跑 evaluate.py 才撞见） |
 | 46 | 训练 | **「验证曲线走平」不能直接判定数据/容量到顶**：cosine 退火末期 LR≈0 会让曲线必然走平（读牌 50k 步的最后 7k 步，39k→43k 仍在降）；且要核对已消耗数据占比——读牌 50k×512 只用了全量 6.32 亿样本的 **4.05%** |
 | 47 | 工程 | **CLI 参数可能对某些分支静默失效**：`--pool attention` 在 `build_model_v2/v2s` 里根本没被透传，`ReadBackbone` 恒为 mean。新增模型变体时必须逐个核对 argparse 项是否真接到了构造函数，否则「A/B 已做过」的结论是假的 |
@@ -1056,7 +1134,7 @@ json 产物在 `diagnostics/results/`（`diag1/probe/local_order_report/local_or
 
 | 工具 | 用途 |
 |---|---|
-| `tools/read_model/` | 读牌模型 v1/v2/v2s/v2x/A2b + 39 项回归 + ONNX 导出 + A3 规则法基线（rule_baseline/a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3） |
+| `tools/read_model/` | 读牌模型 v1/v2/v2s/v2x/A2b + 52 项回归（含 H 层 P0 口径门禁）+ ONNX 导出 + A3 规则法基线（rule_baseline/a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3）+ **`order_metrics.py`（RM16 顺序级/区域级常规诊断，§13.3）** |
 | `tools/read_model/bayes_bound.py` | 读牌 Bayes 上界（§9）：counts（精确超几何）/hard（立直⇒听牌）/behave（MH + 静态逆规划似然）三档 + `--leak-test`/`--calibrate` |
 | `tools/read_model/shanten_fast.py` | numpy 向量化的 tomohxx 向听查表（与 Rust 逐位同口径，4096 手牌 3.7 ms；MCMC/上界专用） |
 
@@ -1074,8 +1152,9 @@ json 产物在 `diagnostics/results/`（`diag1/probe/local_order_report/local_or
 |---|---|---|
 | `mortal/read_model_bayes/` | §9 Bayes 上界报告（2500 快照三档分层表）+ `counts_full/report.json`（20000 快照精确 counts 口径） | 104 KB |
 
-| `mortal/read_model_v2s_a2b/` | A2b 注入基线（best@43k，val 2.0924） | ckpt |
+| `mortal/read_model_v2s_a2b/` | A2b 注入基线（best@43k，val 2.0924）+ **新口径 `eval_report.json`/`strat_report.json`/`order_metrics.json`（§13.3）** | ckpt + 报告 |
 | `tools/read_model/diagnostics/results/` | `diag1/probe/local_order_report{,_report2}.json`，§11/§12 表格数字的原始出处 | 21 KB |
+| `tools/read_model/diagnostics/results/p0_rerun_20261019/` | P0 复跑全档：4 份日志 + 旧口径报告存档（`*.prerm1.json`）+ 旧 bayes tables，§13.3 表格数字的原始出处 | ~400 KB |
 
 ## 16. 章节映射（旧 MEMORY.md 编号 → 本文）
 

@@ -31,11 +31,12 @@ PREFETCH=${PREFETCH:-2}
 mkdir -p "$OUT" "$LOGDIR/read_model"
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0            # P100（GPU2 被主训练占用，同 v2s 轮）
+export CUDA_VISIBLE_DEVICES=${GPU:-0}       # P100；GPU=1 换卡（2026-10-19 重启时迁到 GPU 1）
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 
 STEPS=${STEPS:-200000}
 NW=${NW:-16}
+STAGE_SCHEDULE=${STAGE_SCHEDULE:-1:0.27,2:0.30,3:0.43}
 
 cd "$REPO/mortal"
 echo "=== read_model A2c train start $(date -u +%FT%TZ) | steps=$STEPS workers=$NW ==="
@@ -48,7 +49,7 @@ echo "=== read_model A2c train start $(date -u +%FT%TZ) | steps=$STEPS workers=$
   --val-globs "$REPO/dataset/mjai/houou4/202609/**/*.json.gz" \
   --out-dir "$OUT" \
   --steps "$STEPS" --batch-size 512 \
-  --stage-schedule 1:0.27,2:0.30,3:0.43 \
+  --stage-schedule "$STAGE_SCHEDULE" \
   --num-workers "$NW" --prefetch-factor "$PREFETCH" --augment random \
   --eval-samples 8192 --eval-every 1000 --log-every 200 \
   ${RESUME:+--resume "$RESUME"} \
@@ -57,7 +58,13 @@ echo "=== read_model A2c train done $(date -u +%FT%TZ) ==="
 
 # 用法备注：
 #   正式轮（默认 200k）: bash run_a2c.sh
-#   崩溃续训           : OUT=$REPO/mortal/read_model_v2s_a2c \
+#   崩溃/重启续训      : OUT=$REPO/mortal/read_model_v2s_a2c \
 #                        RESUME=$REPO/mortal/read_model_v2s_a2c/last.pth \
 #                        STEPS=<剩余步数> NW=8 PREFETCH=1 bash run_a2c.sh
 #   （end_step=start+total；续训填剩余步数凑满 200k 总量）
+#   保持原课程边界续训（推荐）：按当前 step 手工配绝对阶段表，使三段之和
+#   = 剩余步数。例：32k 处重启且原边界为 54k/114k/200k，则
+#   STAGE_SCHEDULE=1:22000,2:60000,3:86000 STEPS=168000（=22000+60000+86000）。
+#   背景：2026-10-19 首跑 NW=16 时 DataLoader worker RSS 涨到 ~15.7GB/个
+#   （251GB 机器可用内存一度只剩 24GB，A2 事故同款前兆），已在 32k 处
+#   重启降为 NW=8 PREFETCH=1 续训；worker 内存随 NW 线性增长，NW≤8 为安全线。

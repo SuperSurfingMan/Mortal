@@ -1139,10 +1139,19 @@ tenpai AUC model 显著高于 behave（CI 不相交），alloc_ce/wait_ce 亦全
 wait_hit1 250 步即达 A2b 端到端 43k 水平（0.1381 vs 0.1343），与 RM5 探针证据方向一致
 （存档 `diagnostics/results/p1_impl_20261019/a2c_smoke_500.txt`）。
 
-**A2c 正式轮**（2026-10-19 夜启动，tmux `read_a2c`，P100 GPU0）：200k 步、batch 512、
+**A2c 正式轮**（2026-10-19 夜启动，tmux `read_a2c`）：200k 步、batch 512、
 seed 20261016、阶段表 [(1,54000),(2,60000),(3,86000)]、eval-every 1000、
 out-dir `mortal/read_model_v2s_a2c`、日志 `mortal/logs/read_model/read_model_v2s_a2c_train.log`。
-预计 ~16h。**验收判据**（README §11.7，训练完成后跑三报告 + order_metrics + 与 A2b/A3 对照）：
+⚠️ **中途运维一次（32.4k 处，无损）**：首跑 NW=16 时 DataLoader worker RSS 涨到
+~15.7GB/个（251GB 机器可用内存一度只剩 24GB，A2 事故同款前兆），吞吐劣化到
+0.59s/步；已在 step 32000（last.pth）处优雅重启，**降 NW=8 PREFETCH=1 并迁卡
+RTX 8000（GPU2）续训**，按绝对阶段表 1:22000,2:60000,3:86000 保持原课程边界
+（54k/114k/200k）。迁卡同时显式关闭 TF32（`train.py` main 开头：Ampere cudnn
+默认开 TF32 会破坏 fp32 口径，P100 上一直无感）。重启后 worker 内存 ~5.1GB/个
+（总 41GB），速度 **0.236s/步**（RTX 8000 算力优势，且 GPU2 有外部任务共享），
+预计剩余 ~11-12h（10-20 凌晨完成）。中途快照：step 32000 best val_score
+**2.198012**（alloc_ce 0.6694 / wait_hit1 0.1792 / tenpai_auc 0.9579）。
+**验收判据**（README §11.7，训练完成后跑三报告 + order_metrics + 与 A2b/A3 对照）：
 RM4：AUC ≥0.9685、meanP(听)/实际 ∈[0.95,1.05]、cond_ce ≤2.896、hit@1 不退；
 RM5：hit@1 ≥0.16、立直 hit@1 ≥0.135；RM7：200k val_score 显著低于 2.0924。
 RM6（时序 token 补字段）未动——按 §11.6 否证结论须与 RM12（tile-indexed 时序流）同做，

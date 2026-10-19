@@ -489,6 +489,10 @@ def evaluate(net, eval_batch, device):
 # 训练主循环
 # --------------------------------------------------------------------------- #
 def main():
+    # fp32 口径保持（README §0）：Ampere+ GPU（RTX 8000 等）cudnn 默认开 TF32，
+    # 会静默改变卷积数值行为；P100 无 TF32 所以一直无感，换卡执行必须显式关闭。
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     ap = argparse.ArgumentParser()
     ap.add_argument('--train-globs', nargs='+', required=True)
     ap.add_argument('--val-globs', nargs='+', required=True)

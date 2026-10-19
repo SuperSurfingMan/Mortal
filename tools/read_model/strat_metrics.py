@@ -14,6 +14,12 @@
 tenpai AUC、向听准确率、头↔分解一致率、deal_pure（有效听牌且最安全牌概率>0）；
 并给出 hit@1 与 AUC 的 95% bootstrap CI。
 
+口径（RM1/RM3，README §11.2）：
+  - wait_probs 为因子化读法：p34 = sigmoid(l34) = P(未听)，tenpai AUC 即
+    sigmoid 读法（旧 softmax35 读法会把全目标 AUC 低估 0.9685→0.9461）；
+  - wait CE 同时报 cond_ce（= ce − (−logP(听))），跨模型比较必须看拆分：
+    谁在 P(听) 上更过度自信谁在 ce_active 上占便宜。
+
 用法：
     python tools/read_model/strat_metrics.py \
         --state mortal/read_model_v2s_a2b/best.pth --samples 20000 \
@@ -151,12 +157,17 @@ def main():
     eff = supp.any(-1)                                         # 有效荣和集非空
     wcnt = supp.sum(-1)
     ll_wait = -(wait_t * np.log(np.clip(wait_p, 1e-12, None))).sum(-1)
+    # RM3：CE 拆分 −logP(听) + cond_ce（wait_p 为 RM1 因子化读法，active 上恒等）
+    p_t = np.clip(1.0 - wait_p[..., NUM_TILES], 1e-12, None)
+    cond = wait_p[..., :NUM_TILES] / p_t[..., None]
+    nlt = -np.log(p_t)
+    cond_ce = -(wait_t[..., :NUM_TILES] * np.log(np.clip(cond, 1e-12, None))).sum(-1)
     topk = np.argsort(-tile_p, -1)
     hit1 = np.take_along_axis(supp, topk[..., :1], -1)[..., 0]
     hit3 = np.take_along_axis(supp, topk[..., :3], -1).any(-1)
     hit5 = np.take_along_axis(supp, topk[..., :5], -1).any(-1)
 
-    score = 1.0 - wait_p[..., NUM_TILES]                       # P(非未听)
+    score = 1.0 - wait_p[..., NUM_TILES]                       # P(听)：sigmoid 读法（RM1）
     sh_true = batch['shanten'].numpy()
     sh_ok = None
     consist = None
@@ -199,11 +210,13 @@ def main():
     }
 
     report = {'state': args.state, 'model': cfg.get('model', 'v1'), 'n_samples': int(n),
-              'n_targets': int(n * 3), 'strata': {}}
+              'n_targets': int(n * 3),
+              'wait_read': 'factorized（RM1）：AUC/CE 均为 sigmoid(l34) 口径',
+              'strata': {}}
     print(f"\n{'分层':<26s} {'n目标':>7s} {'听牌%':>6s} {'alloc_ce':>9s} {'top1':>6s} "
-          f"{'MAE':>6s} {'wait_ce':>8s} {'hit1':>6s} {'hit3':>6s} {'hit5':>6s} "
-          f"{'AUC':>6s} {'向听':>6s} {'一致':>6s} {'点炮%':>6s}", flush=True)
-    print('-' * 130, flush=True)
+          f"{'MAE':>6s} {'wait_ce':>8s} {'cond_ce':>8s} {'hit1':>6s} {'hit3':>6s} "
+          f"{'hit5':>6s} {'AUC':>6s} {'向听':>6s} {'一致':>6s} {'点炮%':>6s}", flush=True)
+    print('-' * 140, flush=True)
     for name, m in strata.items():
         if m.sum() == 0:
             continue
@@ -216,6 +229,8 @@ def main():
             'alloc_top1': float(alloc_top1[m].mean()),
             'alloc_mae': float(alloc_mae[m].mean()),
             'wait_ce': float(ll_wait[ma].mean()) if ma.any() else float('nan'),
+            'wait_nlt': float(nlt[ma].mean()) if ma.any() else float('nan'),
+            'wait_cond_ce': float(cond_ce[ma].mean()) if ma.any() else float('nan'),
             'hit1': float(hit1[ma].mean()) if ma.any() else float('nan'),
             'hit3': float(hit3[ma].mean()) if ma.any() else float('nan'),
             'hit5': float(hit5[ma].mean()) if ma.any() else float('nan'),
@@ -242,7 +257,8 @@ def main():
         report['strata'][name] = v
         print(f"{name:<26s} {v['n_targets']:>7d} {100*v['tenpai_rate']:>5.1f} "
               f"{v['alloc_ce']:>9.4f} {v['alloc_top1']:>6.4f} {v['alloc_mae']:>6.4f} "
-              f"{v['wait_ce']:>8.4f} {v['hit1']:>6.4f} {v['hit3']:>6.4f} {v['hit5']:>6.4f} "
+              f"{v['wait_ce']:>8.4f} {v['wait_cond_ce']:>8.4f} "
+              f"{v['hit1']:>6.4f} {v['hit3']:>6.4f} {v['hit5']:>6.4f} "
               f"{v['tenpai_auc']:>6.4f} {v['shanten_acc']:>6.4f} {v['consist']:>6.4f} "
               f"{100*v['deal_pure']:>5.2f}", flush=True)
 

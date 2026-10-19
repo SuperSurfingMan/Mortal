@@ -13,7 +13,10 @@ ONNX 签名（动态 batch）：
     输出：
         alloc_probs  float32 [B, 3, 34, 5]  逐列计数分布（已按 unseen 掩码）
         exp_counts   float32 [B, 3, 34]     期望张数
-        wait_probs   float32 [B, 3, 35]     听牌分布（已加 bias）
+        wait_probs   float32 [B, 3, 35]     听牌分布（已加 bias；RM1 因子化读法：
+                                            p35 = sigmoid(l34) = P(未听牌)，为 BCE
+                                            直接标定概率、注入侧可直接使用；
+                                            p_x = P(听)·softmax34(l_x)）
         next_probs   float32 [B, 3, 35]     辅助：下一打分布
         shanten_probs float32 [B, 3, 8]     辅助：向听分布
         riichi_prob  float32 [B, 3]         辅助：立直概率

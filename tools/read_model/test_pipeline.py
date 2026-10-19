@@ -591,6 +591,106 @@ def test_structure_head_special(files, tmp_out='/tmp/read_model_test_train_v2s')
               f'{ce0:.4f} -> {ce1:.4f}')
 
 
+# --------------------------------------------------------------------------- #
+# H. P0 口径门禁（RM1 因子化读法 / RM2 选型判据 / RM3 CE 拆分）
+#    来源：MEMORY §11.2/§11.5（2026-10-19 复核）。选型判据必须覆盖曾经
+#    回归过的指标——A2 事故的教训（回归测试纪律 §0.2）。
+# --------------------------------------------------------------------------- #
+def test_p0_criteria(files):
+    print('\n== H. P0 口径门禁（RM1/RM2/RM3）==', flush=True)
+    import model_v2 as M2
+    import evaluate as EV
+    from model import factorized_wait_probs
+
+    # ---- H1：因子化读法恒等式（RM1，README §11.1）----
+    torch.manual_seed(11)
+    logits = torch.randn(4, 3, 35) * 3.0
+    logits[..., 34] += 2.0                        # 偏向「未听」
+    logits[0, 0, 5] = -1e9                        # 硬掩码列（constraints 口径）
+    p = factorized_wait_probs(logits)
+    p_not = torch.sigmoid(logits[..., 34])
+    cond = torch.softmax(logits[..., :34], dim=-1)
+    check('H1a p34 == sigmoid(l34)（BCE 直接标定量，非 softmax35 边际）',
+          torch.allclose(p[..., 34], p_not, atol=1e-6))
+    check('H1b p[:34] == P(听)·softmax34(l[:34])',
+          torch.allclose(p[..., :34], (1.0 - p_not)[..., None] * cond, atol=1e-6))
+    check('H1c 行和为 1 且硬掩码列概率为 0',
+          torch.allclose(p.sum(-1), torch.ones(4, 3), atol=1e-5)
+          and float(p[0, 0, 5]) == 0.0)
+    # -inf 掩码（回归测试 E4 口径）同样成立
+    logits2 = torch.randn(2, 3, 35)
+    logits2[0, 0, 5] = float('-inf')
+    p2 = factorized_wait_probs(logits2)
+    check('H1d -inf 掩码列概率为 0 且无 NaN',
+          float(p2[0, 0, 5]) == 0.0 and bool(torch.isfinite(p2).all()))
+    # v1/v2s 真实前向路径的 wait_probs 即因子化读法
+    samples, _ = D.replay_file(files[0])
+    batch = T.collate(samples[:32])
+    wb = T.wait_bias_of(batch)
+    net1 = M.build_model()
+    with torch.no_grad():
+        o1 = net1(batch['obs'], batch['unseen'], wb)
+    check('H1e v1 forward 的 wait_probs == factorized(wait_logits)',
+          torch.allclose(o1['wait_probs'],
+                         factorized_wait_probs(o1['wait_logits']), atol=1e-6))
+    net2s = M2.build_model_v2s()
+    with torch.no_grad():
+        o2 = net2s(batch['obs'], batch['unseen'], wb,
+                   batch['tl_tokens'], batch['tl_mask'])
+    check('H1f v2s forward 的 wait_probs == factorized(wait_logits)',
+          torch.allclose(o2['wait_probs'],
+                         factorized_wait_probs(o2['wait_logits']), atol=1e-6))
+
+    # ---- H2：val_score v2 拒绝听牌塌缩（RM2 验收，A2 事故数字）----
+    # MEMORY §3.12-5：v2s 50k 步 P(未听) 塌缩至 0.0735、AUC 0.739→0.667，
+    # 而 v1 判据（alloc_ce + 0.5·wait_ce_active）照常「改善」并静默存 best。
+    good = dict(alloc_ce=0.7000, wait_ce_active=3.3000, tenpai_auc=0.739,
+                mean_p_tenpai=0.0750, tenpai_frac=0.0742)
+    bad = dict(alloc_ce=0.6995, wait_ce_active=3.2964, tenpai_auc=0.667,
+               mean_p_tenpai=0.1463, tenpai_frac=0.0742)
+    v1_good = good['alloc_ce'] + 0.5 * good['wait_ce_active']
+    v1_bad = bad['alloc_ce'] + 0.5 * bad['wait_ce_active']
+    check('H2a v1 判据复现事故盲区（塌缩 ckpt 得分反而更低=更好）', v1_bad < v1_good)
+    check('H2b v2 判据拒绝塌缩 ckpt（val_score 更高=更差）',
+          T.val_score_of(bad) > T.val_score_of(good),
+          f'good {T.val_score_of(good):.4f} vs bad {T.val_score_of(bad):.4f}')
+    check('H2c val_score 版本号 >= 2（resume 换代时重置 best_val）',
+          T.VAL_SCORE_VERSION >= 2)
+    # AUC 缺测（单类批）时退化为 v1，不得 crash
+    deg = dict(alloc_ce=0.7, wait_ce_active=3.3, tenpai_auc=float('nan'),
+               mean_p_tenpai=None, tenpai_frac=0.074)
+    check('H2d 单类批退化：tenpai_auc=nan 时 val_score 有限且等于 v1 判据',
+          abs(T.val_score_of(deg) - (0.7 + 0.5 * 3.3)) < 1e-12)
+
+    # ---- H3：wait CE 拆分恒等式（RM3，README §11.5-⑤）----
+    rng = np.random.default_rng(3)
+    wp = rng.random((6, 3, 35))
+    wp /= wp.sum(-1, keepdims=True)
+    wt = np.zeros((6, 3, 35))
+    for i in range(6):
+        for j in range(3):
+            k = int(rng.integers(1, 4))
+            wt[i, j, rng.choice(34, k, replace=False)] = 1.0 / k
+    wt[0, 0] = 0.0                                # 两个非 active 目标
+    wt[3, 1] = 0.0
+    ll, nlt, cce = EV.wait_ce_decomposition(wp, wt)
+    act = wt[..., :34].sum(-1) > 0
+    check('H3a active 目标上恒等式 ll == −logP(听) + cond_ce',
+          bool(np.allclose(ll[act], (nlt + cce)[act], atol=1e-9)))
+    check('H3b 非 active 目标 ll==0、cond_ce==0 且各项有限',
+          bool((ll[~act] == 0).all()) and bool((cce[~act] == 0).all())
+          and bool(np.isfinite(nlt).all()))
+    # 塌缩方向性：P(听) 过度自信（p_t→1）压低 −logP(t) 项 → ce_active「占便宜」
+    wp_conf = wp.copy()
+    wp_conf[..., 34] *= 0.01
+    wp_conf[..., :34] *= (1.0 - wp_conf[..., 34:35]) / wp_conf[..., :34].sum(-1, keepdims=True)
+    ll_c, nlt_c, cce_c = EV.wait_ce_decomposition(wp_conf, wt)
+    check('H3c 过度自信 P(听) 只改善 −logP(t) 项、cond_ce 不变（拆分能识破刷分）',
+          bool((nlt_c[act] < nlt[act]).all())
+          and bool(np.allclose(cce_c[act], cce[act], atol=1e-6))
+          and bool((ll_c[act] < ll[act]).all()))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--n-files', type=int, default=12)
@@ -611,6 +711,7 @@ def main():
     test_structure_and_timeline(files)
     test_model_and_learning(files)
     test_structure_head_special(files)
+    test_p0_criteria(files)
 
     print('\n================ 结果 ================')
     if FAILS:

@@ -6,9 +6,11 @@
       - log-loss（总体 + 按巡目分桶）+ top1 准确率 + top1 置信度 ECE
       - 信息增益：模型 log-loss vs 均匀先验基线（见下）的逐列改善
       - 约束层 diagnostics（列守恒/总牌数投影前后的最大违例）
-  wait 听牌分布：
-      - 听牌样本 log-loss、hit@1 / hit@3（真实可荣集内）
-      - 听牌检测 AUC（P(非未听) vs 结构性听牌标签）、振听率
+  wait 听牌分布（RM1：wait_probs 为因子化读法，p34 = sigmoid(l34) = P(未听)）：
+      - 听牌样本 log-loss，并按 RM3 拆分为 −logP(听) + 条件分布 CE
+      - hit@1 / hit@3（真实可荣集内）+ 决策相关分层（turn≥8/立直/鸣牌/干净中盘）
+      - 听牌检测 AUC 与标定比值：sigmoid 读法（主口径）+ 旧 softmax35 读法（参照列）
+      - 振听率
   结构头专项（v2/v2s，向听估计）：
       - 向听头准确率 vs 多数类基线 + 逐桶召回（0..7）
       - 自洽向听（分解直方图暗含的软向听）准确率、头↔分解一致率
@@ -106,6 +108,28 @@ def binomial_baseline(unseen: np.ndarray, hand_sizes: np.ndarray,
     return probs.astype(np.float32)
 
 
+def wait_ce_decomposition(wait_probs: np.ndarray, wait_true: np.ndarray):
+    """RM3：把 wait CE 拆成 −logP(听) + 条件分布 CE（README §11.5-⑤）。
+
+    wait_ce_active 混合「听牌判别」与「待牌条件分布」两件事，跨模型比较时
+    谁在 P(听) 上更过度自信谁占便宜，必须拆开才可比。因子化读法（RM1）下
+    active 目标上恒等：ll_wait = −logP(听) + cond_ce。
+
+    参数：
+        wait_probs [n,3,35]：p34 = P(未听)，p[:34] = P(听)·P(x|听)
+        wait_true  [n,3,35]：待牌标签（active 目标支撑集上归一；非 active 全 0）
+    返回：
+        (ll_wait, neg_logp_t, cond_ce)，各 [n,3]
+    """
+    p_t = np.clip(1.0 - wait_probs[..., NUM_TILES], 1e-12, None)   # P(听)
+    cond = wait_probs[..., :NUM_TILES] / p_t[..., None]            # P(x|听)
+    ll = -(wait_true * np.log(wait_probs.clip(min=1e-12))).sum(-1)
+    nlt = -np.log(p_t)
+    wt = wait_true[..., :NUM_TILES]
+    cce = -(wt * np.log(cond.clip(min=1e-12))).sum(-1)
+    return ll, nlt, cce
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--state', required=True, help='checkpoint(.pth)，含 model 键')
@@ -145,7 +169,7 @@ def main():
     print(f'[data] {n} 个样本', flush=True)
 
     # ---- 模型前向（分批）----
-    alloc_probs_all, wait_probs_all = [], []
+    alloc_probs_all, wait_probs_all, wait_logits_all = [], [], []
     struct_sh_logits_all, struct_count_probs_all, struct_form_logits_all = [], [], []
     is_v2 = model_kind in ('v2', 'v2s')
     for i in range(0, n, args.batch_size):
@@ -158,13 +182,15 @@ def main():
                 o = net(chunk['obs'], chunk['unseen'], T.wait_bias_of(chunk).to(device))
         alloc_probs_all.append(o['alloc_probs'].cpu().numpy())
         wait_probs_all.append(o['wait_probs'].cpu().numpy())
+        wait_logits_all.append(o['wait_logits'].cpu().numpy())
         if is_v2:
             struct_sh_logits_all.append(o['struct_shanten_logits'].cpu().numpy())
             struct_count_probs_all.append(
                 torch.softmax(o['struct_count_logits'], dim=-1).cpu().numpy())
             struct_form_logits_all.append(o['struct_form_logits'].cpu().numpy())
     alloc_probs = np.concatenate(alloc_probs_all)          # [n,3,34,5]
-    wait_probs = np.concatenate(wait_probs_all)            # [n,3,35]
+    wait_probs = np.concatenate(wait_probs_all)            # [n,3,35] 因子化读法（RM1）
+    wait_logits = np.concatenate(wait_logits_all).astype(np.float64)   # [n,3,35]
 
     alloc_true = batch['alloc'].numpy()                    # [n,3,34]
     wait_true = batch['wait'].numpy()                      # [n,3,35]
@@ -214,23 +240,41 @@ def main():
     cons = apply_constraints(alloc_probs[:sub], unseen[:sub], hand_sizes[:sub])
     alloc_report['constraints'] = cons['diag']
 
-    # ---- wait 诊断 ----
+    # ---- wait 诊断（RM1：wait_probs 为因子化读法，p34 = sigmoid(l34) = P(未听)）----
     active = tenpai                                             # [n,3]
     sup = wait_true[..., :NUM_TILES] > 0                        # 非空可荣集
     eff_active = sup.any(-1)                                    # 有可荣牌的样本
-    ll_wait = -(wait_true * np.log(wait_probs.clip(min=1e-12))).sum(-1)   # [n,3]
+    # RM3：CE 拆分（active 上恒等式 ce = −logP(听) + cond_ce）
+    ll_wait, neg_logp_t, cond_ce = wait_ce_decomposition(wait_probs, wait_true)
     tile_probs = wait_probs[..., :NUM_TILES]
     order = np.argsort(-tile_probs, axis=-1)
     hit1 = np.take_along_axis(sup, order[..., :1], axis=-1).squeeze(-1)
     hit3 = np.take_along_axis(sup, order[..., :3], axis=-1).any(-1)
-    p_tenpai = 1.0 - wait_probs[..., NUM_TILES]                 # 结构性听牌倾向分
+    p_tenpai = 1.0 - wait_probs[..., NUM_TILES]                 # P(听)：sigmoid 读法（主口径）
 
+    # 旧 softmax35 读法参照列（RM1 修正前后对照：AUC 0.9461 vs 0.9685、
+    # 标定比值 6.26× vs 0.998；l34 无 bias、恒有限，max 平移后 exp 不溢出）
+    wl = wait_logits - wait_logits.max(-1, keepdims=True)
+    ew = np.exp(wl)
+    wp_legacy = ew / ew.sum(-1, keepdims=True)
+    p_tenpai_legacy = 1.0 - wp_legacy[..., NUM_TILES]
+
+    tenpai_frac = float(tenpai.mean())
     wait_report = {
+        'wait_read': ('factorized（RM1）：p34 = sigmoid(l34) = P(未听)，'
+                      'p_x = P(听)·softmax34(l_x)；*_softmax_legacy 为旧读法参照'),
         'ce_active': float(ll_wait[eff_active].mean()) if eff_active.any() else None,
+        'neg_logp_t_active': float(neg_logp_t[eff_active].mean()) if eff_active.any() else None,
+        'cond_ce_active': float(cond_ce[eff_active].mean()) if eff_active.any() else None,
         'hit1': float(hit1[eff_active].mean()) if eff_active.any() else None,
         'hit3': float(hit3[eff_active].mean()) if eff_active.any() else None,
         'tenpai_auc': auc_score(tenpai.ravel(), p_tenpai.ravel()),
-        'structural_tenpai_frac': float(tenpai.mean()),
+        'tenpai_auc_softmax_legacy': auc_score(tenpai.ravel(), p_tenpai_legacy.ravel()),
+        'mean_p_tenpai': float(p_tenpai.mean()),
+        'p_tenpai_calib_ratio': float(p_tenpai.mean() / max(tenpai_frac, 1e-9)),
+        'p_tenpai_calib_ratio_softmax_legacy':
+            float(p_tenpai_legacy.mean() / max(tenpai_frac, 1e-9)),
+        'structural_tenpai_frac': tenpai_frac,
         'furiten_frac': float((tenpai & ~eff_active).sum() / max(tenpai.sum(), 1)),
         'riichi_target_frac': float(riichi.mean()),
     }
@@ -240,6 +284,39 @@ def main():
         wait_report['riichi_hit1'] = float(hit1[m_riichi].mean())
         wait_report['riichi_hit3'] = float(hit3[m_riichi].mean())
         wait_report['riichi_ce'] = float(ll_wait[m_riichi].mean())
+        wait_report['riichi_neg_logp_t'] = float(neg_logp_t[m_riichi].mean())
+        wait_report['riichi_cond_ce'] = float(cond_ce[m_riichi].mean())
+
+    # RM3：主指标补决策相关分层。全量均值被无信息样本支配（29% 样本 turn≤3、
+    # 听牌率 0.6%），必须同时在决策相关子集上报（README §11.2/§12.9）。
+    turn3 = np.broadcast_to(turn[:, None], (n, 3))
+    called_b = batch['called'].numpy() > 0.5
+    strata_defs = {
+        'all': np.ones((n, 3), bool),
+        'turn>=8': turn3 >= 8,
+        'riichi': riichi,
+        'called=1': called_b,
+        'clean_turn>=8': (turn3 >= 8) & ~riichi & ~called_b,
+    }
+    strata_out = {}
+    for sname, S in strata_defs.items():
+        A = S & eff_active
+        e = {'n_targets': int(S.sum())}
+        if S.any() and 0 < tenpai[S].mean() < 1:
+            e['tenpai_rate'] = float(tenpai[S].mean())
+            e['tenpai_auc'] = auc_score(tenpai[S].ravel(), p_tenpai[S].ravel())
+            e['mean_p_tenpai'] = float(p_tenpai[S].mean())
+        if A.any():
+            e.update({
+                'n_active': int(A.sum()),
+                'ce_active': float(ll_wait[A].mean()),
+                'neg_logp_t': float(neg_logp_t[A].mean()),
+                'cond_ce': float(cond_ce[A].mean()),
+                'hit1': float(hit1[A].mean()),
+                'hit3': float(hit3[A].mean()),
+            })
+        strata_out[sname] = e
+    wait_report['strata'] = strata_out
 
     # ---- 结构头专项诊断（v2/v2s）：向听估计是主攻方向 ----
     struct_report = None
@@ -267,11 +344,17 @@ def main():
             'shanten_head_acc': float((sh_head == sh_true).mean()),
             'shanten_self_acc': float((sh_self == sh_true).mean()),
             'shanten_consistency': float((sh_head == sh_self).mean()),
+            # RM3：n/recall 按真值桶（n = 真值个数），n_pred/precision 按预测桶。
+            # 两口径同时输出，杜绝 README §11.5-⑦ 那类「recall 还是 precision」
+            # 的口径争议（旧报告只有一列，解读歧义无法事后裁决）。
             'shanten_head_by_bucket': {
                 str(k): {
                     'n': int((sh_true == k).sum()),
                     'recall': (float((sh_head[sh_true == k] == k).mean())
                                if (sh_true == k).any() else None),
+                    'n_pred': int((sh_head == k).sum()),
+                    'precision': (float((sh_true[sh_head == k] == k).mean())
+                                  if (sh_head == k).any() else None),
                 } for k in range(NUM_SHANTEN_BUCKETS)
             },
             'shanten_soft_mae': float(np.abs(
@@ -282,6 +365,9 @@ def main():
                     'n': int((form_true == k).sum()),
                     'recall': (float((form_pred[form_true == k] == k).mean())
                                if (form_true == k).any() else None),
+                    'n_pred': int((form_pred == k).sum()),
+                    'precision': (float((form_true[form_pred == k] == k).mean())
+                                  if (form_pred == k).any() else None),
                 } for k in range(len(FORM_NAMES))
             },
             'struct_counts_l1': float(np.abs(count_probs - counts_true).sum(-1).mean()),
@@ -302,14 +388,32 @@ def main():
         print(f"  {name:9s}: CE {b['ce']:.4f} vs 基线 {b['ce_baseline']:.4f} "
               f"top1 {b['top1']:.4f} (n={b['n']})")
     print(f"约束层          : {cons['diag']}")
-    print(f"wait CE(听牌)   : {wait_report['ce_active']}")
+    print(f"wait CE(听牌)   : {wait_report['ce_active']:.4f} = "
+          f"−logP(听) {wait_report['neg_logp_t_active']:.4f} + "
+          f"cond {wait_report['cond_ce_active']:.4f}   (RM3 拆分)")
     print(f"wait hit@1/hit@3: {wait_report['hit1']:.4f} / {wait_report['hit3']:.4f}")
-    print(f"听牌检测 AUC    : {wait_report['tenpai_auc']:.4f}   "
-          f"结构性听牌率 {wait_report['structural_tenpai_frac']:.4f}   "
+    print(f"听牌检测 AUC    : {wait_report['tenpai_auc']:.4f} (sigmoid 读法)   "
+          f"旧 softmax35 读法 {wait_report['tenpai_auc_softmax_legacy']:.4f}")
+    print(f"听牌标定        : meanP {wait_report['mean_p_tenpai']:.4f} / "
+          f"实际 {wait_report['structural_tenpai_frac']:.4f} = "
+          f"{wait_report['p_tenpai_calib_ratio']:.4f}   "
+          f"(旧读法 {wait_report['p_tenpai_calib_ratio_softmax_legacy']:.4f})")
+    print(f"结构性听牌率 {wait_report['structural_tenpai_frac']:.4f}   "
           f"其中振听(无可荣牌) {wait_report['furiten_frac']:.4f}")
     if 'riichi_hit1' in wait_report:
         print(f"立直家 hit@1/@3 : {wait_report['riichi_hit1']:.4f} / "
-              f"{wait_report['riichi_hit3']:.4f} (CE {wait_report['riichi_ce']:.4f})")
+              f"{wait_report['riichi_hit3']:.4f} (CE {wait_report['riichi_ce']:.4f} = "
+              f"−logP(t) {wait_report['riichi_neg_logp_t']:.4f} + "
+              f"cond {wait_report['riichi_cond_ce']:.4f})")
+    print('---- wait 决策相关分层（RM3）----')
+    for sname, e in wait_report['strata'].items():
+        if 'ce_active' in e:
+            print(f"  {sname:<16s} n_active {e['n_active']:>6d}  "
+                  f"ce {e['ce_active']:.4f} (−logP(t) {e['neg_logp_t']:.4f} + "
+                  f"cond {e['cond_ce']:.4f})  hit1 {e['hit1']:.4f} "
+                  f"hit3 {e['hit3']:.4f}  AUC {e.get('tenpai_auc', float('nan')):.4f}")
+        else:
+            print(f"  {sname:<16s} n_targets {e['n_targets']:>6d}  (无 active 目标)")
     if struct_report is not None:
         print('---- 结构头专项（向听估计）----')
         print(f"向听标签分布    : {struct_report['shanten_label_hist']}  "
@@ -321,12 +425,14 @@ def main():
               f"软向听 MAE {struct_report['shanten_soft_mae']:.3f}")
         recalls = '  '.join(
             f"{k}:{(v['recall'] if v['recall'] is not None else float('nan')):.3f}"
+            f"/{(v['precision'] if v['precision'] is not None else float('nan')):.3f}"
             for k, v in struct_report['shanten_head_by_bucket'].items())
-        print(f"向听逐桶召回    : {recalls}")
+        print(f"向听逐桶 R/P    : {recalls}")
         forms = '  '.join(
             f"{nm}:{(v['recall'] if v['recall'] is not None else float('nan')):.3f}"
+            f"/{(v['precision'] if v['precision'] is not None else float('nan')):.3f}"
             for nm, v in struct_report['form_by_class'].items())
-        print(f"形制准确/召回   : {struct_report['form_acc']:.4f}   {forms}")
+        print(f"形制准确/召回/精确: {struct_report['form_acc']:.4f}   {forms}")
         print(f"结构计数 L1     : {struct_report['struct_counts_l1']:.4f}")
     print('==================================================\n')
 

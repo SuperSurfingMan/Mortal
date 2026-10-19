@@ -4,6 +4,13 @@
 口径与 compare_bootstrap.py 完全一致（同固定评估集、同 per-sample 统计、
 同 bootstrap 重采样），另列均匀二项先验作 alloc 参照。
 
+口径（RM1/RM3，README §11.2）：
+  - net 的 wait_probs 已是因子化读法（p34 = sigmoid(l34) = P(未听)），与
+    A3 的 wait_probs[34] = 1 − tile_mass 同构 ⇒ tenpai_auc 跨模型可比；
+  - wait_ce_active 必须同报拆分列 wait_nlt_active（−logP(听)）与
+    wait_cond_ce_active（待牌条件分布 CE）：谁在 P(听) 上更过度自信，
+    谁在未拆分的 ce_active 上占便宜（A2 型塌缩曾借此「刷分」）。
+
 用法：
     python tools/read_model/compare_a3.py --net mortal/read_model_v2s_a2b/best.pth \
         --samples 20000 --n-boot 200
@@ -36,7 +43,8 @@ TAG_RULE = 'A3-rule'
 HIGHER_BETTER = {
     'alloc_ce': False, 'alloc_top1': True,
     'wait_hit1': True, 'wait_hit5': True, 'riichi_hit1': True,
-    'wait_ce_active': False, 'tenpai_auc': True,
+    'wait_ce_active': False, 'wait_nlt_active': False, 'wait_cond_ce_active': False,
+    'tenpai_auc': True,
     'deal_pure': False, 'deal_pure_all': False, 'riichi_deal_pure': False,
 }
 
@@ -68,7 +76,7 @@ def per_sample_stats(alloc_probs, wait_probs, exp_counts, batch):
     order = np.argsort(-tile_p, -1)
     hit1 = np.take_along_axis(sup, order[..., :1], -1).squeeze(-1)
     hit5 = np.take_along_axis(sup, order[..., :5], -1).any(-1)
-    score = 1.0 - wait_probs[:, :, NUM_TILES]
+    score = 1.0 - wait_probs[:, :, NUM_TILES]        # P(听)：因子化读法（RM1）
     own3 = np.broadcast_to(own[:, None, :], (n, 3, NUM_TILES))
     p_cand = np.where(own3, tile_p, np.inf)
     safest = p_cand.argmin(-1)
@@ -77,12 +85,19 @@ def per_sample_stats(alloc_probs, wait_probs, exp_counts, batch):
     pure = eff & (p_safe > 0)
     ri_pure = (riichi & eff) & (p_safe > 0)
     ll_wait = -(WT * np.where(WT > 0, np.log(wait_probs.clip(1e-12)), 0)).sum(-1)
+    # RM3：wait CE 拆分 −logP(听) + cond_ce（active 上恒等式 ll = nlt + cond）
+    p_t = np.clip(1.0 - wait_probs[:, :, NUM_TILES], 1e-12, None)
+    cond = wait_probs[:, :, :NUM_TILES] / p_t[..., None]
+    nlt = -np.log(p_t)
+    WTt = WT[:, :, :NUM_TILES]
+    cond_ce = -(WTt * np.where(cond > 0, np.log(cond.clip(1e-12)), 0)).sum(-1)
     return {
         'alloc_ce': ce, 'top1_hit': top1_hit,
         'hit1': hit1, 'hit5': hit5, 'eff': eff, 'riichi': riichi,
         'score': score, 'tenpai': tenpai,
         'p_safe': p_safe, 'deal_safe': deal_safe, 'pure': pure,
         'ri_pure': ri_pure, 'wait_ce': ll_wait,
+        'wait_nlt': nlt, 'wait_cond_ce': cond_ce,
     }
 
 
@@ -97,6 +112,8 @@ def agg(s, idx):
     ri = s['riichi'][idx] & eff
     out['riichi_hit1'] = s['hit1'][idx][ri].mean() if ri.any() else np.nan
     out['wait_ce_active'] = s['wait_ce'][idx][eff].mean() if eff.any() else np.nan
+    out['wait_nlt_active'] = s['wait_nlt'][idx][eff].mean() if eff.any() else np.nan
+    out['wait_cond_ce_active'] = s['wait_cond_ce'][idx][eff].mean() if eff.any() else np.nan
     out['tenpai_auc'] = auc_score(s['tenpai'][idx].ravel(), s['score'][idx].ravel())
     pure = s['pure'][idx]
     out['deal_pure'] = s['deal_safe'][idx][pure].mean() if pure.any() else np.nan

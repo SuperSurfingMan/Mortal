@@ -21,7 +21,8 @@
 
 3. 空间流与 v1 完全一致（同 backbone、同 H1/H2/H3 输出语义），保证 v1/v2 可比。
 
-输出与 v1 一致（alloc_probs / exp_counts / wait_probs / 辅助头），另加
+输出与 v1 一致（alloc_probs / exp_counts / wait_probs / 辅助头；wait_probs 为
+RM1 因子化读法，见 ``model.factorized_wait_probs``），另加
 ``struct_counts`` / ``struct_form`` / ``struct_shanten`` 供诊断与消融。
 """
 from __future__ import annotations
@@ -263,8 +264,11 @@ class ReadNetV2(nn.Module):
         # wait_bias 是逐牌 [B,3,34] 的加性偏置；第 35 类「未听」不受 tile 级
         # 掩码影响，补 0。
         wait_logits = wait_logits + F.pad(wait_bias, (0, 1))            # [B,3,35]
-        wait_probs = F.softmax(wait_logits, dim=-1)
-        wait_probs = torch.nan_to_num(wait_probs, nan=0.0)
+        # RM1（README §11.1）因子化读法：p34 = sigmoid(l34) = P(未听)，即
+        # L_wait_tenpai BCE 直接标定的量；p_x = P(听)·softmax34(l_x)。
+        # 旧 softmax35 读法把 34 个牌列 logit 的配分函数噪声混进 P(听)
+        # （tenpai AUC 0.9461 → 0.9685，标定比值 6.26× → 0.998）。
+        wait_probs = M.factorized_wait_probs(wait_logits)
 
         out = {
             'alloc_logits': alloc_logits,

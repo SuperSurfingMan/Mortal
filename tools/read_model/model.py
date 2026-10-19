@@ -25,7 +25,9 @@
 前向签名（与 ONNX 导出一致）：
     forward(obs, unseen, wait_bias) -> dict(
         alloc_logits [B,3,34,5]（已掩码）、alloc_probs、exp_counts [B,3,34]、
-        wait_logits [B,3,35]（已加 bias）、wait_probs、
+        wait_logits [B,3,35]（已加 bias）、wait_probs（RM1 因子化读法：
+            p34 = sigmoid(l34) = P(未听)，p_x = P(听)·softmax34(l_x)，
+            见 factorized_wait_probs）、
         next_logits [B,3,35]、shanten_logits [B,3,8]、riichi_logit [B,3]、called_logit [B,3])
 """
 from __future__ import annotations
@@ -42,6 +44,27 @@ NUM_WAIT_CLASSES = NUM_TILES + 1        # 34 种听牌 + 未听
 NO_DISCARD = NUM_TILES                  # 下一打：本局无后续打牌
 NUM_SHANTEN_BUCKETS = 8                 # 0..6 + (>=6)
 NUM_TARGETS = 3                         # 相对座位 1/2/3
+
+
+def factorized_wait_probs(wait_logits: torch.Tensor) -> torch.Tensor:
+    """RM1（README §11.1）：35 维 wait 分布的因子化读法（行和恒为 1）。
+
+        P(未听) = sigmoid(l34)          —— L_wait_tenpai BCE 直接标定的量；
+        P(待牌 x|听) = softmax34(l[:34])；
+        p_x = P(听)·P(x|听)，p_34 = P(未听)。
+
+    旧 softmax35 读法（P(未听) = 1 − softmax(l)[34]）把 34 个牌列 logit 在
+    85.4% 非听牌目标上无约束的配分函数噪声（sd 1.94）混进 P(听牌)：
+    tenpai AUC 0.9461 → 0.9685，标定比值 6.26× → 0.998
+    （diagnostics/s315_wait_calib.py、s315_strat_auc.py，2026-10-19 复核）。
+    两种读法的条件分布恒等（都是 softmax34(l[:34])），故 hit@k / 最安全牌等
+    排序类指标不变；CE 类与 P(听) 类指标以本读法为准。A3 规则基线本就是
+    因子化结构（wait_probs[34] = 1 − tile_mass），本读法使跨模型比较同口径。
+    """
+    p_not = torch.sigmoid(wait_logits[..., NUM_TILES:NUM_TILES + 1])   # P(未听)
+    cond = torch.softmax(wait_logits[..., :NUM_TILES], dim=-1)         # P(待|听)
+    cond = torch.nan_to_num(cond, nan=0.0)          # 34 列全掩码的退化行
+    return torch.cat([(1.0 - p_not) * cond, p_not], dim=-1)
 
 
 class ResBlock(nn.Module):
@@ -214,7 +237,7 @@ class ReadNet(nn.Module):
                 [wait_bias[:, j, :], torch.zeros_like(wait_bias[:, j, :1])], dim=-1
             )
             w_logits = w_logits + bias
-            w_probs = w_logits.softmax(dim=-1)
+            w_probs = factorized_wait_probs(w_logits)      # RM1 因子化读法
             wait_logits_list.append(w_logits)
             wait_probs_list.append(w_probs)
 

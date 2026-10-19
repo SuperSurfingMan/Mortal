@@ -370,12 +370,65 @@ def forward_batch(net, batch, device):
     return net(batch['obs'].to(device), batch['unseen'].to(device), wb)
 
 
+# 选型判据版本（RM2，README §11.5-③）：v1 = alloc_ce + 0.5·wait_ce_active；
+# v2 追加听牌 AUC 与标定项。换代后 resume 会重置 best_val（旧值不可比）。
+VAL_SCORE_VERSION = 2
+
+
+def _rank_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
+    """秩和 AUC（Mann-Whitney U，并列取平均秩）；单类标签返回 nan。"""
+    y = np.asarray(y_true, dtype=bool)
+    s = np.asarray(y_score, dtype=np.float64)
+    n_pos = int(y.sum())
+    n_neg = len(y) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return float('nan')
+    order = np.argsort(s, kind='mergesort')
+    ss = s[order]
+    ranks = np.empty(len(s), dtype=np.float64)
+    i = 0
+    while i < len(ss):
+        j = i
+        while j + 1 < len(ss) and ss[j + 1] == ss[i]:
+            j += 1
+        ranks[order[i:j + 1]] = (i + j) / 2.0 + 1.0
+        i = j + 1
+    return float((ranks[y].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
+
+
+def val_score_of(metrics: dict) -> float:
+    """选型判据 v2（RM2）：越小越好。
+
+        val_score = alloc_ce + 0.5·wait_ce_active
+                    + (1 − tenpai_auc) + |mean P(听) − 实际听牌率|
+
+    v1 判据（前两项）的盲区——A2 事故（2026-10-18，MEMORY §3.12-5）：
+    P(未听) 全体塌缩至 0.0735、tenpai AUC 0.739→0.667，而 alloc_ce /
+    wait_ce_active 照常「改善」，best.pth 静默存下塌缩权重。后两项使
+    听牌判别力与标定必然进入选型（验收：test_pipeline H2）。
+    tenpai_auc 为 nan（整批单类）时跳过该项，行为退化为 v1。
+    """
+    vs = metrics['alloc_ce']
+    wc = metrics.get('wait_ce_active', float('nan'))
+    if wc == wc:
+        vs += 0.5 * wc
+    auc = metrics.get('tenpai_auc', float('nan'))
+    if auc == auc:
+        vs += 1.0 - auc
+    mp = metrics.get('mean_p_tenpai')
+    frac = metrics.get('tenpai_frac')
+    if mp is not None and frac is not None and mp == mp:
+        vs += abs(mp - frac)
+    return vs
+
+
 @torch.no_grad()
 def evaluate(net, eval_batch, device):
     net.eval()
     n = eval_batch['obs'].shape[0]
     bs = 2048
     alloc_ll, wait_ll, alloc_top1, wait_hit1 = [], [], [], []
+    wait_p_not = []                                            # RM2：P(未听) 收集
     struct_sh_hit, struct_sh_ce = [], []
     for i in range(0, n, bs):
         chunk = {k: v[i:i + bs].to(device) for k, v in eval_batch.items()}
@@ -392,6 +445,8 @@ def evaluate(net, eval_batch, device):
         true_wait = chunk['wait'][..., :D.NUM_TILES] > 0
         hit = (true_wait.gather(-1, top1[..., None]).squeeze(-1) > 0) & (chunk['tenpai'] > 0.5)
         wait_hit1.append(hit.float())
+        # RM2：P(未听) = sigmoid(l34)——L_wait_tenpai BCE 直接标定的量（RM1 读法）
+        wait_p_not.append(torch.sigmoid(o['wait_logits'][..., D.NUM_TILES]))
         if 'struct_shanten_logits' in o:                    # v2/v2s 结构头监控
             log_sh = torch.log_softmax(o['struct_shanten_logits'], dim=-1)
             ll_sh = -log_sh.gather(-1, chunk['shanten'][..., None]).squeeze(-1)
@@ -413,6 +468,11 @@ def evaluate(net, eval_batch, device):
         'wait_hit1': wait_hit,
         'tenpai_frac': float(tenpai_mask.float().mean()),
     }
+    # ---- RM2：听牌判别 AUC + 标定（sigmoid 读法，RM1）进选型判据 ----
+    p_not = torch.cat(wait_p_not).cpu().numpy().astype(np.float64)   # [n,3] P(未听)
+    p_ten = 1.0 - p_not
+    metrics['tenpai_auc'] = _rank_auc(tenpai_mask.numpy().ravel(), p_ten.ravel())
+    metrics['mean_p_tenpai'] = float(p_ten.mean())
     if struct_sh_hit:                                       # 结构头向听准确率（v2s 主攻指标）
         metrics['struct_shanten_acc'] = float(torch.cat(struct_sh_hit).mean())
         metrics['struct_shanten_ce'] = float(torch.cat(struct_sh_ce).mean())
@@ -565,6 +625,11 @@ def main():
             sched.load_state_dict(state['scheduler'])
         start_step = int(state.get('step', 0))
         best_val = float(state.get('best_val', float('inf')))
+        if int(state.get('val_score_version', 1)) != VAL_SCORE_VERSION:
+            # RM2：选型判据换代（v1→v2），旧 best_val 与新公式不可比，重置
+            print(f'[resume][warn] val_score 公式 v{state.get("val_score_version", 1)}'
+                  f' → v{VAL_SCORE_VERSION}，best_val 重置为 inf', flush=True)
+            best_val = float('inf')
         print(f'[resume] {args.resume} @ step {start_step}, best_val {best_val:.6f}', flush=True)
 
     def save(tag, step, val):
@@ -574,6 +639,7 @@ def main():
             'scheduler': sched.state_dict(),
             'step': step,
             'best_val': val,
+            'val_score_version': VAL_SCORE_VERSION,
             'config': vars(args),
         }
         torch.save(state, out_dir / f'{tag}.pth')
@@ -631,14 +697,17 @@ def main():
             if step % args.eval_every == 0 or step == end_step:
                 metrics = evaluate(net, eval_batch, device)
                 wait_ce = metrics['wait_ce_active']
-                val_score = metrics['alloc_ce'] + (0.5 * wait_ce if wait_ce == wait_ce else 0.0)
-                rec = {'step': step, 'stage': stage, 'eval': metrics, 'val_score': val_score}
+                val_score = val_score_of(metrics)          # RM2：v2 判据
+                rec = {'step': step, 'stage': stage, 'eval': metrics, 'val_score': val_score,
+                       'val_score_version': VAL_SCORE_VERSION}
                 log_f.write(json.dumps(rec) + '\n')
                 log_f.flush()
                 print(f"[eval] step {step}: alloc_ce {metrics['alloc_ce']:.4f} "
                       f"top1 {metrics['alloc_top1']:.4f} wait_ce {wait_ce:.4f} "
                       f"wait_hit1 {metrics['wait_hit1']:.4f} "
-                      f"tenpai_frac {metrics['tenpai_frac']:.3f}"
+                      f"tenpai_frac {metrics['tenpai_frac']:.3f} "
+                      f"tenpai_auc {metrics['tenpai_auc']:.4f} "
+                      f"meanP(ten) {metrics['mean_p_tenpai']:.4f}"
                       + (f" struct_sh_acc {metrics['struct_shanten_acc']:.4f}"
                          f" (ce {metrics['struct_shanten_ce']:.4f})"
                          if 'struct_shanten_acc' in metrics else ''), flush=True)

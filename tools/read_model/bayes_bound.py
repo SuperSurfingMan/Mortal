@@ -435,6 +435,11 @@ def model_probs(state_path, batch, device, bs=2048):
         sh_dist = np.zeros(alloc_p.shape[:2] + (8,))
         sh_dist[..., 0] = 1.0 - wait_p[..., NO_WAIT]
         sh_dist[..., 1] = wait_p[..., NO_WAIT]
+    # RM1（README §11.1）：forward 的 wait_probs 已是因子化读法，
+    # wait_p[..., NO_WAIT] = sigmoid(l34) = P(未听)——BCE 直接标定量，
+    # 与三档参考模型（本就按 P(听)·P(x|听) 构造）同口径。旧 softmax35
+    # 读法曾低估 A2b 的 tenpai AUC（0.9461 vs 0.9685），§9 的
+    # 「参考读牌器已达/超过 A2b」类结论必须以本口径重跑后再下。
     return alloc_p, wait_p, sh_dist, 1.0 - wait_p[..., NO_WAIT], cfg
 
 

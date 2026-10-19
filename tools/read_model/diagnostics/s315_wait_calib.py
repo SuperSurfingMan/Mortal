@@ -23,7 +23,8 @@ st = torch.load(str(CKPT),
                 map_location='cpu', weights_only=False)
 cfg = st['config']
 net = M2.build_model_v2s(conv_channels=cfg['conv_channels'], num_blocks=cfg['num_blocks'],
-                         with_aux=not cfg['no_aux']).to(DEV).eval()
+                         with_aux=not cfg['no_aux'],
+                         wait_head=cfg.get('wait_head', 'flat')).to(DEV).eval()
 net.load_state_dict(st['model'])
 files = sorted(glob.glob(VAL_GLOB,
                          recursive=True))

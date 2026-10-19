@@ -83,7 +83,8 @@ def main():
         builder = M2.build_model_v2s if kind == 'v2s' else M2.build_model_v2
         net = builder(conv_channels=cfg.get('conv_channels', 96),
                       num_blocks=cfg.get('num_blocks', 12),
-                      with_aux=not cfg.get('no_aux', False))
+                      with_aux=not cfg.get('no_aux', False),
+                      wait_head=cfg.get('wait_head', 'flat'))
     else:
         net = M.build_model(conv_channels=cfg.get('conv_channels', 96),
                             num_blocks=cfg.get('num_blocks', 12),

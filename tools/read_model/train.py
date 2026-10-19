@@ -212,12 +212,19 @@ def compute_loss(out, batch, loss_cfg: dict | None = None):
     denom = (w.sum() * 34.0).clamp(min=1e-8)
     l_alloc = -(ll * w[..., None]).sum() / denom
 
-    # ---- L_wait：听牌分布 CE，仅听牌目标 ----
-    # 注意：目标分布的零质量类会碰上硬掩码的 -inf logit，0 * -inf = NaN，
-    # 必须先把零质量位置清零再求和（只累加目标支撑集上的对数概率）。
-    logw = torch.log_softmax(out['wait_logits'], dim=-1)     # [B,3,35]
-    ll_wait = -(batch['wait'] * torch.where(
-        batch['wait'] > 0, logw, torch.zeros_like(logw))).sum(-1)   # [B,3]
+    # ---- L_wait：条件分布 CE（34 类 softmax34），仅听牌目标 ----
+    # RM4（README §11.1 输出层因子化）：旧写法是 35 类 softmax CE——L_wait
+    # （仅 14.6% 听牌目标激活）与 L_wait_tenpai BCE（全目标）抢同一个归一化：
+    # BCE 把 l34 钉在标定值，其余 34 个 logit 在 85.4% 非听牌目标上完全无约束，
+    # 配分函数噪声（sd 1.94）同时污染判别与标定（A2 事故的结构性根源）。
+    # 因子化后 tenpai 标量由 L_wait_tenpai 独占监督，本项只监督 34 类条件
+    # 分布，与 evaluate 的 cond_ce 同口径（A2b cond_ce 2.8961；RM4 验收
+    # ≤2.896 不退）。注意：目标分布的零质量类会碰上硬掩码的 -inf logit，
+    # 0 * -inf = NaN，必须先把零质量位置清零再求和（只累加目标支撑集）。
+    wait_t = batch['wait'][..., :D.NUM_TILES]                  # [B,3,34]
+    logw = torch.log_softmax(out['wait_logits'][..., :D.NUM_TILES], dim=-1)
+    ll_wait = -(wait_t * torch.where(wait_t > 0, logw,
+                                     torch.zeros_like(logw))).sum(-1)   # [B,3]
     active = batch['tenpai'] > 0.5
     if active.any():
         wa = w * active.float()
@@ -225,9 +232,8 @@ def compute_loss(out, batch, loss_cfg: dict | None = None):
         l_wait = (ll_wait * wa).sum() / wa.sum().clamp(min=1e-8)
     else:
         # 整批无听牌目标 → wait 损失为 0。注意 wait_logits 含硬掩码 -inf，
-        # 直接 sum()*0 会得 NaN（-inf*0）——v1/v2 时代的潜在 bug，512 大 batch
-        # 下几乎必有心听牌目标故未触发；小 batch（回归测试边界批）会暴露。
-        # 先把 -inf 清零再乘 0，保持计算图连通且数值为 0。
+        # 直接 sum()*0 会得 NaN（-inf*0）——先把 -inf 清零再乘 0，保持计算图
+        # 连通且数值为 0。
         l_wait = torch.nan_to_num(out['wait_logits'],
                                   posinf=0.0, neginf=0.0).sum() * 0.0
 
@@ -506,6 +512,10 @@ def main():
     ap.add_argument('--model', choices=('v1', 'v2', 'v2s'), default='v1',
                     help='v1=单帧；v2=空间+手切时序+结构估计三流融合；'
                          'v2s=v2+结构头专项（向听分布注入瓶颈 + 向听监督/一致性新损失）')
+    ap.add_argument('--wait-head', choices=('flat', 'tile'), default='tile',
+                    help='v2/v2s 的 H2 听牌头参数化（RM5，README §11.3）：flat=旧 '
+                         'tile-agnostic 头（A2b 及之前 ckpt 的架构，加载旧 ckpt 必须 '
+                         '用此项）；tile=逐牌列打分头（与 H1 同构，A2c 起新训练默认）')
     ap.add_argument('--no-aux', action='store_true')
     ap.add_argument('--w-shanten', type=float, default=DEFAULT_LOSS_CFG['w_shanten'],
                     help='aux 头向听 CE 权重（v2s 起默认 0.15，即 v1 的 0.05 ×3）')
@@ -579,18 +589,21 @@ def main():
     if args.model == 'v2':
         net = M2.build_model_v2(conv_channels=args.conv_channels,
                                num_blocks=args.num_blocks,
-                               with_aux=not args.no_aux).to(device)
+                               with_aux=not args.no_aux,
+                               wait_head=args.wait_head).to(device)
     elif args.model == 'v2s':
         net = M2.build_model_v2s(conv_channels=args.conv_channels,
                                  num_blocks=args.num_blocks,
-                                 with_aux=not args.no_aux).to(device)
+                                 with_aux=not args.no_aux,
+                                 wait_head=args.wait_head).to(device)
     else:
         net = M.build_model(conv_channels=args.conv_channels, num_blocks=args.num_blocks,
                             with_aux=not args.no_aux, pool=args.pool).to(device)
     n_params = sum(p.numel() for p in net.parameters())
     print(f'[model] {args.model} | 参数量 {n_params:,} | device={device} | fp32 | '
           f'channels={args.conv_channels} blocks={args.num_blocks} aux={not args.no_aux} '
-          f'pool={args.pool if args.model == "v1" else "-"}', flush=True)
+          f'pool={args.pool if args.model == "v1" else "-"} '
+          f'wait_head={args.wait_head if args.model != "v1" else "-"}', flush=True)
 
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # 结构头专项损失配置（CLI 可调；0 权重即关闭对应项，便于消融）

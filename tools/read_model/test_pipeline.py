@@ -1,6 +1,6 @@
 """读牌模型数据管线回归测试（对应 memory §14-35/36：断言设计意图 + 独立重算 + 数值门禁）。
 
-八层检查：
+十层检查（A~I，共 67 项；P0/P1 新增 H/I 两层口径与架构门禁）：
   A. 标签不变量（全部从**事件流独立重算**，不复用被测代码输出）：
      A1 手牌数   : 每家 alloc.sum() == 13 - 3*(吃+碰+大明杠+暗杠)（加杠净贡献 0）
      A2 136 守恒 : 四家手牌 + 河牌 + 手牌外 tile + 牌山 + 14(死庄) == 136
@@ -21,6 +21,11 @@
      G3 梯度流     : 新损失确实监督结构头向听头（v2 缺陷=该头零梯度，修复证明）；
                      边界批（无心听牌目标）总损失有限（顺带修 v1/v2 潜在 -inf*0 NaN）
      G4 v2s 小训练 : struct_shanten 未加权 CE 有限且下降；评测输出 struct_shanten_acc
+  H. P0 口径门禁（2026-10-19）：RM1 因子化读法恒等式（v1/v2s 真实前向）；
+     RM2 val_score v2 拒绝 A2 型塌缩（v1 判据复现盲区）；RM3 CE 拆分恒等式
+  I. P1 架构门禁（RM4/RM5）：tile 头前向/掩码/参数；逐列通路主导与
+     因子化隔离（tenpai 只过 tenpai_head）；CE34 损失；A2b 旧 ckpt 必须
+     走 flat 架构严格加载；flat 路径小训练 smoke
 
 用法：
     python tools/read_model/test_pipeline.py [--n-files 12]
@@ -691,6 +696,165 @@ def test_p0_criteria(files):
           and bool((ll_c[act] < ll[act]).all()))
 
 
+# --------------------------------------------------------------------------- #
+# I. P1 架构门禁（RM4 损失因子化 + RM5 逐牌 H2 头，README §11.1/§11.3）
+#    A2c = v2s + tile 头 + CE34 条件损失 + 200k 步（RM7）。旧 ckpt（A2b 及
+#    之前）架构 = flat 头，state_dict 与 tile 不兼容，加载必须走 flat 缺省。
+# --------------------------------------------------------------------------- #
+def test_p1_architecture(files):
+    print('\n== I. P1 架构门禁（RM4/RM5）==', flush=True)
+    import model_v2 as M2
+    import train as T
+    from model import factorized_wait_probs
+
+    NUM_TILES = D.NUM_TILES
+    torch.manual_seed(13)
+    B = 4
+    obs = torch.randn(B, 1012, 34)
+    unseen = torch.full((B, 34), 4.0)
+    tl = torch.zeros(B, 3, 26, 43)
+    tm = torch.zeros(B, 3, 26, dtype=torch.bool)
+    bias = torch.zeros(B, 3, 34)
+    bias[:, 0, 5] = float('-inf')          # 硬掩码（constraints hard_river_mask 口径）
+    bias[:, 1, 7] = -1.0                   # 软振听（hard_river_mask=False 口径）
+
+    net = M2.build_model_v2s(wait_head='tile')
+    out = net(obs, unseen, bias, tl, tm)
+    wl = out['wait_logits']
+    check('I1a tile 头输出形状 [B,3,35]', tuple(wl.shape) == (B, 3, 35))
+    check('I1b tile 头因子化：wait_probs == factorized(wait_logits)',
+          torch.allclose(out['wait_probs'], factorized_wait_probs(wl), atol=1e-6))
+    finite_logits = torch.isfinite(wl[..., :NUM_TILES])
+    check('I1c 硬掩码列概率严格 0、软掩码列概率显著低于均匀且 logit 有限；'
+          '除显式 -inf 掩码外 logit 全有限、wait_probs 全有限',
+          float(out['wait_probs'][0, 0, 5]) == 0.0
+          and 0.0 < float(out['wait_probs'][1, 1, 7]) < 0.02   # < 均匀 1/34=0.029
+          and bool(finite_logits[:, 1].all()) and bool(finite_logits[:, 2].all())
+          and bool(finite_logits[:, 0, [i for i in range(NUM_TILES) if i != 5]].all())
+          and bool(torch.isfinite(out['wait_probs']).all())
+          and bool(torch.isfinite(wl[..., NUM_TILES]).all()))
+    check('I1d 行和 1', torch.allclose(out['wait_probs'].sum(-1),
+                                     torch.ones(B, 3), atol=1e-5))
+    n_tile = sum(p.numel() for p in net.parameters())
+    n_flat = sum(p.numel() for p in M2.build_model_v2s(wait_head='flat').parameters())
+    check('I1e tile 头参数量不高于 flat 头（逐列打分不需要更大）',
+          n_tile <= n_flat, f'tile {n_tile:,} vs flat {n_flat:,}')
+
+    # ---- I2：梯度流（RM5 本体：cond logit_x 走逐列通路）----
+    # I2a：单列反传，obs 梯度集中在对应列（远端残余来自全局 s_belief 通路，
+    # 设计使然——「这手牌快听牌了」本就该影响每一列；RM5 的判据是逐列通路
+    # 主导：near 应数倍于 far；flat 头无逐列 h_x 通路，二者比例会趋近 1）
+    obs_g = torch.randn(2, 1012, 34, requires_grad=True)
+    net.zero_grad()
+    out_g = net(obs_g, unseen[:2], bias[:2], tl[:2], tm[:2])
+    out_g['wait_logits'][0, 0, 10].backward()
+    far = obs_g.grad[0, :, 25].abs().sum()
+    near = obs_g.grad[0, :, 10].abs().sum()
+    check('I2a 逐列通路主导：logit_10 对 obs 列 10 的梯度 ≫ 远端列 25',
+          float(near) > 3.0 * float(far) and float(near) > 0,
+          f'near {float(near):.2e} far {float(far):.2e} '
+          f'比例 {float(near / max(float(far), 1e-12)):.1f}x')
+    # I2b：tenpai 标量与 cond 头结构隔离（RM4 因子化的结构性保证）——
+    # l34 反传只经过 tenpai_head，不经过逐列 h2/h2_out
+    net.zero_grad()
+    out2 = net(obs, unseen, bias, tl, tm)
+    out2['wait_logits'][0, 0, NUM_TILES].backward()
+    g_tp = float(net.tenpai_head.weight.grad.abs().sum())
+    g_h2 = (0.0 if net.h2.weight.grad is None
+            else float(net.h2.weight.grad.abs().sum()))
+    check('I2b 因子化隔离：tenpai logit 只过 tenpai_head（h2 逐列头梯度为 0）',
+          g_tp > 0.0 and g_h2 == 0.0, f'tenpai {g_tp:.2e} h2 {g_h2:.2e}')
+    # I2c：cond logit 反传，逐列头 h2 与 tenpai_head 均有/无对应梯度
+    net.zero_grad()
+    out3 = net(obs, unseen, bias, tl, tm)
+    out3['wait_logits'][..., :NUM_TILES].sum().backward()
+    g_h2b = float(net.h2.weight.grad.abs().sum())
+    g_tp2 = (0.0 if net.tenpai_head.weight.grad is None
+             else float(net.tenpai_head.weight.grad.abs().sum()))
+    check('I2c cond 反传激活逐列头 h2、不碰 tenpai_head',
+          g_h2b > 0.0 and g_tp2 == 0.0, f'h2 {g_h2b:.2e} tenpai {g_tp2:.2e}')
+
+    # ---- I3：RM4 条件损失在 tile 头上有限且分量齐备 ----
+    samples, _ = D.replay_file(files[0])
+    batch = T.collate(samples[:32])
+    wb = T.wait_bias_of(batch)
+    out4 = net(batch['obs'], batch['unseen'], wb, batch['tl_tokens'], batch['tl_mask'])
+    loss_v, parts = T.compute_loss(out4, batch)
+    check('I3a tile 头 compute_loss 全分量有限',
+          all(np.isfinite(v) for k, v in parts.items() if k != 'loss')
+          and np.isfinite(parts['loss']),
+          str({k: round(float(v), 4) for k, v in parts.items()}))
+    # I3b：整批无听牌目标时 wait 损失为 0 且全部分量有限——CE34 改写后重验
+    # 旧代码注释里的潜在 bug 路径（-inf*0=NaN，小 batch 暴露）
+    batch_nt = dict(batch)
+    batch_nt['tenpai'] = torch.zeros_like(batch['tenpai'])
+    loss_nt, parts_nt = T.compute_loss(out4, batch_nt)
+    check('I3b 全非听牌批 wait 损失为 0 且全分量有限（NaN 防护仍有效）',
+          float(parts_nt['wait']) == 0.0
+          and all(np.isfinite(v) for v in parts_nt.values())
+          and np.isfinite(parts_nt['loss']),
+          f'wait {float(parts_nt["wait"])}')
+
+    # ---- I4：旧 ckpt（A2b）必须走 flat 架构加载 ----
+    a2b = Path('/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2b/best.pth')
+    if a2b.exists():
+        st = torch.load(a2b, map_location='cpu', weights_only=False)
+        cfg = st.get('config', {})
+        net_flat = M2.build_model_v2s(
+            conv_channels=cfg.get('conv_channels', 96),
+            num_blocks=cfg.get('num_blocks', 12),
+            with_aux=not cfg.get('no_aux', False),
+            wait_head=cfg.get('wait_head', 'flat'))
+        try:
+            net_flat.load_state_dict(st['model'])          # strict=True
+            ok_flat = True
+        except Exception as exc:                            # noqa: BLE001
+            ok_flat = False
+            print(f'    flat 加载失败: {exc}', flush=True)
+        check('I4a A2b 旧 ckpt 以 flat 架构严格加载成功（默认值兼容）', ok_flat)
+        net_tile = M2.build_model_v2s(
+            conv_channels=cfg.get('conv_channels', 96),
+            num_blocks=cfg.get('num_blocks', 12),
+            with_aux=not cfg.get('no_aux', False), wait_head='tile')
+        try:
+            net_tile.load_state_dict(st['model'])
+            mismatch = False
+        except Exception:                                   # noqa: BLE001
+            mismatch = True
+        check('I4b tile 架构拒绝 A2b state_dict（证明默认 flat 的必要性）', mismatch)
+    else:
+        check('I4 A2b ckpt 不在仓库（跳过兼容断言）', True)
+
+    # ---- I5：flat 路径小训练 smoke（旧架构仍可训，CE34 不回退能力）----
+    import shutil
+    import subprocess
+    tmp_out = '/tmp/read_model_test_train_flat'
+    shutil.rmtree(tmp_out, ignore_errors=True)
+    cmd = [sys.executable, str(Path(__file__).parent / 'train.py'),
+           '--train-globs', files[0].rsplit('/', 1)[0] + '/*.json.gz',
+           '--val-globs', files[0].rsplit('/', 1)[0] + '/*.json.gz',
+           '--out-dir', tmp_out, '--steps', '60', '--batch-size', '128',
+           '--model', 'v2s', '--wait-head', 'flat', '--num-workers', '2',
+           '--stage-schedule', '1:15,2:15,3:30',
+           '--eval-samples', '1024', '--eval-every', '30', '--log-every', '30',
+           '--max-files', '12', '--seed', '7']
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        log = [json.loads(l) for l in open(Path(tmp_out) / 'train_log.jsonl')]
+        evals = [e for e in log if 'eval' in e]
+        check('I5a flat 小训练产出两条评测', len(evals) >= 2, r.stderr[-300:])
+        if len(evals) >= 2:
+            first, last = evals[0]['eval'], evals[-1]['eval']
+            check('I5b flat+CE34 学习门禁：alloc_ce 下降 >= 0.02',
+                  last['alloc_ce'] <= first['alloc_ce'] - 0.02,
+                  f"{first['alloc_ce']:.4f} -> {last['alloc_ce']:.4f}")
+            check('I5c val_score v2 输出（AUC 项在场）',
+                  'val_score' in evals[-1] and 'tenpai_auc' in last,
+                  f"val_score {evals[-1].get('val_score')}")
+    except FileNotFoundError:
+        check('I5 flat 小训练 smoke（train_log 缺失）', False, r.stderr[-300:])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--n-files', type=int, default=12)
@@ -712,6 +876,7 @@ def main():
     test_model_and_learning(files)
     test_structure_head_special(files)
     test_p0_criteria(files)
+    test_p1_architecture(files)
 
     print('\n================ 结果 ================')
     if FAILS:

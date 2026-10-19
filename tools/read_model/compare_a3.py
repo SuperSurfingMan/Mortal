@@ -132,11 +132,13 @@ def load_net_alloc_wait(path, b, device):
     if kind == 'v2':
         net = build_model_v2(conv_channels=cfg.get('conv_channels', 96),
                              num_blocks=cfg.get('num_blocks', 12),
-                             with_aux=not cfg.get('no_aux', False))
+                             with_aux=not cfg.get('no_aux', False),
+                             wait_head=cfg.get('wait_head', 'flat'))
     elif kind == 'v2s':
         net = build_model_v2s(conv_channels=cfg.get('conv_channels', 96),
                               num_blocks=cfg.get('num_blocks', 12),
-                              with_aux=not cfg.get('no_aux', False))
+                              with_aux=not cfg.get('no_aux', False),
+                              wait_head=cfg.get('wait_head', 'flat'))
     else:
         net = build_model(conv_channels=cfg.get('conv_channels', 96),
                           num_blocks=cfg.get('num_blocks', 12),

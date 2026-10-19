@@ -179,16 +179,25 @@ class StructureHead(nn.Module):
 
 
 class ReadNetV2(nn.Module):
-    """v2 前向：obs/unseen/wait_bias + tl_tokens/tl_mask -> 与 v1 一致的输出。"""
+    """v2 前向：obs/unseen/wait_bias + tl_tokens/tl_mask -> 与 v1 一致的输出。
+
+    ``wait_head``（H2 听牌头参数化，RM4/RM5，README §11.1/§11.3）：
+    ``flat`` = 旧 tile-agnostic 头（34 个 logit 经同一 128 维瓶颈）；
+    ``tile`` = 逐牌列打分头（与 H1 同构，每列独立打分 + tenpai 标量头）。
+    输出接口（含 ONNX）两种模式完全一致。
+    """
 
     def __init__(self, version: int = 4, conv_channels: int = 96, num_blocks: int = 12,
                  with_aux: bool = True, tl_features: int = 43, tl_len: int = 26,
-                 d_time: int = 64, struct_shanten_belief: bool = False):
+                 d_time: int = 64, struct_shanten_belief: bool = False,
+                 wait_head: str = 'flat'):
         super().__init__()
         self.version = version
         self.with_aux = with_aux
         self.tl_features = tl_features
         self.struct_shanten_belief = struct_shanten_belief
+        assert wait_head in ('flat', 'tile'), wait_head
+        self.wait_head = wait_head
         in_channels = obs_shape(version)[0]
 
         # 空间流（与 v1 完全同构，保证可比）
@@ -211,10 +220,21 @@ class ReadNetV2(nn.Module):
         self.h1 = GroupedLinear(3, h1_in, 128)
         self.h1_out = GroupedLinear(3, 128, 5)
 
-        # H2：听牌头——输入 = 全局 g + 时序 + 结构瓶颈 + H1 期望张数
-        h2_in = conv_channels + d_time + self.S + NUM_TILES
-        self.h2 = GroupedLinear(3, h2_in, 128)
-        self.h2_out = GroupedLinear(3, 128, NUM_WAIT_CLASSES)
+        # H2：听牌头（两种参数化，RM4/RM5，README §11.1/§11.3）
+        if wait_head == 'tile':
+            # RM5 逐牌列打分头（与 H1 同构）：每列输入
+            # [h_x(C), e_T, s_belief(S), exp_counts_x, unseen_x, wait_bias_x]，
+            # 逐列独立打分。证据（§11.3 冻结骨干探针）：旧 flat 头 tile-agnostic
+            # （34 个 logit 只经一个 128 维瓶颈交互），只加逐列 h_x 即
+            # cond_ce −0.152、hit@1 +35% 相对、立直 hit@1 +34% 相对；且探针
+            # 1 epoch 就超过 A2b 端到端 43k 步。tenpai 标量走独立小头
+            # （P(未听)=sigmoid(l34)，与 L_wait_tenpai BCE 口径一致=RM4）。
+            self.h2 = GroupedLinear(3, conv_channels + d_time + self.S + 3, 128)
+            self.h2_out = GroupedLinear(3, 128, 1)            # 每列一个 cond logit
+            self.tenpai_head = GroupedLinear(3, s_in + self.S, 1)
+        else:
+            self.h2 = GroupedLinear(3, conv_channels + d_time + self.S + NUM_TILES, 128)
+            self.h2_out = GroupedLinear(3, 128, NUM_WAIT_CLASSES)
 
         # H3：辅助头（下一打/向听/立直/鸣牌）——输入 = 全局 g + 时序 + 结构瓶颈
         self.h3 = GroupedLinear(3, s_in + self.S, 128)
@@ -258,12 +278,28 @@ class ReadNetV2(nn.Module):
         exp_counts = (alloc_probs * k_idx).sum(-1)                      # [B,3,34]
 
         # ---- H2：听牌头 ----
-        x2 = torch.cat([z, s_belief, exp_counts], dim=-1)               # [B,3,*]
-        x2 = F.gelu(self.h2(x2))
-        wait_logits = self.h2_out(x2)
-        # wait_bias 是逐牌 [B,3,34] 的加性偏置；第 35 类「未听」不受 tile 级
-        # 掩码影响，补 0。
-        wait_logits = wait_logits + F.pad(wait_bias, (0, 1))            # [B,3,35]
+        if self.wait_head == 'tile':
+            # RM5 逐列打分：列特征 = h_x + 全局（e_T/s_belief 广播）+ 列特定三项。
+            # wait_bias 双通路：作输入特征（tanh 压到 [-1,0]——constraints 的
+            # 值域是 {0, -inf}（硬掩码）/ {0, -1}（软振听），tanh 后三档可辨
+            # 且有界，防 -inf 经 Linear 正权重侧放大成 inf/NaN）+ 直接加在
+            # cond logit 上（保证硬掩码列概率严格为 0）。
+            ec_j = exp_counts[..., None]                                # [B,3,34,1]
+            un_j = unseen[:, None, :, None].expand(B, 3, NUM_TILES, 1)  # [B,3,34,1]
+            bias_j = torch.tanh(wait_bias)[..., None]                   # [B,3,34,1]
+            x2 = torch.cat([h_j, e_T_b, s_b, ec_j, un_j, bias_j], dim=-1)
+            x2 = F.gelu(self.h2(x2))
+            cond_logits = self.h2_out(x2).squeeze(-1) + wait_bias       # [B,3,34]
+            tenpai_logit = self.tenpai_head(
+                torch.cat([z, s_belief], dim=-1)).squeeze(-1)           # [B,3]
+            wait_logits = torch.cat([cond_logits, tenpai_logit[..., None]], dim=-1)
+        else:
+            x2 = torch.cat([z, s_belief, exp_counts], dim=-1)           # [B,3,*]
+            x2 = F.gelu(self.h2(x2))
+            wait_logits = self.h2_out(x2)
+            # wait_bias 是逐牌 [B,3,34] 的加性偏置；第 35 类「未听」不受 tile 级
+            # 掩码影响，补 0。
+            wait_logits = wait_logits + F.pad(wait_bias, (0, 1))        # [B,3,35]
         # RM1（README §11.1）因子化读法：p34 = sigmoid(l34) = P(未听)，即
         # L_wait_tenpai BCE 直接标定的量；p_x = P(听)·softmax34(l_x)。
         # 旧 softmax35 读法把 34 个牌列 logit 的配分函数噪声混进 P(听)
@@ -293,17 +329,24 @@ class ReadNetV2(nn.Module):
 
 def build_model_v2(version: int = 4, conv_channels: int = 96, num_blocks: int = 12,
                    with_aux: bool = True, tl_features: int = 43,
-                   tl_len: int = 26) -> ReadNetV2:
+                   tl_len: int = 26, wait_head: str = 'flat') -> ReadNetV2:
     return ReadNetV2(version=version, conv_channels=conv_channels,
                      num_blocks=num_blocks, with_aux=with_aux,
-                     tl_features=tl_features, tl_len=tl_len)
+                     tl_features=tl_features, tl_len=tl_len, wait_head=wait_head)
 
 
 def build_model_v2s(version: int = 4, conv_channels: int = 96, num_blocks: int = 12,
-                    with_aux: bool = True, tl_features: int = 43,
-                    tl_len: int = 26) -> ReadNetV2:
-    """v2s = v2 + 向听分布注入结构瓶颈（结构头专项，见模块 docstring）。"""
+                    with_aux: bool = True, tl_features: int = 43, tl_len: int = 26,
+                    struct_shanten_belief: bool = True,
+                    wait_head: str = 'flat') -> ReadNetV2:
+    """v2s = v2 + 向听分布注入结构瓶颈（结构头专项，见模块 docstring）。
+
+    ``wait_head``：``flat``（默认）= 旧 H2（tile-agnostic，A2b 及之前所有
+    ckpt 的架构）；``tile`` = RM5 逐牌列打分头（A2c 起）。旧 ckpt 加载必须
+    显式/缺省用 ``flat``——两者 state_dict 键形状不兼容。
+    """
     return ReadNetV2(version=version, conv_channels=conv_channels,
                      num_blocks=num_blocks, with_aux=with_aux,
                      tl_features=tl_features, tl_len=tl_len,
-                     struct_shanten_belief=True)
+                     struct_shanten_belief=struct_shanten_belief,
+                     wait_head=wait_head)

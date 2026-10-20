@@ -272,7 +272,12 @@ def compute_loss(out, batch, loss_cfg: dict | None = None):
     }
 
     # ---- L_struct（v2/v2s）：搭子构造软分布 + 形制 + 向听专项 ----
-    if 'struct_counts' in batch:
+    # 门控按**模型输出**而非 batch 字段：batch 的 struct_counts 标签所有模型
+    # 都有（collate 无条件汇总），但 v1 无结构流、out 里没有 struct_count_logits
+    # ⇒ 旧门控 `if 'struct_counts' in batch` 对 v1 恒真 → KeyError，v1 训练
+    # 从 eb4f660（10-17 入库）起就崩，且被 E 层测试的陈旧 log 假 PASS 蒙蔽
+    # 三次（2026-10-20 修，坑 57）。
+    if 'struct_count_logits' in out:
         # 软 CE：标签是最小向听分解上的边际直方图（保留真实歧义），
         # 对 7 个结构计数分别求 -Σ_k p_k log q_k 再平均。
         logc = torch.log_softmax(out['struct_count_logits'], dim=-1)   # [B,3,7,5]
@@ -621,12 +626,22 @@ def main():
         'struct_balance': not args.no_struct_balance,
     }
     print(f'[loss] cfg={loss_cfg}', flush=True)
-    warmup = max(1, int(args.warmup_frac * total_steps))
+    # LR 基准统一为**绝对步数**（resume 安全，2026-10-20 必修）：
+    # ckpt 里 scheduler.last_epoch 恢复为绝对步数（如 resume@103000），若 cosine
+    # 分母用剩余量 total_steps（97000），则 t>1 被 min() 钳制 ⇒ lr 恒 0、参数
+    # 静默冻结（loss 照常打印、best 照常保存，极具迷惑性；10-20 01:40 在
+    # 103k 处续训时首发，此前所有续训 start_step < 剩余量故未触发）。
+    # 用绝对终点后，重启不改变 LR 日程（与无重启理想曲线逐位一致）。
+    # start_step 在下方 resume 段才确定 ⇒ 容器晚期绑定；sched 必须在
+    # opt.load_state_dict 之前构造（否则 base_lrs 会读成恢复后的 lr 而非 3e-4）。
+    lr_ctx = {'abs_total': total_steps}
 
     def lr_lambda(step):
+        abs_total = lr_ctx['abs_total']
+        warmup = max(1, int(args.warmup_frac * abs_total))
         if step < warmup:
             return (step + 1) / warmup
-        t = (step - warmup) / max(1, total_steps - warmup)
+        t = (step - warmup) / max(1, abs_total - warmup)
         return 0.5 * (1 + math.cos(math.pi * min(t, 1.0)))
 
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
@@ -642,6 +657,7 @@ def main():
             sched.load_state_dict(state['scheduler'])
         start_step = int(state.get('step', 0))
         best_val = float(state.get('best_val', float('inf')))
+        lr_ctx['abs_total'] = start_step + total_steps   # LR 基准改为绝对终点
         if int(state.get('val_score_version', 1)) != VAL_SCORE_VERSION:
             # RM2：选型判据换代（v1→v2），旧 best_val 与新公式不可比，重置
             print(f'[resume][warn] val_score 公式 v{state.get("val_score_version", 1)}'

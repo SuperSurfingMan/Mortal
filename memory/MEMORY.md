@@ -491,7 +491,7 @@ R-P 双口径）+ RM16（`order_metrics.py`）已实现，三份报告 + Bayes �
 |---|---|---|
 | **P0** ✅ | 读牌 RM1~RM3 + RM16（零训练成本）——**2026-10-19 已完成** | 实现与验收全录见 `tools/read_model/README.md` **§13.3**：因子化读法收口模型层、val_score v2（H2 门禁验证 A2 型塌缩必被拒）、CE 拆分/决策分层/R-P 双口径、`order_metrics.py`（RM12~RM15 判据，A2b 基线全 FAIL 存档）。复跑改判：net tenpai AUC 显著胜 rule；⑦「precision/recall bug」实证否决（0.1087 确为 recall，chiitoi precision 0.413，桶 5 从不预测）|
 | **P0** | S6b+S6c 合并 v6 注入 | 读牌后验 + SP 盲区 acceptance/牌型潜力；先 30k 步探针（~2h，门禁 holdout/行为画像）；种子块 260000/270000；通过后再开正式轮。**~~注入前必须先重标定 P(听牌)~~ → 已由 RM1 解决**（`tools/read_model/README.md` §11.1：sigmoid 口径标定比值 0.998，可直接当概率注入，防守门控不会全时开）。建议 RM1 完成后再冻结注入特征口径 |
-| **P1** ⏳ | 读牌 RM4~RM7 + RM12~RM15（需一次重训）——**RM4+RM5+RM7 已实现，A2c 200k 训练中**（tmux `read_a2c`，~16h；README §13.4） | 同上 §13.2。RM4 输出层因子化（CE34 条件损失 + tenpai 独立头）、RM5 H2 逐牌打分头（`--wait-head tile`，参数 1.371M→1.347M）、RM7 扩步数 50k→200k+NW16（SP 表开关越界未做）已落地；验收 hit@1≥0.16、立直 hit@1≥0.135、val_score<2.0924。**RM6/RM12~RM15 未动**（顺序通路须同做，列 P1b） |
+| **P1** ⏳ | 读牌 RM4~RM7 + RM12~RM15（需一次重训）——**RM4+RM5+RM7 已实现，A2c 200k 训练中**（tmux `read_a2c`，迁 RTX 8000；README §13.4） | 同上 §13.2。RM4 输出层因子化（CE34 条件损失 + tenpai 独立头）、RM5 H2 逐牌打分头（`--wait-head tile`，参数 1.371M→1.347M）、RM7 扩步数 50k→200k+NW16（SP 表开关越界未做）已落地；验收 hit@1≥0.16、立直 hit@1≥0.135、val_score<2.0924。**RM6/RM12~RM15 未动**（顺序通路须同做，列 P1b）。10-20 凌晨运维：修复 resume 后 lr=0 静默冻结（cosine 基准改绝对步数，坑 58 + I6 门禁）与 v1 训练必崩（struct 门控写错，且 E 层门禁曾靠陈旧 log 假 PASS 三次，坑 57）；A2c（v2s）不受影响 |
 | **P1** | 数据扩窗 2019+ | 与 GRP 重训、按年份审计同步做；主模型 holdout 仍用 202609+ |
 | **P1** | 读牌路径 C 注入 | B0 立直振听/吞吐（`with_sp_tables`）→ B1 限域注入（防守/全决策两档）→ B2 ladder 双向 ≥5000 sets 判定 |
 | **P2** | 外部锚点 akochan | 需 JRE + `AKOCHAN_DIR`/`AKOCHAN_TACTICS`；人类牌谱不能当 arena 对手（无 seed） |

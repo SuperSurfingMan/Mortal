@@ -25,7 +25,8 @@
      RM2 val_score v2 拒绝 A2 型塌缩（v1 判据复现盲区）；RM3 CE 拆分恒等式
   I. P1 架构门禁（RM4/RM5）：tile 头前向/掩码/参数；逐列通路主导与
      因子化隔离（tenpai 只过 tenpai_head）；CE34 损失；A2b 旧 ckpt 必须
-     走 flat 架构严格加载；flat 路径小训练 smoke
+     走 flat 架构严格加载；flat 路径小训练 smoke；resume 后 lr>0 且与
+     绝对基准一致（防 cosine 钳零静默冻结，2026-10-20 事故门禁）
 
 用法：
     python tools/read_model/test_pipeline.py [--n-files 12]
@@ -387,6 +388,12 @@ def test_structure_and_timeline(files):
 
 def test_model_and_learning(files, tmp_out='/tmp/read_model_test_train'):
     print('\n== E. 模型数值门禁与小训练学习门禁 ==', flush=True)
+    # 必须清空 tmp_out：train.py 的 train_log.jsonl 是 append 模式，subprocess
+    # 崩溃时会留下空/半截文件，旧 log 残留会让「两条评测」断言读到上一次运行
+    # 的数字而假 PASS（2026-10-20 实证：E5-E8 曾连续三次靠 10-16 的陈旧 log
+    # 蒙混过关，坑 57）。G4/I5/I6 都有 rmtree，E 层漏了。
+    import shutil
+    shutil.rmtree(tmp_out, ignore_errors=True)
     torch.manual_seed(0)
     net = M.build_model()
     B = 4
@@ -444,6 +451,10 @@ def test_model_and_learning(files, tmp_out='/tmp/read_model_test_train'):
            '--eval-samples', '1024', '--eval-every', '30', '--log-every', '30',
            '--max-files', '12', '--seed', '7']
     r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not Path(tmp_out, 'train_log.jsonl').exists():
+        check('E5 小训练正常退出（returncode=0 且产出 log）', False,
+              f'rc={r.returncode} ' + r.stderr[-400:])
+        return
     log = [json.loads(l) for l in open(Path(tmp_out) / 'train_log.jsonl')]
     evals = [e for e in log if 'eval' in e]
     if len(evals) < 2:
@@ -578,6 +589,10 @@ def test_structure_head_special(files, tmp_out='/tmp/read_model_test_train_v2s')
            '--eval-samples', '1024', '--eval-every', '30', '--log-every', '30',
            '--max-files', '12', '--seed', '7']
     r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not Path(tmp_out, 'train_log.jsonl').exists():
+        check('G4a v2s 小训练正常退出（returncode=0 且产出 log）', False,
+              f'rc={r.returncode} ' + r.stderr[-400:])
+        return
     log = [json.loads(l) for l in open(Path(tmp_out) / 'train_log.jsonl')]
     recs = [e for e in log if 'struct_shanten_raw' in e]
     check('G4a v2s 小训练产出结构头损失记录', len(recs) >= 2, r.stderr[-300:])
@@ -853,6 +868,52 @@ def test_p1_architecture(files):
                   f"val_score {evals[-1].get('val_score')}")
     except FileNotFoundError:
         check('I5 flat 小训练 smoke（train_log 缺失）', False, r.stderr[-300:])
+
+    # ---- I6：resume 后 LR 非零门禁（2026-10-20 必修，静默冻结事故）----
+    # 事故回放：A2c 在 103k 处按「剩余量」续训时，scheduler.last_epoch（恢复为
+    # 绝对步数 103000）> cosine 分母（剩余量 97000）⇒ t>1 被钳制 ⇒ lr 恒 0，
+    # 参数静默冻结 1000+ 步（loss 照常打印、best 照常保存，毫无异常表象）。
+    # 修复：lr_lambda 基准改为绝对终点（start+remaining）。本门禁用最小复现：
+    # 30 步存 ckpt → resume 30 步，断言 lr>0 且与 lr_lambda(last_epoch) 一致。
+    import math
+    import shutil
+    import subprocess
+    tmp_r = '/tmp/read_model_test_train_resume'
+    shutil.rmtree(tmp_r, ignore_errors=True)
+    base_cmd = [sys.executable, str(Path(__file__).parent / 'train.py'),
+                '--train-globs', files[0].rsplit('/', 1)[0] + '/*.json.gz',
+                '--val-globs', files[0].rsplit('/', 1)[0] + '/*.json.gz',
+                '--out-dir', tmp_r, '--steps', '30', '--batch-size', '128',
+                '--num-workers', '2', '--stage-schedule', '3:30',
+                '--eval-samples', '1024', '--eval-every', '30', '--log-every', '10',
+                '--max-files', '4', '--seed', '7']
+    r1 = subprocess.run(base_cmd, capture_output=True, text=True)
+    if not Path(tmp_r, 'last.pth').exists():
+        check('I6a 基线 30 步小训练产出 last.pth', False, r1.stderr[-300:])
+        return
+    check('I6a 基线 30 步小训练产出 last.pth', True)
+    r2 = subprocess.run(base_cmd + ['--resume', str(Path(tmp_r, 'last.pth'))],
+                        capture_output=True, text=True)
+    recs = [json.loads(l) for l in open(Path(tmp_r) / 'train_log.jsonl')]
+    steps = [e for e in recs if 'lr' in e]
+    if len(steps) < 2:
+        check('I6b resume 后继续训练并记录 lr', False, r2.stderr[-300:])
+        return
+    rec0 = steps[-2]                    # resume 后第一条 step 记录
+    first_lr, last_lr = rec0['lr'], steps[-1]['lr']
+    # 手算对照：abs_total = 30 + 30 = 60, warmup = max(1, 3) = 3
+    at, w = 60, max(1, int(0.05 * 60))
+    s0 = rec0['step']
+    expect = ((s0 + 1) / w if s0 < w
+              else 0.5 * (1 + math.cos(math.pi * min((s0 - w) / max(1, at - w), 1.0))))
+    check('I6b resume 后 lr>0（防 cosine 钳零静默冻结；末值=0 是 cosine 到终点的正常行为）',
+          first_lr > 0.0,
+          f'lr {first_lr:.2e} -> {last_lr:.2e}')
+    check('I6c resume 后 lr 与绝对基准 lr_lambda(step) 一致',
+          abs(first_lr - expect * 3e-4) < 1e-6,
+          f'step {s0}: {first_lr:.3e} vs 期望 {expect * 3e-4:.3e}')
+    check('I6d resume 后 step 连续（30→60）', steps[-1]['step'] == 60,
+          f"末条 step {steps[-1].get('step')}")
 
 
 def main():

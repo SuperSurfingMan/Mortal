@@ -3,6 +3,15 @@
 > 目标：拉取天凤目前可获取的对局数据，按质量过滤，转为 mjai 格式，落盘到 `C:\Maj\Mortal\dataset\`，供 Mortal 训练使用。
 > 本文所有端点与格式均为 2026-10-01 实测验证，非猜测。
 > **2026 YTD 全量采集已完成并通过全量逐文件校验，最终状态与结果见 §8（2026-10-03）。**
+>
+> **2026-10-20 补注（本机视角之外的服务器侧进展）**：本文的「待执行 / 暂不转换 / 需解决
+> exFAT 簇浪费」等结论均以**本机 Windows（`C:\Maj\Mortal`）**为时点。在训练服务器
+> （`/mnt/data8/mortal/Mortal`，Linux NTFS 卷）上这些前置已全部解决：HF 18 个年度包
+> （16.86 GiB）已下载并 `merge-hf` 展开 + `prune --apply` → `dataset/mjai/houou4/` =
+> **2,630,640 局 / 213 个月 / 16 GB（200902~202610）**；`validate_logs` 全量 0 错误 +
+> `GameplayLoader` 回放计分校验通过；2026 自建数据的 `names` 缺失已由
+> `repair_names.py` 修复（补丁树 `dataset/mjai/houou4_names/`，130,407 文件）。当前训练
+>窗 = 2022-01~2026-08 共 813,145 局。**数据侧现状以 `memory/MEMORY.md` §2 为准。**
 
 ---
 
@@ -16,7 +25,7 @@
 | 4 | jansou 转换库安装 | ✅ 完成（jansou 0.14.0，装入默认 Anaconda 环境） |
 | 5 | 管线脚本：抓取索引 → 过滤 → 下载 → 转换 → 验证 | ✅ 完成；**2026 YTD 全量跑通（130,407 局，下载/转换失败均为 0）** |
 | 6 | 历史年度归档（2009~2025）接入 | ⚠️ 年度 zip 已 404；改用滚动归档，**2026 YTD 索引已抓全（130,407 局）**；2009~2025 走 HF 年度包（§5.7） |
-| 7 | libriichi 编译与数据校验闭环 | ⬜ 待执行（cargo 仍未安装，§5.6） |
+| 7 | libriichi 编译与数据校验闭环 | ✅ **服务器侧已完成**（10-06~07：rustc/cargo 1.99.0，`libriichi.so` + CLI 编译通过；`validate_logs` 全量 2.63M 局 0 错误 + 回放计分校验）。本机 Windows 仍未装 cargo（§5.6 对将来本机复用时仍有效） |
 | 8 | 规模化采集与进度管理 | ✅ 完成（2026 YTD 全量；实际结果见 §8） |
 
 ---
@@ -338,6 +347,7 @@ python tools/tenhou_data/tenhou_pipeline.py check --glob "dataset/mjai/houou4/20
   - 背景：Mortal 训练加载器只吃散装 `.json.gz`（gzip + glob，见 `libriichi/src/dataset/gameplay.rs` 的 `load_gz_log_files`），**不支持 zstd / tar**
   - 故 `merge-hf` / `merge-hf-batch`（解压 zst → gzip 落盘）**暂不使用**；`D:\tenhou_mjai` 已整体删除，计划任务 `Mortal-Tenhou-MergeHF` 已注销
   - 若将来要训练历史数据：需选簇小（NTFS 4 KiB）的卷承载散文件，或在 D 上放动态 VHDX（内建 NTFS）后挂载为盘符
+  - **该决策已被服务器侧执行取代（2026-10-07）**：HF 18 包下载到服务器（NTFS）后 `merge-hf` 展开 + `prune --apply`，散装 `.json.gz` 全部落服务器 `dataset/mjai/houou4/`（2,630,640 局 / 16 GB），本机 D 盘原包不再需要参与训练
 - 2026 数据不受影响：仍走自建管线，散装 `.json.gz` 落 C 盘 NTFS（簇 4 KiB，无膨胀）
 
 ---
@@ -359,8 +369,8 @@ raw `.xml.gz` 平均 **7.59KB**（σ=1.04KB）、mjai `.json.gz` 平均 **4.84KB
 实测与早期预估（129,475 局、1.53 GiB）几乎一致，偏差 <1%。
 
 后续策略：
-- 训练初期几十万局凤凰卓数据即可跑通 GRP + 离线阶段（**2026 YTD 130,407 局已达标**），不必等全部历史
-- 历史 2009~2025 若要参与训练：需先装 cargo 跑通 §5.6 闭环，再解决 exFAT 簇浪费（换 NTFS 卷，或在 D 盘挂动态 VHDX）；当前仅在 D 盘保留年度原包
+- 训练初期几十万局凤凰卓数据即可跑通 GRP + 离线阶段（**2026 YTD 130,407 局已达标**），不必等全部历史——**已超额完成（服务器侧 2,630,640 局全量在池，训练窗 813,145 局）**
+- 历史 2009~2025 若要参与训练：需先装 cargo 跑通 §5.6 闭环，再解决 exFAT 簇浪费（换 NTFS 卷，或在 D 盘挂动态 VHDX）；当前仅在 D 盘保留年度原包——**服务器侧已解决（见 §5.7 末条与顶部 10-20 补注）**；当前数据侧动作已转向「2019+ 扩窗 + GRP 重训」（MEMORY.md §4.2，P1）
 - 2026 年后续新增对局：直接重跑 `all` 即可增量补齐（索引→清单→下载→转换自动跳过已完成项）
 
 ---
@@ -413,7 +423,7 @@ raw `.xml.gz` 平均 **7.59KB**（σ=1.04KB）、mjai `.json.gz` 平均 **4.84KB
 | CSV ↔ raw ↔ mjai 三方集合一致 | — | ✅ 缺失 0、孤儿 0、差集 0 |
 | CSV 字段合法性（rule 全为 `四鳳南喰赤`、log_id 正则、players/src 非空） | 130,407 行 | ✅ 异常 0 |
 | jansou 抽样回放计分（`check --sample 1000`） | 1,000 局 | ✅ 结构 1000/1000、回环解析 1000/1000、和牌复核 **8932/8932** |
-| libriichi `validate_logs` + `GameplayLoader`（§5.6） | 全量 | ⬜ **未执行**（cargo 仍未安装） |
+| libriichi `validate_logs` + `GameplayLoader`（§5.6） | 全量 | ✅ **服务器侧已执行**（10-07：全量 2,630,640 局 `validate_logs` 0 错误 + 回放计分校验通过；本机 Windows 仍未装 cargo） |
 
 **结论**：结构层面数据 **100% 可用**且三方一致；唯一未做的是 libriichi 闭环校验（需先装 Rust 工具链）。
 

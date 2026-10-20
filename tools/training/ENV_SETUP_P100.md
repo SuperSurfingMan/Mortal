@@ -14,7 +14,7 @@
 2. **不需要 nvcc / CUDA Toolkit**：PyTorch 的 cu118 wheel 自带全部 CUDA 运行时库，Rust 编译也用不到 nvcc。驱动 580 兼容所有旧 CUDA 运行时，`nvidia-smi` 显示的 "CUDA Version: 13.0" 只是驱动能力上限，与我们要装的无关。
 3. **GPU 分工**（详见 §8）：
    - P100 ×4：FP64 = FP32 的一半（4.7 TFLOPS）→ **GRP 训练必须用 P100**（GRP 是 float64 网络）；
-   - RTX 8000（sm_75，Turing）：有 Tensor Core、48GB 显存，FP64 只有 1/32 → **只用于主模型训练/推理**（`enable_amp=true` 时加速显著），严禁跑 GRP。
+   - RTX 8000（sm_75，Turing）：有 Tensor Core、48GB 显存，FP64 只有 1/32 → **只用于主模型训练/推理**，严禁跑 GRP。⚠️ 2026-10-11 NaN 事故后主训练固定 **fp32（`enable_amp=false`）**（AMP 溢出会永久污染 BatchNorm running stats，见 MEMORY §5.2-27），RTX 8000 的优势改用算力体现（fp32 4.24 batch/s vs P100 2.48）；另注意 **GPU1 易过热降频**（实测 607 MHz），长任务固定 GPU2。
 
 ---
 
@@ -150,9 +150,11 @@ EOF
 ```
 
 ```bash
-# 7.2 数据校验（数据上传后执行；42,587 局并行校验，预计十几分钟内）
+# 7.2 数据校验（数据上传后执行；2026-10-07 起为全量 2,630,640 局，Rust+rayon 多核约 16 s~数分钟）
 ../target/release/validate_logs /mnt/data8/mortal/dataset/mjai
 # 期望：全部 ok / 0 errors
+# 注：全量 HF 合并 + prune --apply 已于 10-07 在服务器完成（MEMORY.md §2.1）；
+#     全量校验 + 回放计分校验均通过。跑前记得按 §10.2 设 LD_LIBRARY_PATH（否则退出码 127）。
 
 # 7.3 GPU 冒烟（随机张量过一遍前向，确认当前卡可用）
 python - <<'EOF'
@@ -188,7 +190,7 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID      # ★ 必加，使序号与 nvidia-smi 
 # GRP 训练 → 指定 P100（如 GPU 0）
 CUDA_VISIBLE_DEVICES=0 python train_grp.py
 
-# 主模型训练 → 首选 RTX 8000（AMP 走 Tensor Core，48GB 显存），config 保持 device='cuda:0'
+# 主模型训练 → 首选 RTX 8000（fp32 纪律；48GB 显存），config 保持 device='cuda:0'
 CUDA_VISIBLE_DEVICES=2 python train.py
 # 或任一 P100（如 GPU 1）
 CUDA_VISIBLE_DEVICES=1 python train.py
@@ -200,7 +202,7 @@ CUDA_VISIBLE_DEVICES=3 python one_vs_three.py
 | 任务 | 推荐卡 | 原因 |
 |---|---|---|
 | GRP 训练 | P100（任一） | float64 网络，P100 FP64=4.7 TFLOPS，RTX 8000 仅 0.5（1/32） |
-| 离线 CQL / 在线训练 | **RTX 8000 优先** | Turing Tensor Core + 48GB，`enable_amp=true` 下快于 P100 |
+| 离线 CQL / 在线训练 | **RTX 8000 优先** | Turing Tensor Core + 48GB；fp32 纪律下 RTX 8000 ≈4.24 batch/s，P100 ≈2.48 |
 | 自博弈 client / test_play | P100 | 推理以 FP32 为主，P100 足够；与训练分卡并行 |
 | 并行实验 | 4×P100 各跑一份 | batch 512 只占约 4–6 GB，一卡一实验互不干扰 |
 
@@ -274,7 +276,7 @@ CUDA_VISIBLE_DEVICES=3 python one_vs_three.py
 ```bash
 cd /mnt/data8/mortal/Mortal/mortal                              # ★ 必须在这个目录
 export MORTAL_ROOT=/mnt/data8/mortal/Mortal
-export MORTAL_CFG=$MORTAL_ROOT/mortal/config.round2.toml     # ★ 必需，绝对路径
+export MORTAL_CFG=$MORTAL_ROOT/mortal/config.round2.toml     # ★ 必需，绝对路径；每轮换成当轮 toml（round3/4/5、reward_ablation、iql_* 等）
 export CUDA_DEVICE_ORDER=PCI_BUS_ID                          # ★ 消除序号歧义
 export CUDA_VISIBLE_DEVICES=2                                # RTX 8000（PCI 序下就是 2）
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 RAYON_NUM_THREADS=8
@@ -302,7 +304,7 @@ python -c "import torch,libriichi; print(torch.cuda.get_device_name(0), libriich
 - [ ] GPU 冒烟通过；GRP/训练/评测的分卡规划确定（§8）
 - [ ] `tensorboard` 可远程访问
 
-**环境就绪后** → 按 [TRAINING_PLAN.md](TRAINING_PLAN.md) 继续：上传数据（§3）→ 写入 config.toml（§4）→ M1 GRP → M2 离线训练。
+**环境就绪后** → 训练执行按 [TRAINING_MANUAL.md](TRAINING_MANUAL.md)（`TRAINING_PLAN.md` 的 42,587 局基线已被实跑推翻，仅作历史参考）；**项目现状、每轮配方与下一步以 [MEMORY.md](../../memory/MEMORY.md) §0/§4 为准**。
 
 ---
 
@@ -316,4 +318,4 @@ python -c "import torch,libriichi; print(torch.cuda.get_device_name(0), libriich
 | libriichi | `0.1.0` / `__profile__=release`（只有从 `mortal/` 目录导入才能读到；`libriichi.so` 日期 2026-10-06 15:57） |
 | GPU | 4×Tesla P100-16GB + 1×Quadro RTX 8000-48GB（PCI 序 2），驱动 580.173.02 |
 | CPU / 内存 | 56 线程 / 251 GB |
-| Mortal commit | 无（服务器目录不是 git 仓库；代码已打过补丁，清单见 MEMORY.md §16.4） |
+| Mortal commit | 本地 git 仓库已于 2026-10-09 建立（基线 `33e63bc`，tag `round1-complete`），10-20 已推送 origin（`SuperSurfingMan/Mortal.git`，master 同步；补丁清单见 MEMORY.md §6.2 代码改动台账） |

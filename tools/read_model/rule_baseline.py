@@ -25,6 +25,12 @@
     tl_tokens     [n, 3, L, 43]  各家公开动作时序（v2 时序流同款 token：牌 one-hot
                                + 摸切标志 + 动作类别 + 归一化巡目）
     tl_mask       [n, 3, L]   有效 token 位置
+
+> ⚠️ **A3 不是「顺序盲」预测器**（2026-10-20 审计，README §11.5-⑩）：`tl_tokens`
+> 经 `early_discard_mask`（前 3 次舍牌）与 `timeline_features`（末动作、连续摸切尾长、
+> 舍牌数/幺九占比）进入 alloc 与听牌打分，故 A3 对切牌**顺序**有真实响应。
+> 把它当作 §12.4 的「组成混杂地板」是高估了地板的纯净度；需要真顺序盲参照时用
+> `rule_predict(batch, order_blind=True)`（token 规范化排序，破坏顺序保留多重集）。
     dora          [n, 34] 或 None  当前宝牌**指示牌**计数（dataset.dora_indicators；
                                  可选，缺失时退化为无宝牌先验）
 
@@ -200,6 +206,33 @@ _COMB_TABLE = np.array([[float(comb(u, k)) if k <= u else 0.0
 # --------------------------------------------------------------------------- #
 # alloc：倾向加权二项（与 evaluate.binomial_baseline 同式，w≡1 时逐位相等）
 # --------------------------------------------------------------------------- #
+def canonicalize_tl_order(tl_tokens: np.ndarray, tl_mask: np.ndarray):
+    """把每 (样本, 目标家) 的有效 token 按 (牌, 动作, 摸切) 稳定排序。
+
+    **破坏顺序、保留多重集** ⇒ A3 的全部时序派生量（`early_discard_mask` 的前 3 次
+    舍牌、`timeline_features` 的末动作/连续摸切尾长等）都退化为「舍牌多重集」的函数，
+    即构造出一个**真顺序盲**的 A3 变体。用途：README §11.5-⑩ / AUDIT_20261020 S1——
+    A3 原样版消费 `tl_tokens`，其格内 ΔΔ 含真实顺序响应，不能当「组成混杂地板」；
+    本变体给出的才是纯组成地板，两者之差 = A3 自身的顺序敏感度。
+
+    排序键相同的 token 在「牌/动作/摸切」三项上完全相同（第 43 维归一化巡目是
+    快照常数，见 dataset.py:290 的已知缺陷），故稳定排序的并列次序不影响任何下游量。
+    无效（padding）位置键设为 +inf 排到末尾，与左对齐的 `tl_mask` 保持一致。
+    """
+    tl_tokens = np.asarray(tl_tokens, dtype=np.float64).copy()
+    tl_mask = np.asarray(tl_mask, dtype=bool)
+    tile_oh = tl_tokens[..., :NUM_TILES]
+    act = tl_tokens[..., NUM_TILES + 1:NUM_TILES + 1 + len(TL_ACTION_KINDS)]
+    tg = tl_tokens[..., NUM_TILES]
+    # reach 事件 tid=-1 ⇒ one-hot 全 0，用 NUM_TILES 作为其牌种编号
+    tile_id = np.where(tile_oh.any(-1), tile_oh.argmax(-1), NUM_TILES)
+    act_id = np.where(act.any(-1), act.argmax(-1), len(TL_ACTION_KINDS))
+    key = (tile_id * 16 + act_id * 2 + (tg > 0.5)).astype(np.float64)
+    key = np.where(tl_mask, key, np.inf)
+    order = np.argsort(key, axis=-1, kind='stable')
+    return np.take_along_axis(tl_tokens, order[..., None], axis=-2), tl_mask
+
+
 def early_discard_mask(tl_tokens: np.ndarray, tl_mask: np.ndarray,
                        k: int = 3) -> np.ndarray:
     """各目标家前 k 次舍牌的牌种集合 [n,3,34]（早切 = 配牌形状的直接信息）。
@@ -597,12 +630,17 @@ def riichi_possible_waits(
 # --------------------------------------------------------------------------- #
 # 顶层：与神经网络同构的输出
 # --------------------------------------------------------------------------- #
-def rule_predict(batch: dict, *, dora: np.ndarray | None = None) -> dict:
+def rule_predict(batch: dict, *, dora: np.ndarray | None = None,
+                 order_blind: bool = False) -> dict:
     """规则法读牌前向。batch 为 dataset.collate 口径的 numpy 字典（或子集）。
 
     必需键：unseen / river / riichi / own_hand / turn / tiles_left / called /
             meld_counts / tl_tokens / tl_mask。
     返回 {'alloc_probs': [n,3,34,5], 'wait_probs': [n,3,35], 'exp_counts': [n,3,34]}。
+
+    ``order_blind=True`` 时先把时序 token 规范化排序（`canonicalize_tl_order`），
+    使 A3 成为**真顺序盲**预测器——用于给 §12.4/RM13~RM15 提供纯组成地板。
+    默认 False：与历史存档数字（README §12、diagnostics/results/）逐位可比。
     """
     unseen = np.asarray(batch['unseen'], dtype=np.float64)
     river = np.asarray(batch['river'], dtype=bool)
@@ -622,13 +660,18 @@ def rule_predict(batch: dict, *, dora: np.ndarray | None = None) -> dict:
     # 手牌数 = 13 - 3*副露数（公开信息；加杠净贡献 0 不计）
     hand_sizes = 13.0 - 3.0 * meld_counts               # [n,3]
 
+    # 时序 token（order_blind 时先规范化排序 ⇒ 破坏顺序、保留多重集）
+    tl_tokens, tl_mask = batch['tl_tokens'], batch['tl_mask']
+    if order_blind:
+        tl_tokens, tl_mask = canonicalize_tl_order(tl_tokens, tl_mask)
+
     # ---- alloc ----
-    early_river = early_discard_mask(batch['tl_tokens'], batch['tl_mask'])
+    early_river = early_discard_mask(tl_tokens, tl_mask)
     alloc_probs = rule_alloc_probs(unseen, river, hand_sizes, tiles_left, dora,
                                    early_river=early_river)
 
     # ---- wait ----
-    feat = timeline_features(batch['tl_tokens'], batch['tl_mask'])
+    feat = timeline_features(tl_tokens, tl_mask)
     p_ten = rule_tenpai_prob(feat, riichi, turn, called, meld_counts)   # [n,3]
     w, support = rule_wait_weights(unseen, river, own_hand, dora, turn=turn,
                                    early_river=early_river, riichi=riichi)

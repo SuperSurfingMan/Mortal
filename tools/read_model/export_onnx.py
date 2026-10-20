@@ -39,11 +39,13 @@ sys.path.insert(0, '/mnt/data8/mortal/Mortal/mortal')
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import model as M                                       # noqa: E402
-import model_v2 as M2                                   # noqa: E402                                     # noqa: E402
+import model_v2 as M2                                   # noqa: E402
 from constraints import compute_wait_bias               # noqa: E402
 
 INPUT_NAMES = ['obs', 'unseen', 'wait_bias']
 INPUT_NAMES_V2 = ['obs', 'unseen', 'wait_bias', 'tl_tokens', 'tl_mask']
+# ⚠️ README §11.5-⑥（行号 2026-10-20 校正为 47-48）：`struct_*` 与 `s_belief`
+# **未导出** ⇒「注入时 46 维结构语义更好用」目前只是设想，ONNX 通道尚未打通。
 OUTPUT_NAMES = ['alloc_probs', 'exp_counts', 'wait_probs',
                 'next_probs', 'shanten_probs', 'riichi_prob', 'called_prob']
 

@@ -341,9 +341,15 @@ def build_model_v2s(version: int = 4, conv_channels: int = 96, num_blocks: int =
                     wait_head: str = 'flat') -> ReadNetV2:
     """v2s = v2 + 向听分布注入结构瓶颈（结构头专项，见模块 docstring）。
 
-    ``wait_head``：``flat``（默认）= 旧 H2（tile-agnostic，A2b 及之前所有
-    ckpt 的架构）；``tile`` = RM5 逐牌列打分头（A2c 起）。旧 ckpt 加载必须
-    显式/缺省用 ``flat``——两者 state_dict 键形状不兼容。
+    ``wait_head``：``flat``（**本 builder 的**默认）= 旧 H2（tile-agnostic，A2b
+    及之前所有 ckpt 的架构）；``tile`` = RM5 逐牌列打分头（A2c 起）。旧 ckpt 加载
+    必须显式/缺省用 ``flat``——两者 state_dict 键形状不兼容。
+
+    ⚠️ 「默认」有二义（README §11.5 审计 M5，2026-10-20 注）：训练入口
+    ``train.py --wait-head`` 的默认**已翻为 ``tile``**（A2c 起），故新训练不走本
+    函数的默认值；本处保留 ``flat`` 只为旧 ckpt 兼容。评测/诊断脚本一律
+    ``cfg.get('wait_head', 'flat')`` 从 ckpt 的 config 读取 ⇒ 旧 ckpt 自动 flat、
+    新 ckpt 自动 tile（`load_state_dict` 严格模式，形状不符会响亮失败而非静默）。
     """
     return ReadNetV2(version=version, conv_channels=conv_channels,
                      num_blocks=num_blocks, with_aux=with_aux,

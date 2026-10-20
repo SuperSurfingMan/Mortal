@@ -31,8 +31,11 @@ PREFETCH=${PREFETCH:-2}
 mkdir -p "$OUT" "$LOGDIR/read_model"
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=${GPU:-0}       # P100；GPU=1 换卡（2026-10-19 重启时迁到 GPU 1）
+export CUDA_VISIBLE_DEVICES=${GPU:-0}       # P100；GPU=2 迁 RTX 8000（2026-10-19 夜）
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+# DataLoader worker 内存随训练时长累积（glibc malloc arena 碎片：RSS 5GB→14.6GB/个），
+# 长轮次要限制 arena 数强制归还，否则 OOM（A2 事故同源）。2026-10-20 01:30 二次重启时补。
+export MALLOC_ARENA_MAX=2
 
 STEPS=${STEPS:-200000}
 NW=${NW:-16}

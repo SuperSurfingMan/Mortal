@@ -174,7 +174,11 @@ def build_fixed_eval_set(files, n_samples: int, seed: int = 20261016):
 # 损失
 # --------------------------------------------------------------------------- #
 def sample_weights(batch) -> torch.Tensor:
-    """方案 §5.1：立直 ×3、终盘(巡目>=12) ×2、听牌 ×2、开局(<=3 巡) ×0.5。"""
+    """方案 §5.1 的样本权重（**乘性叠加**，非加性）：终盘(巡目>=12) ×2、
+    开局(<=3 巡) ×0.5、立直 ×3、听牌 ×3（代码 `(1+2*riichi)*(1+2*tenpai)`）；
+    立直且听牌 ⇒ **×9**。⚠️ 旧 docstring 写「听牌 ×2」与代码不符
+    （README §11.5-③），2026-10-20 更正。
+    """
     turn = batch['turn'].float()                              # [B]
     base = torch.ones_like(turn)
     base = torch.where(turn >= 12, torch.full_like(base, 2.0), base)
@@ -218,8 +222,10 @@ def compute_loss(out, batch, loss_cfg: dict | None = None):
     # BCE 把 l34 钉在标定值，其余 34 个 logit 在 85.4% 非听牌目标上完全无约束，
     # 配分函数噪声（sd 1.94）同时污染判别与标定（A2 事故的结构性根源）。
     # 因子化后 tenpai 标量由 L_wait_tenpai 独占监督，本项只监督 34 类条件
-    # 分布，与 evaluate 的 cond_ce 同口径（A2b cond_ce 2.8961；RM4 验收
-    # ≤2.896 不退）。注意：目标分布的零质量类会碰上硬掩码的 -inf logit，
+    # 分布，与 evaluate 的 cond_ce **同族但 active 集不同**（README §11.5-⑫）：
+    # 此处 active = `tenpai>0.5`（结构听牌，**含振听**），evaluate 的 cond_ce_active
+    # 用「有效荣和集非空」（剔除振听）。实测振听占结构听牌 0.125% ⇒ 数值差可忽略，
+    # 但不可混称同口径（A2b cond_ce 2.8961；RM4 验收 ≤2.896 不退）。注意：目标分布的零质量类会碰上硬掩码的 -inf logit，
     # 0 * -inf = NaN，必须先把零质量位置清零再求和（只累加目标支撑集）。
     wait_t = batch['wait'][..., :D.NUM_TILES]                  # [B,3,34]
     logw = torch.log_softmax(out['wait_logits'][..., :D.NUM_TILES], dim=-1)
@@ -438,7 +444,7 @@ def evaluate(net, eval_batch, device):
     net.eval()
     n = eval_batch['obs'].shape[0]
     bs = 2048
-    alloc_ll, wait_ll, alloc_top1, wait_hit1 = [], [], [], []
+    alloc_ll, wait_ll, wait_ll34, alloc_top1, wait_hit1 = [], [], [], [], []
     wait_p_not = []                                            # RM2：P(未听) 收集
     struct_sh_hit, struct_sh_ce = [], []
     for i in range(0, n, bs):
@@ -449,9 +455,18 @@ def evaluate(net, eval_batch, device):
         alloc_ll.append((-ll).mean(-1))                      # [b,3] 逐列 CE 均值
         alloc_top1.append((logp.argmax(-1) == chunk['alloc']).float().mean(-1))
         logw = torch.log_softmax(o['wait_logits'], dim=-1)
-        # 与训练损失同口径：只累加目标支撑集（避免 0 * -inf = NaN）
+        # ⚠️ 这是 **CE35**（35 类 softmax，含第 35 类「未听」），与训练损失 l_wait 的
+        # **CE34** 口径不同、数值不可互换（README §11.5-⑫）：val_score v2 用本项，
+        # RM4 判据 cond_ce 用下面 wait_ll34 一族。只累加目标支撑集（避免 0*-inf=NaN）。
         wait_ll.append(-(chunk['wait'] * torch.where(
             chunk['wait'] > 0, logw, torch.zeros_like(logw))).sum(-1))   # [b,3]
+        # CE34：只对前 34 类归一化 ⇒ 与训练 l_wait / evaluate cond_ce 同族，可直接
+        # 对照 RM4 验收线（旧版只有 CE35，日志里 wait(CE34) 与 wait_ce(CE35) 相邻
+        # 打印却不同口径，极易误读）。
+        w34 = chunk['wait'][..., :D.NUM_TILES]
+        logw34 = torch.log_softmax(o['wait_logits'][..., :D.NUM_TILES], dim=-1)
+        wait_ll34.append(-(w34 * torch.where(w34 > 0, logw34,
+                                             torch.zeros_like(logw34))).sum(-1))
         top1 = logw[..., :D.NUM_TILES].argmax(-1)          # [b,3]
         true_wait = chunk['wait'][..., :D.NUM_TILES] > 0
         hit = (true_wait.gather(-1, top1[..., None]).squeeze(-1) > 0) & (chunk['tenpai'] > 0.5)
@@ -466,16 +481,23 @@ def evaluate(net, eval_batch, device):
             struct_sh_ce.append(ll_sh)                     # [b,3] 未加权 CE
     net.train()
     alloc_ll = torch.cat(alloc_ll)                          # [n,3]
-    wait_ll = torch.cat(wait_ll)                            # [n,3]
+    wait_ll = torch.cat(wait_ll)                            # [n,3] CE35
+    wait_ll34 = torch.cat(wait_ll34)                        # [n,3] CE34
     alloc_top1 = torch.cat(alloc_top1)
     wait_hit1 = torch.cat(wait_hit1)
     tenpai_mask = eval_batch['tenpai'] > 0.5
     wait_ce_active = float(wait_ll[tenpai_mask].mean()) if tenpai_mask.any() else float('nan')
+    # CE34（与训练 l_wait 同族）。active 集仍用 tenpai>0.5（结构听牌，含振听 0.125%）
+    # 以与 wait_ce_active 逐样本可比；evaluate 的 cond_ce_active 用「有效荣和集非空」，
+    # 两者相差该 0.125%（README §11.5-⑫）。
+    wait_ce34_active = (float(wait_ll34[tenpai_mask].mean())
+                        if tenpai_mask.any() else float('nan'))
     wait_hit = float(wait_hit1[tenpai_mask].mean()) if tenpai_mask.any() else float('nan')
     metrics = {
         'alloc_ce': float(alloc_ll.mean()),
         'alloc_top1': float(alloc_top1.mean()),
-        'wait_ce_active': wait_ce_active,
+        'wait_ce_active': wait_ce_active,          # CE35（val_score v2 用此项）
+        'wait_ce34_active': wait_ce34_active,      # CE34（对照 RM4 判据；10-20 新增）
         'wait_hit1': wait_hit,
         'tenpai_frac': float(tenpai_mask.float().mean()),
     }
@@ -502,7 +524,10 @@ def main():
     ap.add_argument('--train-globs', nargs='+', required=True)
     ap.add_argument('--val-globs', nargs='+', required=True)
     ap.add_argument('--out-dir', required=True)
-    ap.add_argument('--steps', type=int, default=60000, help='总训练步数（会被阶段表覆盖）')
+    ap.add_argument('--steps', type=int, default=60000,
+                    help='总训练步数（**权威值**：阶段表按比例或绝对值归一到此总量，'
+                         '余量吸入末段；绝对阶段表之和必须 == 此值，否则报错。'
+                         'resume 时填**剩余**步数，LR 按 start+此值 的绝对终点算）')
     ap.add_argument('--stage-schedule', default='1:0.3,2:0.3,3:0.4',
                     help='阶段:步数或比例，如 1:18000,2:18000,3:24000 或 1:0.3,2:0.3,3:0.4')
     ap.add_argument('--batch-size', type=int, default=512)
@@ -591,10 +616,23 @@ def main():
             n = int(val_s)
         phases.append([stage, n])
     residual = total_steps - sum(n for _, n in phases)
+    if residual < 0:
+        # 旧行为把负余量静默吸入末段 ⇒ 最后阶段被缩短、课程边界变形而无提示
+        # （README §11.5-⑬）。2026-10-20 起显式失败。
+        raise SystemExit(
+            f'[err] --stage-schedule 各段之和 {sum(n for _, n in phases)} > --steps '
+            f'{total_steps}（residual={residual}）。绝对阶段表之和必须 == --steps；'
+            f'比例式则自动归一。旧版会静默缩短末段，故此处显式失败。')
     phases[-1][1] += residual
     phases = [(s, n) for s, n in phases]
     print(f'[plan] 阶段表 {phases}（总 {total_steps} 步）', flush=True)
 
+    # README §11.5-⑤：--pool 只对 v1 生效（v2/v2s 的 builder 无 pool 形参，
+    # ReadBackbone 恒为 mean pooling）。旧行为是静默失效（仅日志打 "-"）。
+    if args.model != 'v1' and args.pool != 'mean':
+        print(f'[warn] --pool {args.pool} 对 --model {args.model} **不生效**：v2/v2s 的 '
+              f'ReadBackbone 恒为 mean pooling（builder 无 pool 形参，README §11.5-⑤）。'
+              f'如需 attention pooling 请先改 model_v2。', flush=True)
     if args.model == 'v2':
         net = M2.build_model_v2(conv_channels=args.conv_channels,
                                num_blocks=args.num_blocks,
@@ -715,6 +753,8 @@ def main():
             done_in_phase += 1
 
             if step % args.log_every == 0:
+                # ⚠️ elapsed 是**本进程**计时（t0 = 本次启动），resume 后归零；
+                # 跨重启推算吞吐/ETA 会得出错误结论（AUDIT_20261020 L7）。
                 rec = {'step': step, 'stage': stage, 'lr': sched.get_last_lr()[0],
                        'elapsed': round(time.time() - t0, 1), **parts}
                 log_f.write(json.dumps(rec) + '\n')
@@ -736,7 +776,7 @@ def main():
                 log_f.write(json.dumps(rec) + '\n')
                 log_f.flush()
                 print(f"[eval] step {step}: alloc_ce {metrics['alloc_ce']:.4f} "
-                      f"top1 {metrics['alloc_top1']:.4f} wait_ce {wait_ce:.4f} "
+                      f"top1 {metrics['alloc_top1']:.4f} wait_ce35 {wait_ce:.4f} wait_ce34 {metrics['wait_ce34_active']:.4f} "
                       f"wait_hit1 {metrics['wait_hit1']:.4f} "
                       f"tenpai_frac {metrics['tenpai_frac']:.3f} "
                       f"tenpai_auc {metrics['tenpai_auc']:.4f} "

@@ -54,14 +54,35 @@ from libriichi.dataset import GameplayLoader            # noqa: E402
 from libriichi.state import PlayerState                 # noqa: E402
 
 FAILS: list[str] = []
+SKIPS: list[str] = []
+N_ITEMS = 0                # 已报告项数（OK+FAIL+SKIP），用于「期望项数」门禁
+#: 期望项数门禁（2026-10-20，AUDIT S2 / README §11.5-⑭）：坑 57 的假 PASS 之所以能
+#: 连续三次蒙混，是因为本文件有 5 处早退 `return`——subprocess 一崩，该层后续 check
+#: 既不执行也不记 FAIL，覆盖静默缩水而摘要照样打印 ALL PASS。项数断言把「少跑」变成
+#: 显式失败。新增/删除 check 时必须同步此数（或用 --expect 覆盖）。
+EXPECTED_ITEMS = 71
 TILE_SEEN_ROW = 835        # v4 obs 的 tiles_seen/4 行（布局推算 + 受控实验双重确认）
 KAN_SELECT_ROW = 870       # at_kan_select 标志行（本测试用受控探针动态确认）
 
 
 def check(name, cond, extra=''):
+    global N_ITEMS
+    N_ITEMS += 1
     print(f'  [{"OK" if cond else "FAIL"}] {name}' + (f'    {extra}' if extra else ''), flush=True)
     if not cond:
         FAILS.append(name)
+
+
+def skip(name, extra=''):
+    """可选项缺失（如仓库里没有旧 ckpt）——**不计入通过数**，单列并计数。
+
+    旧写法是 `check(..., True)`，把 SKIP 记成 PASS（§11.5-⑭）：门禁看起来全绿，
+    实际那两项断言从未执行过。
+    """
+    global N_ITEMS
+    N_ITEMS += 1
+    SKIPS.append(name)
+    print(f'  [SKIP] {name}' + (f'    {extra}' if extra else ''), flush=True)
 
 
 def find_kan_select_row() -> int:
@@ -838,7 +859,7 @@ def test_p1_architecture(files):
             mismatch = True
         check('I4b tile 架构拒绝 A2b state_dict（证明默认 flat 的必要性）', mismatch)
     else:
-        check('I4 A2b ckpt 不在仓库（跳过兼容断言）', True)
+        skip('I4 A2b ckpt 不在仓库（兼容断言未执行）')
 
     # ---- I5：flat 路径小训练 smoke（旧架构仍可训，CE34 不回退能力）----
     import shutil
@@ -919,7 +940,12 @@ def test_p1_architecture(files):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--n-files', type=int, default=12)
+    # ⚠️ 门禁默认牌谱根与正式评估不同源（这里 houou4_names/202601，run_*.sh 与
+    # evaluate/compare_a3 用 houou4/202609）——门禁只需 smoke 级数据，非评估集。
     ap.add_argument('--root', default='/mnt/data8/mortal/Mortal/dataset/mjai/houou4_names/202601')
+    ap.add_argument('--expect', type=int, default=EXPECTED_ITEMS,
+                    help='期望报告项数（OK+FAIL+SKIP）；实到不符即 FAIL，'
+                         '防止早退 return 静默缩减覆盖（§11.5-⑭）')
     args = ap.parse_args()
     global KAN_SELECT_ROW
     files = sorted(glob.glob(f'{args.root}/*.json.gz'))[:args.n_files]
@@ -940,6 +966,14 @@ def main():
     test_p1_architecture(files)
 
     print('\n================ 结果 ================')
+    n_ok = N_ITEMS - len(FAILS) - len(SKIPS)
+    print(f'共报告 {N_ITEMS} 项：OK {n_ok} / FAIL {len(FAILS)} / SKIP {len(SKIPS)}'
+          f'（期望 {args.expect} 项）')
+    if SKIPS:
+        print(f'SKIP {len(SKIPS)} 项（**未执行**，不计入通过）: {SKIPS}')
+    if N_ITEMS != args.expect:
+        FAILS.append(f'覆盖项数 {N_ITEMS} != 期望 {args.expect}'
+                     '（有 check 被早退 return 跳过，或增删 check 未同步 EXPECTED_ITEMS）')
     if FAILS:
         print(f'FAIL {len(FAILS)} 项: {FAILS}')
         raise SystemExit(1)

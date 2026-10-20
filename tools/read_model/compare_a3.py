@@ -176,14 +176,19 @@ def main():
     ap.add_argument('--samples', type=int, default=20000)
     ap.add_argument('--n-boot', type=int, default=200)
     ap.add_argument('--bseed', type=int, default=20261018)
+    # 与 evaluate.py 同源同种子（README §11.5 审计 M8）：此前依赖
+    # build_fixed_eval_set 的默认值，不可覆盖也不打印 ⇒ 跨脚本对齐靠巧合。
+    ap.add_argument('--seed', type=int, default=20261016,
+                    help='固定评估集抽样种子（须与 evaluate/order_metrics 一致）')
     args = ap.parse_args()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     files = sorted(glob.glob(f'{args.root}/**/*.json.gz', recursive=True))
-    batch = T.build_fixed_eval_set(files, args.samples)
+    batch = T.build_fixed_eval_set(files, args.samples, seed=args.seed)
     b = {k: (v.numpy() if hasattr(v, 'numpy') else v) for k, v in batch.items()}
     n = b['unseen'].shape[0]
-    print(f'[data] {n} 个样本（固定评估集，{args.root}）', flush=True)
+    print(f'[data] {n} 个样本（固定评估集，{args.root}，seed={args.seed}，'
+          f'bootstrap seed={args.bseed}）', flush=True)
 
     # ---- 均匀二项先验（alloc 参照；wait 用支撑集均匀 + 常数基率 0.15）----
     hand_sizes = b['alloc'].sum(-1)

@@ -229,6 +229,11 @@ class GameReplayer:
             self.meld_tiles = [0] * 4
             self.n_melds = [0] * 4
             self.timeline = [[] for _ in range(4)]
+            # 换局清空两个 memo 缓存（2026-10-20，README §11.5-⑮）：键是全局 ev_idx，
+            # 跨局本就不会复用，留着只是白占内存（每 token 表 26×43 f32 ≈ 4.5KB，
+            # 结构标签更大）。worker RSS 随文件累积的一个次要来源。
+            self.tl_cache.clear()
+            self.struct_cache.clear()
             self.c_total[tile_id(ev['dora_marker'])] += 1
             self.dora_count[tile_id(ev['dora_marker'])] += 1
             return
@@ -340,13 +345,16 @@ class GameReplayer:
 
         # --- 阶段过滤（先于昂贵的 obs 编码）---
         if stage != 3:
-            if stage == 1:                       # 仅有立直家
+            if stage == 1:                       # 仅「**他家**有立直」（不含观察者自身：
+                # rel 只取 1/2/3 ⇒ 读牌目标是别人，自己立直时手牌已公开、无读牌意义）
                 for rel in (1, 2, 3):
                     if self.riichi[(observer + rel) % 4]:
                         break
                 else:
                     return
-            elif stage == 2:                     # 中盘（巡目 >= 4），含阶段 1
+            elif stage == 2:
+                # 中盘及以后（巡目 >= 4）**全量**样本。⚠️ 不是「阶段 1 ∪ 中盘」：
+                # 前 3 巡的立直样本在本阶段被排除（README §11.5-④，2026-10-20 更正注释）。
                 if turn < 4:
                     return
             else:
@@ -518,6 +526,15 @@ def replay_file(
     """回放单个 mjai .json.gz 牌谱，返回 (samples, stats)。
 
     version 只支持 4（v4 obs 是现役口径）；保留参数是为与主管线对齐。
+
+    ⚠️ **内存口径（README §11.5-⑮，2026-10-20 审计）**：本函数把整个文件的样本
+    **全部物化**后才返回（`ReplayFile.samples`），每条 obs 为 (1012,34) float32
+    = 137KB ⇒ 实测单文件 1071 样本 ≈ **147MB 常驻**。DataLoader 每 worker 同时
+    持有 1 个文件 + prefetch 批次，故 worker RSS ≈ 文件峰值 × NW（NW=16 时实测
+    15.7GB/个，251GB 机器可用内存一度只剩 24GB）。`MALLOC_ARENA_MAX=2` 只缓解
+    glibc arena 保留，**根治需流式化（逐样本 yield）或 obs 降精度**（通道多为
+    0/1 与小整数，fp16/uint8 近无损）——该改动会变更数值/迭代口径，必须安排在
+    轮次间隙，不可与在训实验并行（A2c 在训，故本轮仅记录不动手）。
     stage：课程阶段过滤器（1=仅有立直家，2=巡目>=4，3=全部），在 obs 编码前生效。
     max_samples：早停保护（调试用），达到即裁剪。
     """

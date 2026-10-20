@@ -39,13 +39,28 @@ from structure import structure_labels                 # noqa: E402  # noqa: F40
 
 NUM_TILES = 34
 FAILS: list[str] = []
+SKIPS: list[str] = []
+N_ITEMS = 0                # 已报告项数（OK+FAIL+SKIP）
+#: 期望项数门禁（2026-10-20，README §11.5-⑭）：与 test_pipeline 同款——早退/跳过
+#: 会让覆盖静默缩水而摘要照样 ALL PASS（坑 57 的结构性根因）。增删 check 须同步此数。
+EXPECTED_ITEMS = 50
 
 
 def check(name, cond, extra=''):
+    global N_ITEMS
+    N_ITEMS += 1
     print(f'  [{"OK" if cond else "FAIL"}] {name}' + (f'    {extra}' if extra else ''),
           flush=True)
     if not cond:
         FAILS.append(name)
+
+
+def skip(name, extra=''):
+    """可选项缺失 ⇒ 单列，**不计入通过数**（旧写法 check(..., True) 会把跳过记成 PASS）。"""
+    global N_ITEMS
+    N_ITEMS += 1
+    SKIPS.append(name)
+    print(f'  [SKIP] {name}' + (f'    {extra}' if extra else ''), flush=True)
 
 
 def make_batch(n=8, seed=0):
@@ -463,9 +478,68 @@ def test_e2e_and_perf():
     check('H1 64 样本（含 20 立直枚举）< 5s', dt < 5.0, f'{dt:.2f}s')
 
 
+def _multiset_preserved(tl, mk, tl2, mk2) -> bool:
+    """canonicalize_tl_order 是否只重排、不增删 token（逐 (样本,目标家) 比较多重集）。"""
+    if not np.array_equal(mk, mk2):
+        return False
+    for s_ in range(tl.shape[0]):
+        for j_ in range(tl.shape[1]):
+            idx = np.where(mk[s_, j_])[0]
+            if not len(idx):
+                continue
+            A, B = tl[s_, j_, idx], tl2[s_, j_, idx]
+            if not np.array_equal(A[np.lexsort(A.T[::-1])], B[np.lexsort(B.T[::-1])]):
+                return False
+    return True
+
+
+def test_order_blind(b):
+    """A3 的 `order_blind` 变体必须**真正顺序不变**（README §11.5-⑩ / AUDIT S1）。
+
+    背景：A3 原样版消费 tl_tokens（前 3 次舍牌掩码 + 时序特征），故其格内 ΔΔ 含真实
+    顺序响应，不能当「组成混杂地板」。order_blind 变体把 token 规范化排序（破坏顺序、
+    保留多重集），才是纯组成地板。本门禁守三条性质：置换不变、原样版确有响应（防
+    上一条空转）、多重集守恒（防排序把 token 改了）。
+    """
+    print('\n-- order_blind 变体（真顺序盲地板，§11.5-⑩）--', flush=True)
+    rng = np.random.default_rng(20261020)
+    tl = np.asarray(b['tl_tokens'], dtype=np.float64)
+    mk = np.asarray(b['tl_mask'], dtype=bool)
+    tl_p = tl.copy()
+    n_perm = 0
+    for s_ in range(tl.shape[0]):
+        for j_ in range(tl.shape[1]):
+            idx = np.where(mk[s_, j_])[0]
+            if len(idx) < 3:
+                continue
+            perm = rng.permutation(len(idx))
+            if np.array_equal(perm, np.arange(len(idx))):
+                continue
+            tl_p[s_, j_, idx] = tl[s_, j_, idx[perm]]
+            n_perm += 1
+    b2 = dict(b)
+    b2['tl_tokens'] = tl_p
+    base, base_p = RB.rule_predict(b)['exp_counts'], RB.rule_predict(b2)['exp_counts']
+    ob, ob_p = (RB.rule_predict(b, order_blind=True)['exp_counts'],
+                RB.rule_predict(b2, order_blind=True)['exp_counts'])
+    d_ob = float(np.abs(ob - ob_p).max())
+    d_base = float(np.abs(base - base_p).max())
+    check('RB12 order_blind 对 token 置换不变（真顺序盲）',
+          n_perm > 0 and np.allclose(ob, ob_p, rtol=0, atol=1e-12),
+          f'置换 {n_perm} 个 (样本,目标家)，max|Δ|={d_ob:.2e}')
+    check('RB13 原样 A3 对同一置换**有**响应（证明 RB12 非空转）',
+          not np.allclose(base, base_p, rtol=0, atol=1e-12),
+          f'max|Δ|={d_base:.4f}')
+    tl_c, mk_c = RB.canonicalize_tl_order(tl, mk)
+    check('RB14 canonicalize_tl_order 保留 token 多重集（只重排不增删）',
+          _multiset_preserved(tl, mk, tl_c, mk_c))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--n-files', type=int, default=6)
+    ap.add_argument('--expect', type=int, default=EXPECTED_ITEMS,
+                    help='期望报告项数（OK+FAIL+SKIP）；不符即 FAIL（§11.5-⑭）')
     args = ap.parse_args()
     print('================ A3 规则法基线回归测试 ================')
     b = make_batch()
@@ -475,8 +549,17 @@ def main():
     test_enumeration()
     test_dora()
     test_e2e_and_perf()
+    test_order_blind(b)
     test_real_data_gate(args.n_files)
     print('======================================================')
+    n_ok = N_ITEMS - len(FAILS) - len(SKIPS)
+    print(f'共报告 {N_ITEMS} 项：OK {n_ok} / FAIL {len(FAILS)} / SKIP {len(SKIPS)}'
+          f'（期望 {args.expect} 项）')
+    if SKIPS:
+        print(f'SKIP {len(SKIPS)} 项（**未执行**，不计入通过）: {SKIPS}')
+    if N_ITEMS != args.expect:
+        FAILS.append(f'覆盖项数 {N_ITEMS} != 期望 {args.expect}'
+                     '（有 check 被跳过，或增删 check 未同步 EXPECTED_ITEMS）')
     if FAILS:
         print(f'FAILED ({len(FAILS)}): ' + '; '.join(FAILS))
         sys.exit(1)

@@ -1,10 +1,12 @@
 """§3.15.8 Phase 1（贵，~2.5 min）：局部手牌信息探针的取数阶段。
 
 产出 `CACHE`（默认 /tmp/read_model_diag_cache/cache.npz，约 120 MB，不入库），
-内含 40000 个 202609 holdout 样本上的四套量：
+内含 40000 个 202609 holdout 样本上的五套量：
   AP/EC   A2b 的 alloc_probs[n,3,34,5] 与 exp_counts[n,3,34]
   EC2     配对反事实（只对调 tl_tokens 里 m−1/m+1 两个 token，obs 不变）后的 exp_counts
-  RAP/REC A3 规则法的对应量（顺序盲对照）
+  RAP/REC A3 规则法的对应量（**规则法**对照，注意 A3 并非顺序盲，见 §11.5-⑩）
+  REC_OB  A3 的**真顺序盲**变体（token 规范化排序后重算）⇒ 纯组成地板；
+          REC − REC_OB 的格内 ΔΔ 差 = A3 自身的顺序敏感度
   CE/CPMF0 counts 精确档（超几何，行为盲对照地板）
   alloc/unseen/hand/turn/riichi/called/tenpai/hc/tg/ids/Jarr/Mids
 
@@ -39,7 +41,10 @@ AP, EC = forward(net, batch, keys)
 rule = RB.rule_predict(bn)
 RAP = np.asarray(rule['alloc_probs'], np.float64)
 REC = np.asarray(rule['exp_counts'], np.float64)
-print(f'[model] A2b+A3 {time.time()-t0:.0f}s', flush=True)
+# A3 的**真顺序盲**变体（README §11.5-⑩ / AUDIT S1）：token 规范化排序 ⇒ 破坏顺序、
+# 保留多重集，其格内 ΔΔ 才是纯组成地板；与 REC 之差 = A3 自身的顺序敏感度。
+REC_OB = np.asarray(RB.rule_predict(bn, order_blind=True)['exp_counts'], np.float64)
+print(f'[model] A2b+A3(+顺序盲变体) {time.time()-t0:.0f}s', flush=True)
 
 unseen = np.asarray(bn['unseen'], np.float64)
 hand = 13 - 3 * np.asarray(bn['meld_counts'], np.float64)
@@ -77,6 +82,7 @@ np.savez_compressed(
     OUT, n=n,
     AP=AP.astype(np.float32), EC=EC.astype(np.float32), EC2=EC2.astype(np.float32),
     RAP=RAP.astype(np.float32), REC=REC.astype(np.float32),
+    REC_OB=REC_OB.astype(np.float32),
     CE=CE.astype(np.float32), CPMF0=CPMF[..., 0].astype(np.float32),
     alloc=np.asarray(bn['alloc'], np.int8), unseen=unseen.astype(np.float32),
     hand=hand.astype(np.int8), turn=np.asarray(bn['turn'], np.float32),

@@ -135,6 +135,12 @@ def main():
     ap.add_argument('--state', required=True, help='checkpoint(.pth)，含 model 键')
     ap.add_argument('--val-globs', nargs='+', required=True)
     ap.add_argument('--samples', type=int, default=20000)
+    # 2026-10-20（README §11.5 审计 M8）：固定评估集的种子此前只存在于
+    # train.build_fixed_eval_set 的**默认值**里，调用方不传 ⇒ 不可覆盖、产物也不记录，
+    # 一旦默认值被改动，历史评估集会静默漂移且无法追溯。现显式化并写入 report。
+    ap.add_argument('--seed', type=int, default=20261016,
+                    help='固定评估集抽样种子（须与 train/compare_a3/order_metrics 一致，'
+                         '否则跨脚本指标不可比）')
     ap.add_argument('--batch-size', type=int, default=2048)
     ap.add_argument('--out', default=None, help='诊断 JSON 输出路径（默认与 state 同目录）')
     args = ap.parse_args()
@@ -166,7 +172,7 @@ def main():
     for g in args.val_globs:
         files.extend(D.glob_files(g))
     files = sorted(set(files))
-    batch = T.build_fixed_eval_set(files, args.samples)
+    batch = T.build_fixed_eval_set(files, args.samples, seed=args.seed)
     n = batch['obs'].shape[0]
     print(f'[data] {n} 个样本', flush=True)
 
@@ -376,7 +382,12 @@ def main():
         }
 
     report = {'state': args.state, 'step': state.get('step'),
-              'n_samples': int(n), 'alloc': alloc_report, 'wait': wait_report}
+              'n_samples': int(n),
+              'protocol': {'seed': args.seed, 'samples': args.samples,
+                           'val_globs': list(args.val_globs),
+                           'n_files': len(files),
+                           'note': '固定评估集 = train.build_fixed_eval_set(files, samples, seed)'},
+              'alloc': alloc_report, 'wait': wait_report}
     if struct_report is not None:
         report['struct'] = struct_report
 

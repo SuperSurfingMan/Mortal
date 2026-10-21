@@ -88,6 +88,8 @@ DEFAULT_LOSS_CFG = {
     'wait_tenpai': 0.2,                    # 输出侧 tenpai 监督（A2b：wait[34] 拟合 1-tenpai）
     'struct_balance': True,                # 向听/形制类均衡
     'next_tedashi': 0.2,                   # RM14：tile 时序流的 next-tedashi 辅助 CE
+    'riichi_weight': 3.0,                  # RM9：立直目标样本权重（旧行为 ×3）
+    'riichi_early_weight': 1.0,            # RM9：立直且 turn<=7 的额外乘数
 }
 
 
@@ -180,17 +182,30 @@ def build_fixed_eval_set(files, n_samples: int, seed: int = 20261016):
 # --------------------------------------------------------------------------- #
 # 损失
 # --------------------------------------------------------------------------- #
-def sample_weights(batch) -> torch.Tensor:
+def sample_weights(batch, cfg: dict | None = None) -> torch.Tensor:
     """方案 §5.1 的样本权重（**乘性叠加**，非加性）：终盘(巡目>=12) ×2、
     开局(<=3 巡) ×0.5、立直 ×3、听牌 ×3（代码 `(1+2*riichi)*(1+2*tenpai)`）；
     立直且听牌 ⇒ **×9**。⚠️ 旧 docstring 写「听牌 ×2」与代码不符
     （README §11.5-③），2026-10-20 更正。
+
+    RM9 立直层专项：``riichi_weight`` 覆盖立直 ×3（默认 3.0 不改变旧行为）；
+    ``riichi_early_weight`` 只对「立直且 turn<=7」再乘（针对 post0/早期立直
+    这个最弱子集，避免全局重加权伤害非立直层）。
     """
+    cfg = {**DEFAULT_LOSS_CFG, **(cfg or {})}
     turn = batch['turn'].float()                              # [B]
     base = torch.ones_like(turn)
     base = torch.where(turn >= 12, torch.full_like(base, 2.0), base)
     base = torch.where(turn <= 3, torch.full_like(base, 0.5), base)
     w = base[:, None] * (1.0 + 2.0 * batch['riichi']) * (1.0 + 2.0 * batch['tenpai'])
+    rw = float(cfg.get('riichi_weight', 3.0))
+    if rw != 3.0:
+        w = w * torch.where(batch['riichi'] > 0.5,
+                            torch.full_like(w, rw / 3.0), torch.ones_like(w))
+    ew = float(cfg.get('riichi_early_weight', 1.0))
+    if ew != 1.0:
+        early = (batch['riichi'] > 0.5) & (batch['turn'][:, None] <= 7)
+        w = w * torch.where(early, torch.full_like(w, ew), torch.ones_like(w))
     return w                                                # [B,3]
 
 
@@ -215,7 +230,7 @@ def _balanced_class_weights(labels: torch.Tensor, n_classes: int,
 def compute_loss(out, batch, loss_cfg: dict | None = None):
     """总损失。loss_cfg 缺省用 DEFAULT_LOSS_CFG（见模块头「结构头专项」）。"""
     cfg = {**DEFAULT_LOSS_CFG, **(loss_cfg or {})}
-    w = sample_weights(batch)                                # [B,3]
+    w = sample_weights(batch, cfg)                           # [B,3]
 
     # ---- L_alloc：逐列计数 CE（logits 已按 unseen 掩码）----
     logp = torch.log_softmax(out['alloc_logits'], dim=-1)    # [B,3,34,5]
@@ -597,6 +612,12 @@ def main():
                     default=DEFAULT_LOSS_CFG['wait_tenpai'],
                     help='输出侧 tenpai 监督（wait[34] 拟合 1-tenpai，全目标）权重；'
                          'A2b 机制修复，0 关闭（等价 v2s）')
+    ap.add_argument('--riichi-weight', type=float,
+                    default=DEFAULT_LOSS_CFG['riichi_weight'],
+                    help='立直目标样本权重（旧行为 ×3；>3 提高立直层关注）')
+    ap.add_argument('--riichi-early-weight', type=float,
+                    default=DEFAULT_LOSS_CFG['riichi_early_weight'],
+                    help='立直且 turn<=7 的额外乘数（针对 post0/早期立直）')
     ap.add_argument('--next-tedashi-weight', type=float,
                     default=DEFAULT_LOSS_CFG['next_tedashi'],
                     help='RM14：tile 时序流的 next-tedashi 辅助 CE 权重（0 关闭；'
@@ -608,6 +629,9 @@ def main():
     ap.add_argument('--log-every', type=int, default=100)
     ap.add_argument('--seed', type=int, default=20261016)
     ap.add_argument('--resume', default=None)
+    ap.add_argument('--init', default=None,
+                    help='仅加载模型权重（暖启探针：不加载 optimizer/scheduler，'
+                         'start_step=0、best_val=inf；与 --resume 互斥且优先）')
     ap.add_argument('--max-files', type=int, default=0, help='>0 时限制训练文件数（冒烟用）')
     args = ap.parse_args()
     # P1b 输入消融：必须在建数据集/DataLoader 之前生效（worker 靠 fork 继承）
@@ -707,6 +731,8 @@ def main():
         'wait_tenpai': args.wait_tenpai_weight,
         'struct_balance': not args.no_struct_balance,
         'next_tedashi': args.next_tedashi_weight,
+        'riichi_weight': args.riichi_weight,
+        'riichi_early_weight': args.riichi_early_weight,
     }
     print(f'[loss] cfg={loss_cfg}', flush=True)
     # LR 基准统一为**绝对步数**（resume 安全，2026-10-20 必修）：
@@ -731,7 +757,14 @@ def main():
 
     start_step = 0
     best_val = float('inf')
-    if args.resume:
+    if args.init:
+        # 暖启探针（RM9）：只借权重，不继承 A2c 的 153k 绝对 LR 日程。
+        # 否则 lr_lambda(153000 / (153000+20000)) ≈ 1.6e-6，参数几乎冻结。
+        state = torch.load(args.init, map_location='cpu', weights_only=False)
+        net.load_state_dict(state['model'])
+        print(f'[init] {args.init} @ step {state.get("step")}; '
+              f'optimizer/scheduler reset, lr={args.lr}', flush=True)
+    elif args.resume:
         state = torch.load(args.resume, map_location='cpu', weights_only=False)
         net.load_state_dict(state['model'])
         if 'optimizer' in state:

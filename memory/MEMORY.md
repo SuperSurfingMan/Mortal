@@ -1,7 +1,7 @@
 # Mortal 项目上下文记忆文档
 
 > **用途**：沉淀项目历史、关键结论、可复现配置与坑位，供新会话快速接手。
-> **本版**：2026-10-18 结构化重构（按「快速接手 → 系统与数据 → 实验史 → 现状 → 工程规范 → 索引」重排，合并旧版 §12/§16/§17 重复叙述；旧版全文 `git show HEAD:memory/MEMORY.md`，重构前 2136 行）。**2026-10-19 增补 §3.15**（读牌模型复核与改进路线 RM1~RM11）：推翻 §3.12/§3.14 关于「tenpai_auc 与规则打平」与「读侧已近天花板」的两条判决，并同步更新 §0.1/§0.2/§4.1/§4.2/§5.2。**同日增补 §3.15.8**（局部手牌信息视角：架构与损失是否充分，新增 RM12~RM16 与坑位 49~55）：判定为「**集合级充分、顺序级不充分**」，时序流实测空转（配对反事实斜率 0.0144）；同时把全部诊断脚本从 `/tmp` 收进 **`tools/read_model/diagnostics/`**（含 `_common.py` 路径解析层、`README.md` 方法学纪律、`results/*.json` 原始产物）。**同日再把读牌模型的全部记录整体迁出本文**，改由 **`tools/read_model/README.md`** 单一维护：§3.12 只留三句话摘要与链接，旧章节号（§3.12/§3.14/§3.15.x）映射见该 README **§16**；本文回归「主模型 + 数据 + 评测 + 工程规范」的项目级职责（1261 → 722 行）。**同日晚些时候 P0 零成本项（RM1~RM3+RM16）已全部落地并复跑验收**（实现与全部数字见该 README **§13.3**）：读法收口 `model.factorized_wait_probs`、val_score v2、CE 拆分/决策分层/R-P 双口径、`order_metrics.py` 常规诊断；回归 52 项 ALL PASS；并**实证否决**了复核清单第⑦条（chiitoi 0.109 确为 recall、向听桶 5 从不预测，坑 44 已修订）。**2026-10-20 更新**：① 读牌全量代码审计（22 py/8370 行 + 11 diagnostics/1684 行，`AUDIT_20261020.md`）修订两条地基——**A3 规则法并非顺序盲**（经 `early_discard_mask`/`timeline_features` 消费 `tl_tokens`），真顺序盲地板下 A2b 扣地板复现率由 41%/67%/−12% 上修为 **66.6%/81.9%/+31.0%**（§3.12-3、§0.2、§4.1 同步改口径；立直层仍是主要缺口）；resume 后 lr=0 静默冻结与门禁假 PASS 两个事故已修复并门禁化（坑 57/58）。② **本地 master 22 个提交已推送 `origin`（`eb4f660..69eaa6e`），§1.8「本地 ahead」状态解除**。③ A2c 200k 训练推进至 ~152k/200k，中途 best val_score **2.0552**（8192 eval 口径）已优于 A2b 的 2.0924，等官方 20000 集复验（详见 §0.1/§4.2）。
+> **本版**：2026-10-18 结构化重构（按「快速接手 → 系统与数据 → 实验史 → 现状 → 工程规范 → 索引」重排，合并旧版 §12/§16/§17 重复叙述；旧版全文 `git show HEAD:memory/MEMORY.md`，重构前 2136 行）。**2026-10-19 增补 §3.15**（读牌模型复核与改进路线 RM1~RM11）：推翻 §3.12/§3.14 关于「tenpai_auc 与规则打平」与「读侧已近天花板」的两条判决，并同步更新 §0.1/§0.2/§4.1/§4.2/§5.2。**同日增补 §3.15.8**（局部手牌信息视角：架构与损失是否充分，新增 RM12~RM16 与坑位 49~55）：判定为「**集合级充分、顺序级不充分**」，时序流实测空转（配对反事实斜率 0.0144）；同时把全部诊断脚本从 `/tmp` 收进 **`tools/read_model/diagnostics/`**（含 `_common.py` 路径解析层、`README.md` 方法学纪律、`results/*.json` 原始产物）。**同日再把读牌模型的全部记录整体迁出本文**，改由 **`tools/read_model/docs/README.md`** 单一维护：§3.12 只留三句话摘要与链接，旧章节号（§3.12/§3.14/§3.15.x）映射见该 README **§16**；本文回归「主模型 + 数据 + 评测 + 工程规范」的项目级职责（1261 → 722 行）。**同日晚些时候 P0 零成本项（RM1~RM3+RM16）已全部落地并复跑验收**（实现与全部数字见该 README **§13.3**）：读法收口 `model.factorized_wait_probs`、val_score v2、CE 拆分/决策分层/R-P 双口径、`order_metrics.py` 常规诊断；回归 52 项 ALL PASS；并**实证否决**了复核清单第⑦条（chiitoi 0.109 确为 recall、向听桶 5 从不预测，坑 44 已修订）。**2026-10-20 更新**：① 读牌全量代码审计（22 py/8370 行 + 11 diagnostics/1684 行，`AUDIT_20261020.md`）修订两条地基——**A3 规则法并非顺序盲**（经 `early_discard_mask`/`timeline_features` 消费 `tl_tokens`），真顺序盲地板下 A2b 扣地板复现率由 41%/67%/−12% 上修为 **66.6%/81.9%/+31.0%**（§3.12-3、§0.2、§4.1 同步改口径；立直层仍是主要缺口）；resume 后 lr=0 静默冻结与门禁假 PASS 两个事故已修复并门禁化（坑 57/58）。② **本地 master 22 个提交已推送 `origin`（`eb4f660..69eaa6e`），§1.8「本地 ahead」状态解除**。③ A2c 200k 训练推进至 ~152k/200k，中途 best val_score **2.0552**（8192 eval 口径）已优于 A2b 的 2.0924。**2026-10-21 结项**：北京时间 00:46 完整跑完 200k 步并正常退出（末段 104k resume 起 15.11h，稳态 0.60–0.63 s/步，LR 余弦归零，全程无中断/发散/Traceback），best val_score **2.052388 @153k**（8192 口径：alloc_ce 0.6492 / wait_hit1 0.2033 / tenpai_auc 0.9705），RM4/RM5/RM7 三条判据点估计全过；官方 20000 固定集三报告 + `order_metrics.py` 验收待跑，验收用 `best.pth`(153k) 而非 `last.pth`(200k，val 2.0613)；训练监控与 ETA 复盘见 `tools/read_model/docs/A2C_TRAINING_REPORT_20261021.md`（详见 §0.1/§3.12/§4.2）。
 > **可靠性标注**：✅ 已实测/已读源码　🔶 官方文档或作者声明　⬜ 未验证
 
 **目录**：0 快速接手 · 1 项目与系统 · 2 数据与评测 · 3 训练与实验史 · 4 现状与下一步 · 5 工程规范与坑位 · 6 工具/文件/产物 · 7 附录
@@ -18,7 +18,7 @@
 | 代码/运行目录 | `/mnt/data8/mortal/Mortal`；训练必须在 `mortal/` 下执行 |
 | 现役最强 | `mortal/checkpoints/round4/mortal.pth`（645k，fp32） |
 | 判定基线 | B/756k：`reward_ablation/B_rank_pt_aligned/mortal.pth`；top400_v2 + `pts=[2,1,0,-3]` + augmentation |
-| 当前阶段 | IQL 路线已关闭；S6a 已判定；**读牌模型已判决并定为注入基线（A2b），P0 口径修正已落地，P1（RM4+RM5+RM7）已实现且 A2c 200k 训练中**，全部记录已从本文迁出**——实验史 / Bayes 上界 / 复核修正 / 改进路线 RM1~RM16 / 坑位 / 产物台账统一在 `tools/read_model/README.md`，本文只留 §3.12 摘要。**读牌 P0 零成本项（RM1~RM3+RM16）已于 2026-10-19 落地并复跑验收**（README §13.3），注入特征口径可冻结。**A2c 现状（10-20 上午）**：~152k/200k（tmux `read_a2c`，RTX 8000 GPU2 / NW=8，~0.2 s/步，剩余 ~2h），中途 best val_score **2.05524**（@151k，8192 eval 口径：alloc_ce 0.6494 / wait_hit1 0.2022 / tenpai_auc 0.9705 / meanP(听) 0.1517 vs 实际 0.145 / 向听 acc 0.5605）——RM4（AUC≥0.9685）、RM5（hit@1≥0.16）、RM7（val_score<2.0924）三条判据点估计已全部越过（8192 与 A2b 官方 20000 集不同口径，须以官方集复跑三报告为准）。下一步：A2c 到 200k 后跑官方三报告 + order_metrics 对照，达标则与 S6b 注入（路径 C：B0 吞吐 → B1 限域 → B2 ladder 双向 ≥5000 sets）并行；读侧顺序通路（RM6+RM12+RM13+RM14）列 P1b；数据侧扩窗 2019+ 并重训 GRP |
+| 当前阶段 | IQL 路线已关闭；S6a 已判定；**读牌模型已判决并定为注入基线（A2b），P0 口径修正已落地，P1（RM4+RM5+RM7）已实现且 A2c 200k 已结项（10-21）**，全部记录已从本文迁出**——实验史 / Bayes 上界 / 复核修正 / 改进路线 RM1~RM16 / 坑位 / 产物台账统一在 `tools/read_model/docs/README.md`，本文只留 §3.12 摘要。**读牌 P0 零成本项（RM1~RM3+RM16）已于 2026-10-19 落地并复跑验收**（README §13.3），注入特征口径可冻结。**A2c 结项（北京时间 10-21 00:46）**：200k 步完整跑完、正常退出、无中断（4 次运行：32.4k NW16 内存事故降 NW8 迁 RTX 8000 → 103k 命中 lr=0 坑 58 空转 1400 步 → 104k resume 起 15.11h 跑完，稳态 0.60–0.63 s/步），best val_score **2.052388 @153k**（8192 eval 口径：alloc_ce 0.6492 / wait_hit1 0.2033 / tenpai_auc 0.9705 / meanP(听) 0.1519 vs 实际 0.145 / 向听 acc 0.5590），终局 eval(200k) 2.0613 ⇒ **验收用 `best.pth`(153k)**；RM4（AUC≥0.9685）、RM5（hit@1≥0.16）、RM7（val_score<2.0924，−1.9%）三条判据点估计全部越过（8192 口径与 A2b 同集可比，cond_ce/立直 hit@1 须以官方 20000 固定集复跑三报告为准）。下一步：跑官方三报告 + order_metrics 对照，达标则与 S6b 注入（路径 C：B0 吞吐 → B1 限域 → B2 ladder 双向 ≥5000 sets）并行；读侧顺序通路（RM6+RM12+RM13+RM14）列 P1b；数据侧扩窗 2019+ 并重训 GRP |
 | 数据 | 全树 2,630,640 局（200902~202610，16 GB）；训练窗 813,145 局；holdout = 202609+ |
 | 硬件 | Ubuntu 18.04 容器，56 线程，251 GB 内存，4×P100-16GB + 1×RTX 8000-48GB |
 
@@ -27,7 +27,7 @@
 - **唯一统计显著的增益**：R2「top400 白名单 + GRP h128」= **+2.86 ± 0.59 pt/半庄**（t=4.83）。
 - **已关闭的路线**：同分布数据 reshuffle（R3/R4/R5/消融 A/hp_ablation）、真实分数差奖励 C（−5.61）、IQL Stage A 跨局信用（−1.03）、IQL Stage B 真 IQL（v3 +0.646，CI 跨 0）、S6a 紧迫度特征（+0.182，CI 跨 0）。
 - **当前主线**：数据侧扩窗 2019+ 并重训 GRP；信息侧 S6b（读牌后验）与 S6c（SP 盲区/牌型潜力）合并成一次 v6 注入；读牌模型走路径 C 注入 + ladder 在线验收。
-- **读牌侧（全部详情见 `tools/read_model/README.md`，本文 §3.12 有三句话摘要）**：2026-10-19 的只读复核**推翻两条旧判决**——「P(听牌) 过标定 6.3×、注入前必须重标定」实为读错输出（改 `1−sigmoid(wait_logits[34])` 即 AUC 0.9461→**0.9685**、标定比值 **0.998**，可直接当概率注入）；「读侧已近天花板」证据不足。当前判定是「**局部信息集合级充分；顺序级非立直层已捕捉约 8 成、立直层仍是主要缺口**」（10-20 审计修订「顺序级几乎为零」旧说法，见 §3.12-3）。改进路线 RM1~RM16，其中 RM1~RM3 + RM16 **零训练成本——已于 2026-10-19 全部落地并复跑验收**（README §13.3：全部 `wait_probs` 消费方统一为因子化读法；正确口径下 net tenpai AUC **0.9685 显著胜** rule 0.9468（CI 不跨 0），wait CE 优势全部来自条件分布 +0.2167 nats；`wait_ce_active` 官方值改为 3.4809=0.5848+2.8961；`order_metrics.py` 把 §12 三项顺序级指标沉淀为常规判据，A2b 基线 RM12~RM15 全 FAIL 存档；复核第⑦条 precision/recall「bug」经复跑实证否决）。
+- **读牌侧（全部详情见 `tools/read_model/docs/README.md`，本文 §3.12 有三句话摘要）**：2026-10-19 的只读复核**推翻两条旧判决**——「P(听牌) 过标定 6.3×、注入前必须重标定」实为读错输出（改 `1−sigmoid(wait_logits[34])` 即 AUC 0.9461→**0.9685**、标定比值 **0.998**，可直接当概率注入）；「读侧已近天花板」证据不足。当前判定是「**局部信息集合级充分；顺序级非立直层已捕捉约 8 成、立直层仍是主要缺口**」（10-20 审计修订「顺序级几乎为零」旧说法，见 §3.12-3）。改进路线 RM1~RM16，其中 RM1~RM3 + RM16 **零训练成本——已于 2026-10-19 全部落地并复跑验收**（README §13.3：全部 `wait_probs` 消费方统一为因子化读法；正确口径下 net tenpai AUC **0.9685 显著胜** rule 0.9468（CI 不跨 0），wait CE 优势全部来自条件分布 +0.2167 nats；`wait_ce_active` 官方值改为 3.4809=0.5848+2.8961；`order_metrics.py` 把 §12 三项顺序级指标沉淀为常规判据，A2b 基线 RM12~RM15 全 FAIL 存档；复核第⑦条 precision/recall「bug」经复跑实证否决）。
 - **纪律**：每轮单变量；判定只认「全新种子块 + 双向同牌山 ≥5000 sets + block bootstrap CI」；CI 下界 >0 才算赢。**指标口径纪律（README §11.2）**：报 `wait_ce_active` 必须同时给 `−logP(t)` 与 `cond_ce`，否则跨模型比较无效。
 
 ### 0.3 三条命令
@@ -49,7 +49,7 @@ python3 ladder.py <challenger> <champion> <seed> 500 <log_dir>   # 单卡判定
 | 现在该做什么、哪些路线已死 | §4 |
 | 踩过的坑、日志规范 | §5 |
 | 工具、文件、产物在哪 | §6 |
-| **读牌模型（暗牌/听牌/待牌预测）的一切** | **`tools/read_model/README.md`**（本文仅 §3.12 摘要 + §13/§14 指针） |
+| **读牌模型（暗牌/听牌/待牌预测）的一切** | **`tools/read_model/docs/README.md`**（本文仅 §3.12 摘要 + §13/§14 指针） |
 
 ---
 
@@ -433,7 +433,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 ### 3.12 读牌模型（`tools/read_model/`）——完整记录已迁出
 
 读牌模型的**全部实验记录、判决依据、复核修正、改进路线（RM1~RM16）、坑位与产物台账**，
-自 2026-10-19 起统一维护在 **`tools/read_model/README.md`**；诊断脚本与原始数字在
+自 2026-10-19 起统一维护在 **`tools/read_model/docs/README.md`**；诊断脚本与原始数字在
 `tools/read_model/diagnostics/`。本文只保留下面三句话摘要与链接；历史文档中的旧章节号
 （§3.12 / §3.14 / §3.15.x）对照见该 README 的 **§16 章节映射**。
 
@@ -445,7 +445,11 @@ R-P 双口径）+ RM16（`order_metrics.py`）已实现，三份报告 + Bayes �
 1. **基线已定**：A2b（1.371M 参数，best@43k，val 2.0924）经预注册判据定为**注入基线**；与纯
    规则法 A3 对决显示增量**真实但 modest**——规则法已拿到「均匀→A2b」总增益的 42%~74%
    （alloc 是规则最弱项，也是神经网络增量最大处）。尚未注入 `mortal/`，强度只认路径 C 注入
-   + ladder 在线验收，离线指标仅诊断。
+   + ladder 在线验收，离线指标仅诊断。**A2c（RM4+RM5+RM7，200k 步）已于 2026-10-21 结项**：
+   北京时间 00:46 完整跑完、正常退出，best val_score **2.052388 @153k**（8192 口径，胜 A2b
+   2.0924 −1.9%），RM4/RM5/RM7 判据点估计全过，官方 20000 集三报告 + `order_metrics.py` 验收
+   待跑；验收用 `best.pth`(153k) 而非 `last.pth`(200k，val 2.0613)。详见 README **§13.4** 与
+   `tools/read_model/docs/A2C_TRAINING_REPORT_20261021.md`。
 2. **两条旧判决已被推翻**（2026-10-19 只读复核，零训练成本）：① 「P(听牌) 过标定 6.3×、注入
    前必须重标定」实为**读错了输出**——BCE 标定的是 logit 而项目全程读 softmax，换
    `1−sigmoid(wait_logits[34])` 后标定比值 **0.998**、AUC **0.9461→0.9685**；② wait_ce 的
@@ -485,16 +489,16 @@ R-P 双口径）+ RM16（`order_metrics.py`）已实现，三份报告 + Bayes �
 | IQL Stage A 跨局信用 | ❌ 关闭 | −1.03，bootstrap CI[−2.06,−0.02] |
 | IQL Stage B 真 IQL | ❌ 关闭（干净否证） | v3 +0.646，CI[−0.35,+1.63] |
 | S6a 紧迫度特征 | ❌ 无结论（零新信息） | +0.182，CI[−0.82,+1.20] |
-| 读牌模型（S6b 上游） | ⏳ 信息侧主线；判决已三次修正 | **全部记录迁至 `tools/read_model/README.md`**（§9 Bayes 上界 / §10 实验记录 / §11 复核修正 / §12 局部手牌信息 / §13 优先级）。要点：A2b 为注入基线；「P(听牌) 需重标定」作废（改 sigmoid 口径即已标定，可直接当概率注入）；「读侧近天花板」证据不足；最大单点杠杆＝输出层因子化 + H2 逐牌列特征；**RM1~RM3+RM16 已落地（README §13.3），注入特征口径可冻结**；正确口径下 net tenpai AUC 0.9685 显著胜 rule 0.9468；**RM4+RM5+RM7 已实现，A2c ~152k/200k（10-20 上午，8192 口径 val_score 2.0552 已胜 A2b 2.0924，待官方集验收）**；10-20 审计：A3 非顺序盲，真顺序盲地板下顺序级复现率上修至 66.6%/81.9%/+31.0% |
+| 读牌模型（S6b 上游） | ⏳ 信息侧主线；判决已三次修正 | **全部记录迁至 `tools/read_model/docs/README.md`**（§9 Bayes 上界 / §10 实验记录 / §11 复核修正 / §12 局部手牌信息 / §13 优先级）。要点：A2b 为注入基线；「P(听牌) 需重标定」作废（改 sigmoid 口径即已标定，可直接当概率注入）；「读侧近天花板」证据不足；最大单点杠杆＝输出层因子化 + H2 逐牌列特征；**RM1~RM3+RM16 已落地（README §13.3），注入特征口径可冻结**；正确口径下 net tenpai AUC 0.9685 显著胜 rule 0.9468；**RM4+RM5+RM7 已实现，A2c 200k 已结项（北京 10-21 00:46，best@153k val_score 2.0524 胜 A2b 2.0924 −1.9%，RM4/RM5/RM7 判据点估计全过；官方 20000 集三报告 + `order_metrics.py` 验收待跑）**；10-20 审计：A3 非顺序盲，真顺序盲地板下顺序级复现率上修至 66.6%/81.9%/+31.0% |
 | 扩窗 2019+ + 重训 GRP | ⏳ 数据侧主线 | 成本最高，IQL 关闭后接棒 |
 
 ### 4.2 下一步优先级
 
 | 优先级 | 事项 | 要点 |
 |---|---|---|
-| **P0** ✅ | 读牌 RM1~RM3 + RM16（零训练成本）——**2026-10-19 已完成** | 实现与验收全录见 `tools/read_model/README.md` **§13.3**：因子化读法收口模型层、val_score v2（H2 门禁验证 A2 型塌缩必被拒）、CE 拆分/决策分层/R-P 双口径、`order_metrics.py`（RM12~RM15 判据，A2b 基线全 FAIL 存档）。复跑改判：net tenpai AUC 显著胜 rule；⑦「precision/recall bug」实证否决（0.1087 确为 recall，chiitoi precision 0.413，桶 5 从不预测）|
-| **P0** | S6b+S6c 合并 v6 注入 | 读牌后验 + SP 盲区 acceptance/牌型潜力；先 30k 步探针（~2h，门禁 holdout/行为画像）；种子块 260000/270000；通过后再开正式轮。**~~注入前必须先重标定 P(听牌)~~ → 已由 RM1 解决**（`tools/read_model/README.md` §11.1：sigmoid 口径标定比值 0.998，可直接当概率注入，防守门控不会全时开）。建议 RM1 完成后再冻结注入特征口径 |
-| **P1** ⏳ | 读牌 RM4~RM7 + RM12~RM15（需一次重训）——**RM4+RM5+RM7 已实现，A2c ~152k/200k，10-20 上午 RTX 8000 GPU2/NW8、~0.2 s/步、剩 ~2h；8192 口径中途 best val_score 2.05524，RM4/RM5/RM7 三条判据点估计均已越过，待官方 20000 集复验**（tmux `read_a2c`；README §13.4） | 同上 §13.2。RM4 输出层因子化（CE34 条件损失 + tenpai 独立头）、RM5 H2 逐牌打分头（`--wait-head tile`，参数 1.371M→1.347M）、RM7 扩步数 50k→200k+NW16（SP 表开关越界未做）已落地；验收 hit@1≥0.16、立直 hit@1≥0.135、val_score<2.0924。**RM6/RM12~RM15 未动**（顺序通路须同做，列 P1b；阈值须按 10-20 真顺序盲地板重标定）。10-20 凌晨运维：修复 resume 后 lr=0 静默冻结（cosine 基准改绝对步数，坑 58 + I6 门禁）与 v1 训练必崩（struct 门控写错，且 E 层门禁曾靠陈旧 log 假 PASS 三次，坑 57）；A2c（v2s）不受影响 |
+| **P0** ✅ | 读牌 RM1~RM3 + RM16（零训练成本）——**2026-10-19 已完成** | 实现与验收全录见 `tools/read_model/docs/README.md` **§13.3**：因子化读法收口模型层、val_score v2（H2 门禁验证 A2 型塌缩必被拒）、CE 拆分/决策分层/R-P 双口径、`order_metrics.py`（RM12~RM15 判据，A2b 基线全 FAIL 存档）。复跑改判：net tenpai AUC 显著胜 rule；⑦「precision/recall bug」实证否决（0.1087 确为 recall，chiitoi precision 0.413，桶 5 从不预测）|
+| **P0** | S6b+S6c 合并 v6 注入 | 读牌后验 + SP 盲区 acceptance/牌型潜力；先 30k 步探针（~2h，门禁 holdout/行为画像）；种子块 260000/270000；通过后再开正式轮。**~~注入前必须先重标定 P(听牌)~~ → 已由 RM1 解决**（`tools/read_model/docs/README.md` §11.1：sigmoid 口径标定比值 0.998，可直接当概率注入，防守门控不会全时开）。建议 RM1 完成后再冻结注入特征口径 |
+| **P1** ✅训完/⏳待验收 | 读牌 RM4~RM7 + RM12~RM15（需一次重训）——**RM4+RM5+RM7 已实现，A2c 200k 已结项**（北京 10-21 00:46 正常退出，RTX 8000 GPU2/NW8，末段稳态 0.60–0.63 s/步；8192 口径 best val_score 2.052388 @153k，胜 A2b 2.0924 −1.9%），RM4/RM5/RM7 三条判据点估计均已越过，待官方 20000 集三报告 + `order_metrics.py` 复验，**验收用 `best.pth`(153k) 而非 `last.pth`(200k，val 2.0613)**（README §13.4 + `docs/A2C_TRAINING_REPORT_20261021.md`） | 同上 §13.2。RM4 输出层因子化（CE34 条件损失 + tenpai 独立头）、RM5 H2 逐牌打分头（`--wait-head tile`，参数 1.371M→1.347M）、RM7 扩步数 50k→200k+NW16（SP 表开关越界未做）已落地；验收 hit@1≥0.16、立直 hit@1≥0.135、val_score<2.0924。**RM6/RM12~RM15 未动**（顺序通路须同做，列 P1b；阈值须按 10-20 真顺序盲地板重标定）。10-20 凌晨运维：修复 resume 后 lr=0 静默冻结（cosine 基准改绝对步数，坑 58 + I6 门禁）与 v1 训练必崩（struct 门控写错，且 E 层门禁曾靠陈旧 log 假 PASS 三次，坑 57）；A2c（v2s）不受影响 |
 | **P1** | 数据扩窗 2019+ | 与 GRP 重训、按年份审计同步做；主模型 holdout 仍用 202609+ |
 | **P1** | 读牌路径 C 注入 | B0 立直振听/吞吐（`with_sp_tables`）→ B1 限域注入（防守/全决策两档）→ B2 ladder 双向 ≥5000 sets 判定 |
 | **P2** | 外部锚点 akochan | 需 JRE + `AKOCHAN_DIR`/`AKOCHAN_TACTICS`；人类牌谱不能当 arena 对手（无 seed） |
@@ -502,7 +506,7 @@ R-P 双口径）+ RM16（`order_metrics.py`）已实现，三份报告 + Bayes �
 | **P2** | 工程债 | ~~git push~~ **已完成（10-20，22 个提交同步）**；异地备份、上游 `git diff` 校准、两套 holdout 同分布口径、agari-guard holdout、kan-select 回放对照、文档对账（`TRAINING_MANUAL.md` §4.x/健康判据） |
 | **P3** | 在线自博弈（M5） | 仅在评测可信后开；`online=true` + `freeze_bn.mortal=true`；子进程规避卡死；P100×4 可当 client 集群 |
 | **P3** | 防守行为专项 | 流局 10.9% vs 人类 15.3%、放铳 0.1405 vs 0.1255 → 弃和不足；试 cql 权重/奖励平滑/oracle 特征 |
-| **P3** | 更强行为先验（若要继续压上界） | `tools/read_model/README.md` §9 的参考策略弱于 A2b；要真正回答「还剩多少」需 ukeire/安全度策略或学习型 policy（如用 A2b 之外的人类舍牌模型），并保留 `hard` 作为下界 |
+| **P3** | 更强行为先验（若要继续压上界） | `tools/read_model/docs/README.md` §9 的参考策略弱于 A2b；要真正回答「还剩多少」需 ukeire/安全度策略或学习型 policy（如用 A2b 之外的人类舍牌模型），并保留 `hard` 作为下界 |
 
 ### 4.3 当前资产与基线
 
@@ -578,7 +582,7 @@ R-P 双口径）+ RM16（`order_metrics.py`）已实现，三份报告 + Bayes �
 | 39 | IQL | expectile + γ≈1 + 边界稀疏奖励会价值尺度指数自激：τ=0.7 时 q_target p50 +0.6→+60.8（倍增 ~32k 步）；τ=0.5 是唯一验证稳定修复。慢漂移时间尺度 ~3 万步，2k 冒烟完全无感 |
 | 40 | IQL | 慢漂移必须靠每存盘点 `iql scale:` 分位数日志做正式轮全程监控（间隔 ≪ 现象时间尺度 1/10），链脚本把 max p50 做成放行门禁（≤~5） |
 | 41 | 工程 | 并行实验禁止就地改共享代码/替换共享 `.so`：已启动进程的 DataLoader/holdout 子进程会重新 import，`cp` 覆盖 `.so` 还可能被读到半写文件；一律隔离工作区（`s6a_isolated/`） |
-| 42~60 | 读牌 | **读牌专题坑位（P(听牌) 口径分裂、CE 必须先分解、分桶 support 命名、选型判据须覆盖曾退化指标、cosine 走平≠到顶、CLI 参数静默失效、设计动机与实现对账、必须减行为盲地板、合并跨格引入组成混杂、反事实要配逐样本期望、集合级掩盖顺序级、tile-agnostic 池化承载不了逐牌信息、三家共享同一份 `h`、切序直觉方向可能反、**地板/参照系须先验证其对自变量不响应**、**同一符号只能有一种约定且明细必须落盘**）已随读牌记录整体迁至 `tools/read_model/README.md` §14，编号 42~60 原样保留便于回查** |
+| 42~60 | 读牌 | **读牌专题坑位（P(听牌) 口径分裂、CE 必须先分解、分桶 support 命名、选型判据须覆盖曾退化指标、cosine 走平≠到顶、CLI 参数静默失效、设计动机与实现对账、必须减行为盲地板、合并跨格引入组成混杂、反事实要配逐样本期望、集合级掩盖顺序级、tile-agnostic 池化承载不了逐牌信息、三家共享同一份 `h`、切序直觉方向可能反、**地板/参照系须先验证其对自变量不响应**、**同一符号只能有一种约定且明细必须落盘**）已随读牌记录整体迁至 `tools/read_model/docs/README.md` §14，编号 42~60 原样保留便于回查** |
 
 ### 5.3 日志归置规范（强制执行）
 
@@ -642,7 +646,7 @@ R-P 双口径）+ RM16（`order_metrics.py`）已实现，三份报告 + Bayes �
 | `tools/training/prepare_iql_probe.py` + `run_iql_probe.sh` | 5 臂×30k 步单旋钮探针 |
 | `tools/training/prepare_iql_b_v3.py` | `--fix tau05` 一键生成 v3 配置 |
 | `tools/training/prepare_hp_ablation.py` / `run_hp_ablation.sh` / `resume_and_judge_hp.sh` | 超参消融/挪卡续训 |
-| `tools/read_model/` | **读牌模型全部工具**：v1/v2/v2s/v2x/A2b/A3 + 39 项回归 + ONNX 导出 + A3 规则法（`rule_baseline`/`a3_eval`/`compare_a3`/`calibrate_a3`）+ Bayes 上界（`bayes_bound`/`shanten_fast`）+ 诊断脚本 `diagnostics/`。逐条清单与用法见 `tools/read_model/README.md` §15 与 `diagnostics/README.md` |
+| `tools/read_model/` | **读牌模型全部工具**：v1/v2/v2s/v2x/A2b/**A2c(200k 结项)**/A3 + 39 项回归 + ONNX 导出 + A3 规则法（`rule_baseline`/`a3_eval`/`compare_a3`/`calibrate_a3`）+ Bayes 上界（`bayes_bound`/`shanten_fast`）+ 诊断脚本 `diagnostics/`。逐条清单与用法见 `tools/read_model/docs/README.md` §15 与 `diagnostics/README.md` |
 | `s6a_isolated/`（`tools/expand_ckpt_v5.py`、`tools/test_urgency_features.py`、`run_s6a{,_smoke}.sh`、`patches/v5_obs_features.patch`） | S6a 隔离工作区：v4→v5 手术、回归、冒烟、正式链 |
 
 ### 6.2 关键文件（Linux 路径）
@@ -682,7 +686,7 @@ R-P 双口径）+ RM16（`order_metrics.py`）已实现，三份报告 + Bayes �
 | `dataset/tenhou_hf/` | 18 个 HF 年度 tar | 17 GB |
 | `dataset/raw/`、`dataset/index/` | 2026 原始 mjlog；清单/榜单/manifest | 1.2 GB / 197 MB |
 | `mortal/checkpoints/` | R1–R5、reward_ablation A/B/C、hp_ablation×3、iql_a、iql_b_v2/v3、grp×3、baseline | ≈5 GB+ |
-| `mortal/read_model_bayes/`、`mortal/read_model_v2s_a2b/`、`tools/read_model/diagnostics/results/` | 读牌全部产物（Bayes 上界报告 / A2b 注入基线 ckpt / 诊断 json） | 台账见 `tools/read_model/README.md` §15.3 |
+| `mortal/read_model_bayes/`、`mortal/read_model_v2s_a2b/`、`mortal/read_model_v2s_a2c/`、`tools/read_model/diagnostics/results/` | 读牌全部产物（Bayes 上界报告 / A2b 注入基线 ckpt / **A2c 200k ckpt：`best.pth`(153k，val 2.0524，验收用) + `last.pth`(200k) + `train_log.jsonl`** / 诊断 json） | 台账见 `tools/read_model/docs/README.md` §15.3 |
 | `mortal/logs/ladder_r{2,3,4,5}/`、`mortal/{reward_ablation,hp_ablation,iql_a,iql_b_v2,iql_b_v3}/ladder*/` | 各轮判定牌谱（每轮约 20,000 局） | 每轮 ≈0.8 GB |
 | `s6a_isolated/code/{checkpoints/s6a,s6a,logs,runs}` | S6a 隔离产物（867k+best+step_800/850k、判定牌谱、TB、链日志） | ≈1 GB |
 | `mortal/logs/tb_archive/` | TB 坏段取证 | 72 KB |

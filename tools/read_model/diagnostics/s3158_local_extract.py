@@ -65,15 +65,20 @@ for s in range(3):
                     one[i] = (j, mid, int(pa[i]), int(pc[i]))
 ids = np.array(sorted(one)) if one else np.zeros(0, np.int64)
 print(f"[cf] 反事实样本 {len(ids)}  {time.time()-t0:.0f}s", flush=True)
-tl2 = batch['tl_tokens'].clone()
+# RM12：反事实要连 token 的侧车字段一起对调（真实巡目/衰减/被鸣），
+# 否则 tile-indexed 时序流看到的是「牌换了、时间没换」的错位样本。
+# pooled 模式（A2b/A2c）忽略侧车字段，数值与旧口径逐位一致。
+tl2 = {k: batch[k].clone() for k in
+       ('tl_tokens', 'tl_turn', 'tl_age', 'tl_consumed', 'tl_flags')}
 Jarr = np.array([one[i][0] for i in ids], np.int64)
 Mids = np.array([one[i][1] for i in ids], np.int64)
 Parr = np.array([one[i][2] for i in ids], np.int64)
 Qarr = np.array([one[i][3] for i in ids], np.int64)
 if len(ids):
-    tmp = tl2[ids, Jarr, Parr].clone()
-    tl2[ids, Jarr, Parr] = tl2[ids, Jarr, Qarr]
-    tl2[ids, Jarr, Qarr] = tmp
+    for k in tl2:
+        tmp = tl2[k][ids, Jarr, Parr].clone()
+        tl2[k][ids, Jarr, Parr] = tl2[k][ids, Jarr, Qarr]
+        tl2[k][ids, Jarr, Qarr] = tmp
     _, EC2 = forward(net, batch, keys, tl_override=tl2)
 else:
     EC2 = EC.copy()

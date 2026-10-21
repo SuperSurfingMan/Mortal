@@ -30,7 +30,10 @@ import model_v2 as M2
 net = M2.build_model_v2s(conv_channels=cfg['conv_channels'],
                          num_blocks=cfg['num_blocks'],
                          with_aux=not cfg['no_aux'],
-                         wait_head=cfg.get('wait_head', 'flat')).to(device).eval()
+                         wait_head=cfg.get('wait_head', 'flat'),
+                         tl_mode=cfg.get('tl_mode', 'pooled'),
+                         next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                         tile_order=cfg.get('tile_order', False)).to(device).eval()
 net.load_state_dict(state['model'])
 
 files = sorted(glob.glob(VAL_GLOB,
@@ -44,7 +47,8 @@ with torch.no_grad():
     for i in range(0, n, 2048):
         ch = {k: v[i:i + 2048].to(device) for k, v in batch.items()}
         wb = T.wait_bias_of(ch).to(device)
-        o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'])
+        o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'],
+                **net.tl_extra(ch))
         AP.append(o['alloc_probs'].cpu().numpy())
         WP.append(o['wait_probs'].cpu().numpy())
 ap = np.concatenate(AP).astype(np.float64)     # [n,3,34,5]

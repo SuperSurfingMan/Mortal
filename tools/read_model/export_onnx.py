@@ -44,6 +44,8 @@ from constraints import compute_wait_bias               # noqa: E402
 
 INPUT_NAMES = ['obs', 'unseen', 'wait_bias']
 INPUT_NAMES_V2 = ['obs', 'unseen', 'wait_bias', 'tl_tokens', 'tl_mask']
+#: RM12 tile-indexed 时序流的额外输入（pooled 旧 ckpt 不导出这四项）
+INPUT_NAMES_V2_TILE = INPUT_NAMES_V2 + ['tl_turn', 'tl_age', 'tl_consumed', 'tl_flags']
 # ⚠️ README §11.5-⑥（行号 2026-10-20 校正为 47-48）：`struct_*` 与 `s_belief`
 # **未导出** ⇒「注入时 46 维结构语义更好用」目前只是设想，ONNX 通道尚未打通。
 OUTPUT_NAMES = ['alloc_probs', 'exp_counts', 'wait_probs',
@@ -53,14 +55,18 @@ OUTPUT_NAMES = ['alloc_probs', 'exp_counts', 'wait_probs',
 class _OnnxWrapper(torch.nn.Module):
     """固定输出顺序与名字的薄封装（dict 输出在 ONNX 里不携带键名）。"""
 
-    def __init__(self, net, v2: bool = False):
+    def __init__(self, net, v2: bool = False, tile: bool = False):
         super().__init__()
         self.net = net
         self.v2 = v2
+        self.tile = tile
 
-    def forward(self, obs, unseen, wait_bias, tl_tokens=None, tl_mask=None):
+    def forward(self, obs, unseen, wait_bias, tl_tokens=None, tl_mask=None,
+                tl_turn=None, tl_age=None, tl_consumed=None, tl_flags=None):
         if self.v2:
-            out = self.net(obs, unseen, wait_bias, tl_tokens, tl_mask)
+            out = self.net(obs, unseen, wait_bias, tl_tokens, tl_mask,
+                           tl_turn=tl_turn, tl_age=tl_age,
+                           tl_consumed=tl_consumed, tl_flags=tl_flags)
         else:
             out = self.net(obs, unseen, wait_bias)
         return (out['alloc_probs'], out['exp_counts'], out['wait_probs'],
@@ -81,12 +87,16 @@ def main():
     cfg = state.get('config', {})
     kind = cfg.get('model', 'v1')
     is_v2 = kind in ('v2', 'v2s')
+    tile = cfg.get('tl_mode', 'pooled') == 'tile'
     if is_v2:
         builder = M2.build_model_v2s if kind == 'v2s' else M2.build_model_v2
         net = builder(conv_channels=cfg.get('conv_channels', 96),
                       num_blocks=cfg.get('num_blocks', 12),
                       with_aux=not cfg.get('no_aux', False),
-                      wait_head=cfg.get('wait_head', 'flat'))
+                      wait_head=cfg.get('wait_head', 'flat'),
+                      tl_mode=cfg.get('tl_mode', 'pooled'),
+                      next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                      tile_order=cfg.get('tile_order', False))
     else:
         net = M.build_model(conv_channels=cfg.get('conv_channels', 96),
                             num_blocks=cfg.get('num_blocks', 12),
@@ -94,7 +104,7 @@ def main():
                             pool=cfg.get('pool', 'mean'))
     net.load_state_dict(state['model'])
     net.eval()
-    wrapper = _OnnxWrapper(net, v2=is_v2).eval()
+    wrapper = _OnnxWrapper(net, v2=is_v2, tile=tile).eval()
 
     B = 2
     dummy_obs = torch.randn(B, 1012, 34)
@@ -114,7 +124,19 @@ def main():
         dummy_mask[0, 0, :7] = True
         dummy_mask[1, :, :26] = True                   # 满长序列
         inputs += [dummy_tokens, dummy_mask]
-    feed = dict(zip(INPUT_NAMES_V2 if is_v2 else INPUT_NAMES, inputs))
+        if tile:                                        # RM12：侧车字段
+            dummy_turn = torch.zeros(B, 3, 26)
+            dummy_age = torch.zeros(B, 3, 26)
+            dummy_consumed = torch.full((B, 3, 26, 2), -1, dtype=torch.int64)
+            dummy_flags = torch.zeros(B, 3, 26, 2)
+            inputs += [dummy_turn, dummy_age, dummy_consumed, dummy_flags]
+    if is_v2 and tile:
+        input_names = INPUT_NAMES_V2_TILE
+    elif is_v2:
+        input_names = INPUT_NAMES_V2
+    else:
+        input_names = INPUT_NAMES
+    feed = dict(zip(input_names, inputs))
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,10 +145,13 @@ def main():
            **{name: {0: 'B'} for name in OUTPUT_NAMES}}
     if is_v2:
         dyn.update({'tl_tokens': {0: 'B'}, 'tl_mask': {0: 'B'}})
+        if tile:
+            dyn.update({k: {0: 'B'} for k in
+                        ('tl_turn', 'tl_age', 'tl_consumed', 'tl_flags')})
     with torch.no_grad():
         torch.onnx.export(
             wrapper, tuple(inputs), str(out_path),
-            input_names=INPUT_NAMES_V2 if is_v2 else INPUT_NAMES,
+            input_names=input_names,
             output_names=OUTPUT_NAMES,
             opset_version=args.opset,
             dynamic_axes=dyn,

@@ -124,7 +124,8 @@ def main():
             ch = {k: v[i:i + args.batch_size].to(device) for k, v in batch.items()}
             wb = T.wait_bias_of(ch).to(device)
             if hasattr(net, 'timeline'):            # v2/v2s 需要时序 token
-                o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'])
+                o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'],
+                        **net.tl_extra(ch))
             else:
                 o = net(ch['obs'], ch['unseen'], wb)
             A.append(torch.softmax(o['alloc_logits'], -1).cpu().numpy())

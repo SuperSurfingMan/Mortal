@@ -157,12 +157,18 @@ def main():
         net = M2.build_model_v2(conv_channels=cfg.get('conv_channels', 96),
                                 num_blocks=cfg.get('num_blocks', 12),
                                 with_aux=not cfg.get('no_aux', False),
-                                wait_head=cfg.get('wait_head', 'flat')).to(device)
+                                wait_head=cfg.get('wait_head', 'flat'),
+                                tl_mode=cfg.get('tl_mode', 'pooled'),
+                                next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                                tile_order=cfg.get('tile_order', False)).to(device)
     elif model_kind == 'v2s':
         net = M2.build_model_v2s(conv_channels=cfg.get('conv_channels', 96),
                                  num_blocks=cfg.get('num_blocks', 12),
                                  with_aux=not cfg.get('no_aux', False),
-                                 wait_head=cfg.get('wait_head', 'flat')).to(device)
+                                 wait_head=cfg.get('wait_head', 'flat'),
+                                 tl_mode=cfg.get('tl_mode', 'pooled'),
+                                 next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                                 tile_order=cfg.get('tile_order', False)).to(device)
     net.load_state_dict(state['model'])
     net.eval()
     print(f'[model] {args.state} ({model_kind}, '
@@ -185,7 +191,7 @@ def main():
         with torch.no_grad():
             if is_v2:
                 o = net(chunk['obs'], chunk['unseen'], T.wait_bias_of(chunk).to(device),
-                        chunk['tl_tokens'], chunk['tl_mask'])
+                        chunk['tl_tokens'], chunk['tl_mask'], **net.tl_extra(chunk))
             else:
                 o = net(chunk['obs'], chunk['unseen'], T.wait_bias_of(chunk).to(device))
         alloc_probs_all.append(o['alloc_probs'].cpu().numpy())

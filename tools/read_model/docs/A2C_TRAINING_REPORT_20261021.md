@@ -5,6 +5,9 @@
 > 所有时刻以 `date -u` 为准并附北京时间换算；证据取自
 > `mortal/logs/read_model/read_model_v2s_a2c_train.log` 与
 > `mortal/read_model_v2s_a2c/train_log.jsonl`。
+>
+> **2026-10-21 后续**：A2c 保持注入基线；P1b 两版（RM12 v1、RM14 aux）20k 均 FAIL，
+> 未启动 200k；顺序通路下一步见 README §13.5~§13.8。本文仅记录 A2c 训练监控，不因后续实验改动。
 
 ---
 

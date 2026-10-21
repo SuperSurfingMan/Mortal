@@ -1,0 +1,344 @@
+{
+ "meta": {
+  "created_at": 1792568851.3246512,
+  "baseline": "A2c@153k（2026-10-21 官方验收）",
+  "thresholds": {
+   "RM12_b": 0.3,
+   "RM12_r2": 0.2,
+   "RM13": 92.696,
+   "RM14": 66.2,
+   "RM15": 0.0
+  },
+  "note": "P1b 预注册判决矩阵；由 build_p1b_verdicts 对现有 JSON 复算，无 GPU/无重训；历史 verdicts 不改"
+ },
+ "verdicts": {
+  "A2b": {
+   "source": "mortal/read_model_v2s_a2b/order_metrics.json",
+   "p1b": {
+    "RM12": {
+     "role": "primary",
+     "rule": "P1b 主判据：反事实斜率 b>=0.3 且 r2>=0.2（时序流真的在用顺序）",
+     "value": {
+      "b": 0.01441983013489815,
+      "r2": 0.03348653641503224
+     },
+     "passed": false,
+     "baseline_a2c": {
+      "b": 0.009343552759278253,
+      "r2": 0.012849632174707222
+     }
+    },
+    "RM15": {
+     "role": "primary",
+     "rule": "P1b 主判据：立直层窗口超地板 CI95 下界 > 0",
+     "value": -0.19531324209934922,
+     "passed": false,
+     "baseline_a2c": {
+      "ci95_lower": -0.1133666826794949
+     }
+    },
+    "RM13": {
+     "role": "no_regression",
+     "rule": "P1b 不退线：非立直层单张扣地板复现率 >= 92.696%（地板=order_blind；A2c 92.696%（显示 92.7%）；历史线 90% 仅存档；线取精确基线，避免 A2c 自身 FAIL）",
+     "value": 81.97721580204114,
+     "passed": false,
+     "baseline_a2c": 92.69611640513835
+    },
+    "RM14": {
+     "role": "no_regression",
+     "rule": "P1b 不退线：立直层单张扣地板复现率 >= 66.2%（地板=order_blind；A2c 66.2%；历史线 +30% 仅存档；+50 低于 A2c 66.2，作为新线无效，不能沿用）",
+     "value": 31.143125543965215,
+     "passed": false,
+     "baseline_a2c": 66.21802819482939,
+     "note": "RM14 +30% 历史线无区分力；+50 也低于 A2c 66.2，不能当新线。"
+    },
+    "meta": {
+     "baseline": "A2c@153k（2026-10-21 官方验收）",
+     "primary": [
+      "RM12",
+      "RM15"
+     ],
+     "no_regression": [
+      "RM13",
+      "RM14"
+     ],
+     "historical_verdicts": "verdicts（A2b 时代 90%/+30%，仅存档，不作 P1b 判决）",
+     "thresholds": {
+      "RM12_b": 0.3,
+      "RM12_r2": 0.2,
+      "RM13": 92.696,
+      "RM14": 66.2,
+      "RM15": 0.0
+     }
+    }
+   },
+   "historical": {
+    "RM12": {
+     "passed": false,
+     "value": {
+      "b": 0.01441983013489815,
+      "r2": 0.03348653641503224
+     }
+    },
+    "RM13": {
+     "passed": false,
+     "value": 81.97721580204114
+    },
+    "RM14": {
+     "passed": true,
+     "value": 31.143125543965215
+    },
+    "RM15": {
+     "passed": false,
+     "value": -0.19531324209934922
+    }
+   }
+  },
+  "A2c": {
+   "source": "mortal/read_model_v2s_a2c/order_metrics.json",
+   "p1b": {
+    "RM12": {
+     "role": "primary",
+     "rule": "P1b 主判据：反事实斜率 b>=0.3 且 r2>=0.2（时序流真的在用顺序）",
+     "value": {
+      "b": 0.009343552759278253,
+      "r2": 0.012849632174707222
+     },
+     "passed": false,
+     "baseline_a2c": {
+      "b": 0.009343552759278253,
+      "r2": 0.012849632174707222
+     }
+    },
+    "RM15": {
+     "role": "primary",
+     "rule": "P1b 主判据：立直层窗口超地板 CI95 下界 > 0",
+     "value": -0.1133666826794949,
+     "passed": false,
+     "baseline_a2c": {
+      "ci95_lower": -0.1133666826794949
+     }
+    },
+    "RM13": {
+     "role": "no_regression",
+     "rule": "P1b 不退线：非立直层单张扣地板复现率 >= 92.696%（地板=order_blind；A2c 92.696%（显示 92.7%）；历史线 90% 仅存档；线取精确基线，避免 A2c 自身 FAIL）",
+     "value": 92.69611640513835,
+     "passed": true,
+     "baseline_a2c": 92.69611640513835
+    },
+    "RM14": {
+     "role": "no_regression",
+     "rule": "P1b 不退线：立直层单张扣地板复现率 >= 66.2%（地板=order_blind；A2c 66.2%；历史线 +30% 仅存档；+50 低于 A2c 66.2，作为新线无效，不能沿用）",
+     "value": 66.21802819482939,
+     "passed": true,
+     "baseline_a2c": 66.21802819482939,
+     "note": "RM14 +30% 历史线无区分力；+50 也低于 A2c 66.2，不能当新线。"
+    },
+    "meta": {
+     "baseline": "A2c@153k（2026-10-21 官方验收）",
+     "primary": [
+      "RM12",
+      "RM15"
+     ],
+     "no_regression": [
+      "RM13",
+      "RM14"
+     ],
+     "historical_verdicts": "verdicts（A2b 时代 90%/+30%，仅存档，不作 P1b 判决）",
+     "thresholds": {
+      "RM12_b": 0.3,
+      "RM12_r2": 0.2,
+      "RM13": 92.696,
+      "RM14": 66.2,
+      "RM15": 0.0
+     }
+    }
+   },
+   "historical": {
+    "RM12": {
+     "passed": false,
+     "value": {
+      "b": 0.009343552759278253,
+      "r2": 0.012849632174707222
+     }
+    },
+    "RM13": {
+     "passed": true,
+     "value": 92.69611640513835
+    },
+    "RM14": {
+     "passed": true,
+     "value": 66.21802819482939
+    },
+    "RM15": {
+     "passed": false,
+     "value": -0.1133666826794949
+    }
+   }
+  },
+  "a2d_probe20k": {
+   "source": "mortal/read_model_v2s_a2d_probe20k/order_metrics.json",
+   "p1b": {
+    "RM12": {
+     "role": "primary",
+     "rule": "P1b 主判据：反事实斜率 b>=0.3 且 r2>=0.2（时序流真的在用顺序）",
+     "value": {
+      "b": 0.013075321158236577,
+      "r2": 0.0276021102114171
+     },
+     "passed": false,
+     "baseline_a2c": {
+      "b": 0.009343552759278253,
+      "r2": 0.012849632174707222
+     }
+    },
+    "RM15": {
+     "role": "primary",
+     "rule": "P1b 主判据：立直层窗口超地板 CI95 下界 > 0",
+     "value": -0.08569582076380584,
+     "passed": false,
+     "baseline_a2c": {
+      "ci95_lower": -0.1133666826794949
+     }
+    },
+    "RM13": {
+     "role": "no_regression",
+     "rule": "P1b 不退线：非立直层单张扣地板复现率 >= 92.696%（地板=order_blind；A2c 92.696%（显示 92.7%）；历史线 90% 仅存档；线取精确基线，避免 A2c 自身 FAIL）",
+     "value": 86.84971509768737,
+     "passed": false,
+     "baseline_a2c": 92.69611640513835
+    },
+    "RM14": {
+     "role": "no_regression",
+     "rule": "P1b 不退线：立直层单张扣地板复现率 >= 66.2%（地板=order_blind；A2c 66.2%；历史线 +30% 仅存档；+50 低于 A2c 66.2，作为新线无效，不能沿用）",
+     "value": 52.151138454103,
+     "passed": false,
+     "baseline_a2c": 66.21802819482939,
+     "note": "RM14 +30% 历史线无区分力；+50 也低于 A2c 66.2，不能当新线。"
+    },
+    "meta": {
+     "baseline": "A2c@153k（2026-10-21 官方验收）",
+     "primary": [
+      "RM12",
+      "RM15"
+     ],
+     "no_regression": [
+      "RM13",
+      "RM14"
+     ],
+     "historical_verdicts": "verdicts（A2b 时代 90%/+30%，仅存档，不作 P1b 判决）",
+     "thresholds": {
+      "RM12_b": 0.3,
+      "RM12_r2": 0.2,
+      "RM13": 92.696,
+      "RM14": 66.2,
+      "RM15": 0.0
+     }
+    }
+   },
+   "historical": {
+    "RM12": {
+     "passed": false,
+     "value": {
+      "b": 0.013075321158236577,
+      "r2": 0.0276021102114171
+     }
+    },
+    "RM13": {
+     "passed": false,
+     "value": 86.84971509768737
+    },
+    "RM14": {
+     "passed": true,
+     "value": 52.151138454103
+    },
+    "RM15": {
+     "passed": false,
+     "value": -0.08569582076380584
+    }
+   }
+  },
+  "a2d_nt_probe20k": {
+   "source": "mortal/read_model_v2s_a2d_nt_probe20k/order_metrics.json",
+   "p1b": {
+    "RM12": {
+     "role": "primary",
+     "rule": "P1b 主判据：反事实斜率 b>=0.3 且 r2>=0.2（时序流真的在用顺序）",
+     "value": {
+      "b": 0.003781132788561356,
+      "r2": 0.0028426935111686476
+     },
+     "passed": false,
+     "baseline_a2c": {
+      "b": 0.009343552759278253,
+      "r2": 0.012849632174707222
+     }
+    },
+    "RM15": {
+     "role": "primary",
+     "rule": "P1b 主判据：立直层窗口超地板 CI95 下界 > 0",
+     "value": -0.08124201168695541,
+     "passed": false,
+     "baseline_a2c": {
+      "ci95_lower": -0.1133666826794949
+     }
+    },
+    "RM13": {
+     "role": "no_regression",
+     "rule": "P1b 不退线：非立直层单张扣地板复现率 >= 92.696%（地板=order_blind；A2c 92.696%（显示 92.7%）；历史线 90% 仅存档；线取精确基线，避免 A2c 自身 FAIL）",
+     "value": 82.04324337974808,
+     "passed": false,
+     "baseline_a2c": 92.69611640513835
+    },
+    "RM14": {
+     "role": "no_regression",
+     "rule": "P1b 不退线：立直层单张扣地板复现率 >= 66.2%（地板=order_blind；A2c 66.2%；历史线 +30% 仅存档；+50 低于 A2c 66.2，作为新线无效，不能沿用）",
+     "value": 51.153004256922976,
+     "passed": false,
+     "baseline_a2c": 66.21802819482939,
+     "note": "RM14 +30% 历史线无区分力；+50 也低于 A2c 66.2，不能当新线。"
+    },
+    "meta": {
+     "baseline": "A2c@153k（2026-10-21 官方验收）",
+     "primary": [
+      "RM12",
+      "RM15"
+     ],
+     "no_regression": [
+      "RM13",
+      "RM14"
+     ],
+     "historical_verdicts": "verdicts（A2b 时代 90%/+30%，仅存档，不作 P1b 判决）",
+     "thresholds": {
+      "RM12_b": 0.3,
+      "RM12_r2": 0.2,
+      "RM13": 92.696,
+      "RM14": 66.2,
+      "RM15": 0.0
+     }
+    }
+   },
+   "historical": {
+    "RM12": {
+     "passed": false,
+     "value": {
+      "b": 0.003781132788561356,
+      "r2": 0.0028426935111686476
+     }
+    },
+    "RM13": {
+     "passed": false,
+     "value": 82.04324337974808
+    },
+    "RM14": {
+     "passed": true,
+     "value": 51.153004256922976
+    },
+    "RM15": {
+     "passed": false,
+     "value": -0.08124201168695541
+    }
+   }
+  }
+ }
+}

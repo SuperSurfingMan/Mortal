@@ -87,6 +87,7 @@ DEFAULT_LOSS_CFG = {
     'tenpai_tie': W_TENPAI_TIE,
     'wait_tenpai': 0.2,                    # 输出侧 tenpai 监督（A2b：wait[34] 拟合 1-tenpai）
     'struct_balance': True,                # 向听/形制类均衡
+    'next_tedashi': 0.2,                   # RM14：tile 时序流的 next-tedashi 辅助 CE
 }
 
 
@@ -132,17 +133,23 @@ class ReadIterDataset(IterableDataset):
 
 def collate(samples):
     batch = {}
-    for key in ('obs', 'unseen', 'alloc', 'wait', 'next_discard', 'shanten',
-                'riichi', 'called', 'meld_counts', 'dora_indicators',
+    for key in ('obs', 'unseen', 'alloc', 'wait', 'next_discard', 'next_tedashi',
+                'shanten', 'riichi', 'called', 'meld_counts', 'dora_indicators',
                 'turn', 'tiles_left', 'tenpai',
                 'river', 'post_riichi_river', 'own_hand'):
         batch[key] = torch.from_numpy(np.stack([s[key] for s in samples]))
     batch['alloc'] = batch['alloc'].long()
     batch['next_discard'] = batch['next_discard'].long()
+    batch['next_tedashi'] = batch['next_tedashi'].long()
     batch['shanten'] = batch['shanten'].long()
     if 'tl_tokens' in samples[0]:                        # v2 字段
         for key in ('tl_tokens', 'tl_mask', 'struct_form', 'struct_counts'):
             batch[key] = torch.from_numpy(np.stack([s[key] for s in samples]))
+    if 'tl_turn' in samples[0]:                          # RM6/RM12 侧车字段
+        for key in ('tl_turn', 'tl_age', 'tl_flags'):
+            batch[key] = torch.from_numpy(np.stack([s[key] for s in samples]))
+        batch['tl_consumed'] = torch.from_numpy(
+            np.stack([s['tl_consumed'] for s in samples])).long()
     return batch
 
 
@@ -256,6 +263,12 @@ def compute_loss(out, batch, loss_cfg: dict | None = None):
     # ---- L_aux ----
     log_next = torch.log_softmax(out['next_logits'], dim=-1)
     l_next = -log_next.gather(-1, batch['next_discard'][..., None]).squeeze(-1).mean()
+    # RM14：next-tedashi 辅助 CE（仅 tile 模式 + with_aux 有输出时）
+    l_next_tedashi = torch.zeros((), device=out['alloc_logits'].device)
+    if 'next_tedashi_logits' in out:
+        log_nt = torch.log_softmax(out['next_tedashi_logits'], dim=-1)
+        l_next_tedashi = -log_nt.gather(
+            -1, batch['next_tedashi'][..., None]).squeeze(-1).mean()
     log_sh = torch.log_softmax(out['shanten_logits'], dim=-1)
     l_sh = -log_sh.gather(-1, batch['shanten'][..., None]).squeeze(-1).mean()
     l_riichi = nn.functional.binary_cross_entropy_with_logits(
@@ -266,7 +279,8 @@ def compute_loss(out, batch, loss_cfg: dict | None = None):
              + W_RIICHI * l_riichi + W_CALLED * l_called)
 
     total = (l_alloc + LAMBDA_WAIT * l_wait + LAMBDA_AUX * l_aux
-             + cfg['wait_tenpai'] * l_wait_tenpai)
+             + cfg['wait_tenpai'] * l_wait_tenpai
+             + cfg['next_tedashi'] * l_next_tedashi)
     parts = {
         'loss': float(total.detach()),
         'alloc': float(l_alloc.detach()),
@@ -274,6 +288,7 @@ def compute_loss(out, batch, loss_cfg: dict | None = None):
         'wait_tenpai': float(l_wait_tenpai.detach()),
         'aux': float(l_aux.detach()),
         'next': float(l_next.detach()),
+        'next_tedashi': float(l_next_tedashi.detach()),
         'shanten': float(l_sh.detach()),
     }
 
@@ -379,11 +394,12 @@ def wait_bias_of(batch) -> torch.Tensor:
 
 
 def forward_batch(net, batch, device):
-    """按模型版本分发前向（v1: 三输入；v2: 加时序 token/mask）。"""
+    """按模型版本分发前向（v1: 三输入；v2: 加时序 token/mask + RM12 侧车）。"""
     wb = wait_bias_of(batch).to(device)
     if isinstance(net, M2.ReadNetV2):
         return net(batch['obs'].to(device), batch['unseen'].to(device), wb,
-                   batch['tl_tokens'].to(device), batch['tl_mask'].to(device))
+                   batch['tl_tokens'].to(device), batch['tl_mask'].to(device),
+                   **net.tl_extra(batch))
     return net(batch['obs'].to(device), batch['unseen'].to(device), wb)
 
 
@@ -550,6 +566,14 @@ def main():
                     help='v2/v2s 的 H2 听牌头参数化（RM5，README §11.3）：flat=旧 '
                          'tile-agnostic 头（A2b 及之前 ckpt 的架构，加载旧 ckpt 必须 '
                          '用此项）；tile=逐牌列打分头（与 H1 同构，A2c 起新训练默认）')
+    ap.add_argument('--tl-mode', choices=('pooled', 'tile'), default='pooled',
+                    help='v2/v2s 的时序流输出形态（RM12）：pooled=旧 e_T [B,3,dT] '
+                         '（A2c 及之前，广播到 34 列）；tile=逐牌列时序图 '
+                         '[B,3,dT,34]（scatter ±2 + 真实巡目/衰减，P1b 新训练）')
+    ap.add_argument('--tile-order', action='store_true',
+                    help='RM15/显式 order：tile 图上加 last-turn/age/embedding、'
+                         '邻域 mean-turn 与 turn[m−1]−turn[m+1] 局部先后差 '
+                         '（仅 tl_mode=tile；旧 ckpt 缺省 false）')
     ap.add_argument('--no-aux', action='store_true')
     ap.add_argument('--w-shanten', type=float, default=DEFAULT_LOSS_CFG['w_shanten'],
                     help='aux 头向听 CE 权重（v2s 起默认 0.15，即 v1 的 0.05 ×3）')
@@ -569,6 +593,10 @@ def main():
                     default=DEFAULT_LOSS_CFG['wait_tenpai'],
                     help='输出侧 tenpai 监督（wait[34] 拟合 1-tenpai，全目标）权重；'
                          'A2b 机制修复，0 关闭（等价 v2s）')
+    ap.add_argument('--next-tedashi-weight', type=float,
+                    default=DEFAULT_LOSS_CFG['next_tedashi'],
+                    help='RM14：tile 时序流的 next-tedashi 辅助 CE 权重（0 关闭；'
+                         '仅 tl_mode=tile 且 with_aux 时建头/生效）')
     ap.add_argument('--no-struct-balance', action='store_true',
                     help='关闭向听/形制的类均衡加权（默认开启）')
     ap.add_argument('--eval-samples', type=int, default=8192)
@@ -637,12 +665,18 @@ def main():
         net = M2.build_model_v2(conv_channels=args.conv_channels,
                                num_blocks=args.num_blocks,
                                with_aux=not args.no_aux,
-                               wait_head=args.wait_head).to(device)
+                               wait_head=args.wait_head,
+                               tl_mode=args.tl_mode,
+                               next_tedashi=args.next_tedashi_weight > 0,
+                               tile_order=args.tile_order).to(device)
     elif args.model == 'v2s':
         net = M2.build_model_v2s(conv_channels=args.conv_channels,
                                  num_blocks=args.num_blocks,
                                  with_aux=not args.no_aux,
-                                 wait_head=args.wait_head).to(device)
+                                 wait_head=args.wait_head,
+                                 tl_mode=args.tl_mode,
+                                 next_tedashi=args.next_tedashi_weight > 0,
+                                 tile_order=args.tile_order).to(device)
     else:
         net = M.build_model(conv_channels=args.conv_channels, num_blocks=args.num_blocks,
                             with_aux=not args.no_aux, pool=args.pool).to(device)
@@ -650,7 +684,10 @@ def main():
     print(f'[model] {args.model} | 参数量 {n_params:,} | device={device} | fp32 | '
           f'channels={args.conv_channels} blocks={args.num_blocks} aux={not args.no_aux} '
           f'pool={args.pool if args.model == "v1" else "-"} '
-          f'wait_head={args.wait_head if args.model != "v1" else "-"}', flush=True)
+          f'wait_head={args.wait_head if args.model != "v1" else "-"} '
+          f'tl_mode={args.tl_mode if args.model != "v1" else "-"} '
+          f'tile_order={args.tile_order if args.model != "v1" else "-"} '
+          f'nt_aux={args.next_tedashi_weight if args.model != "v1" else "-"}', flush=True)
 
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # 结构头专项损失配置（CLI 可调；0 权重即关闭对应项，便于消融）
@@ -662,6 +699,7 @@ def main():
         'tenpai_tie': args.tenpai_tie_weight,
         'wait_tenpai': args.wait_tenpai_weight,
         'struct_balance': not args.no_struct_balance,
+        'next_tedashi': args.next_tedashi_weight,
     }
     print(f'[loss] cfg={loss_cfg}', flush=True)
     # LR 基准统一为**绝对步数**（resume 安全，2026-10-20 必修）：

@@ -133,12 +133,18 @@ def load_net_alloc_wait(path, b, device):
         net = build_model_v2(conv_channels=cfg.get('conv_channels', 96),
                              num_blocks=cfg.get('num_blocks', 12),
                              with_aux=not cfg.get('no_aux', False),
-                             wait_head=cfg.get('wait_head', 'flat'))
+                             wait_head=cfg.get('wait_head', 'flat'),
+                             tl_mode=cfg.get('tl_mode', 'pooled'),
+                             next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                             tile_order=cfg.get('tile_order', False))
     elif kind == 'v2s':
         net = build_model_v2s(conv_channels=cfg.get('conv_channels', 96),
                               num_blocks=cfg.get('num_blocks', 12),
                               with_aux=not cfg.get('no_aux', False),
-                              wait_head=cfg.get('wait_head', 'flat'))
+                              wait_head=cfg.get('wait_head', 'flat'),
+                              tl_mode=cfg.get('tl_mode', 'pooled'),
+                              next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                              tile_order=cfg.get('tile_order', False))
     else:
         net = build_model(conv_channels=cfg.get('conv_channels', 96),
                           num_blocks=cfg.get('num_blocks', 12),
@@ -158,7 +164,7 @@ def load_net_alloc_wait(path, b, device):
             wb = T.wait_bias_of(chunk).to(device)
             if kind in ('v2', 'v2s'):
                 o = net(chunk['obs'], chunk['unseen'], wb,
-                        chunk['tl_tokens'], chunk['tl_mask'])
+                        chunk['tl_tokens'], chunk['tl_mask'], **net.tl_extra(chunk))
             else:
                 o = net(chunk['obs'], chunk['unseen'], wb)
             alloc[i:i + 2048] = o['alloc_probs'].cpu().numpy()

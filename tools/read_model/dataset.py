@@ -24,10 +24,17 @@
     alloc         (3, 34)    u8    三家暗牌计数标签（相对座位 1/2/3 的 tehai）
     wait          (3, 35)    f32   有效荣和集上的均匀分布（剔除自家河牌；第 35 类=无可荣牌）
     next_discard  (3,)       i64   下一打牌（0..33；34=本局无后续打牌）
+    next_tedashi  (3,)       i64   下一张**手切**牌（跳过摸切；0..33；34=本局无后续
+                                 手切。RM14 辅助任务标签：预测目标家下一张手切牌）
     shanten       (3,)       i64   向听数（0..6，>=6 归 7 桶；枚举器真值，
                                  立直家为 0 而非 Rust 的冻结值）
-    tl_tokens     (3,L,F)    f32   目标家公开动作时序 token（v2 时序流）
+    tl_tokens     (3,L,F)    f32   目标家公开动作时序 token（v2 时序流；末位巡目
+                                 仍写快照常数 = 旧口径兼容，见 tl_turn）
     tl_mask       (3,L)      bool  有效 token 位置（False=padding）
+    tl_turn       (3,L)      f32   **逐 token 真实巡目**（min(at_turn/18,1.5)；RM6/RM12）
+    tl_age        (3,L)      f32   逐 token 距快照的巡目差（min(Δturn/18,1.5)，turn 衰减用）
+    tl_consumed   (3,L,2)    i8    chi/pon 被鸣的两张（tile id，-1=无；da/ankan 只存前 2）
+    tl_flags      (3,L,2)    f32   [立直后打出, 该打牌被鸣]（RM6/RM12 token 内容）
     struct_form   (3,)       i64   结构路径：normal/chiitoi/kokushi
     struct_counts (3,7,5)    f32   搭子构造软分布（最小向听分解上的边际直方图）
     riichi        (3,)       f32   是否已立直（accepted）
@@ -63,6 +70,7 @@ from libriichi.state import PlayerState
 from structure import (
     COUNT_BINS as S_COUNT_BINS,
     NUM_STRUCT_COUNTS as S_NUM_COUNTS,
+    clear_decomp_cache,
     structure_labels,
 )
 
@@ -210,7 +218,7 @@ class GameReplayer:
         # 时序 token 与结构标签的按 (事件, 座位) 缓存：同一事件的 4 个观察者
         # 视角共享，避免重复计算（结构枚举 ~0.1ms/目标家）。
         self.timeline = [[] for _ in range(4)]       # 当前 kyoku 的 token 列表
-        self.tl_cache: dict = {}                     # (ev_idx, seat) -> (tokens, mask)
+        self.tl_cache: dict = {}                     # (ev_idx, seat) -> 6 元组（RM6/RM12）
         self.struct_cache: dict = {}                 # (ev_idx, seat) -> 结构标签 dict
 
     # -- 事件流公开信息更新（只用 ev 的字段，与 PlayerState 无关） --
@@ -256,35 +264,61 @@ class GameReplayer:
             self.river[actor][tid] = True
             if self.riichi[actor]:
                 self.post_riichi[actor][tid] = True
-            self._tl_push(ev_idx, actor, tid, bool(ev.get('tsumogiri', False)), 'dahai')
+            self._tl_push(ev_idx, actor, tid, bool(ev.get('tsumogiri', False)), 'dahai',
+                          post_riichi=self.riichi[actor])
         elif etype in ('chi', 'pon', 'daiminkan'):
+            consumed = tuple(tile_id(t) for t in ev['consumed'])
             for t in ev['consumed']:
                 self.c_total[tile_id(t)] += 1
             self.meld_tiles[actor] += 3
             self.n_melds[actor] += 1
-            self._tl_push(ev_idx, actor, tile_id(ev['pai']), False, etype)
+            self._tl_push(ev_idx, actor, tile_id(ev['pai']), False, etype,
+                          consumed=consumed)
+            # RM12/RM6：标出「这张打牌被鸣了」——被吃/碰/大明杠的那张
+            # 必然是 target 的最后一个 dahai token（鸣牌事件紧随其后）。
+            target = ev.get('target')
+            if target is not None and self.timeline[target]:
+                last = self.timeline[target][-1]
+                if last[3] == 'dahai':
+                    last[7] = True
         elif etype == 'kakan':
             self.c_total[tile_id(ev['pai'])] += 1
             self.meld_tiles[actor] += 1
-            self._tl_push(ev_idx, actor, tile_id(ev['pai']), False, 'kakan')
+            self._tl_push(ev_idx, actor, tile_id(ev['pai']), False, 'kakan',
+                          post_riichi=self.riichi[actor])
         elif etype == 'ankan':
+            consumed = tuple(tile_id(t) for t in ev['consumed'])
             for t in ev['consumed']:
                 self.c_total[tile_id(t)] += 1
             self.meld_tiles[actor] += 4
             self.n_melds[actor] += 1
-            self._tl_push(ev_idx, actor, tile_id(ev['consumed'][0]), False, 'ankan')
+            self._tl_push(ev_idx, actor, consumed[0], False, 'ankan',
+                          consumed=consumed, post_riichi=self.riichi[actor])
         elif etype == 'reach':
             # 立直宣言（随后必有同 actor 的 dahai）——单独一个 token，
             # 让时序流显式看到「第几巡宣言了立直」
             self._tl_push(ev_idx, actor, -1, False, 'reach')
 
-    def _tl_push(self, ev_idx: int, seat: int, tid: int, tsumogiri: bool, action: str) -> None:
-        """向 seat 的时序 token 序列追加一条公开动作（v2 时序流）。"""
-        self.timeline[seat].append((ev_idx, tid, tsumogiri, action))
+    def _tl_push(self, ev_idx: int, seat: int, tid: int, tsumogiri: bool, action: str,
+                 consumed: tuple = (), post_riichi: bool = False) -> None:
+        """向 seat 的时序 token 序列追加一条公开动作（v2 时序流）。
 
-    def _tl_of(self, ev_idx: int, seat: int) -> tuple[np.ndarray, np.ndarray]:
-        """seat 在事件 ev_idx 处理完毕时的时序 token 序列 -> (tokens[L,F], mask[L])。
+        token 结构（RM6/RM12）：
+          [事件序号, 牌 tid, 摸切, 动作, 该动作发生时 seat 的 at_turn,
+           被鸣牌 tuple, 立直后打出, 该打牌被鸣]
+        最后一项是可变的（被鸣要等后续 chi/pon 事件才能知道）。
+        """
+        self.timeline[seat].append([
+            ev_idx, tid, tsumogiri, action, int(self.states[seat].at_turn),
+            consumed, bool(post_riichi), False,
+        ])
 
+    def _tl_of(self, ev_idx: int, seat: int) -> tuple:
+        """seat 在事件 ev_idx 处理完毕时的时序 token 序列。
+
+        返回 ``(tokens[L,F], mask[L], turn[L], age[L], consumed[L,2], flags[L,2])``：
+        tokens 是旧 43 维口径（末位巡目为快照常数），其余是 RM6/RM12 侧车字段
+        （逐 token 真实巡目、距快照巡目差、chi/pon consumed、[立直后打出, 被鸣]）。
         按 (事件, 座位) 缓存：同一事件的 4 个观察者视角共享。
         """
         key = (ev_idx, seat)
@@ -292,17 +326,31 @@ class GameReplayer:
         if hit is not None:
             return hit
         toks = self.timeline[seat][-TL_MAX_LEN:]      # 超长保护（实际远达不到）
-        turn_norm = min(int(self.states[seat].at_turn) / 18.0, 1.5)
+        now_turn = int(self.states[seat].at_turn)
+        # 旧口径保持：token[..., -1] 仍是**快照时目标家的 at_turn 常数**，
+        # 让 A2b/A2c 旧 ckpt 在新数据集上逐位复现（README 坑 48）。
+        snapshot_turn = min(now_turn / 18.0, 1.5)
         arr = np.zeros((TL_MAX_LEN, TL_FEATURES), dtype=np.float32)
         mask = np.zeros(TL_MAX_LEN, dtype=bool)
-        for k, (_ei, tid, tg, action) in enumerate(toks):
+        turns = np.zeros(TL_MAX_LEN, dtype=np.float32)
+        ages = np.zeros(TL_MAX_LEN, dtype=np.float32)
+        consumed_arr = np.full((TL_MAX_LEN, 2), -1, dtype=np.int8)
+        flags = np.zeros((TL_MAX_LEN, 2), dtype=np.float32)
+        for k, (_ei, tid, tg, action, turn, consumed, post_riichi, called) in enumerate(toks):
             if tid >= 0:
                 arr[k, tid] = 1.0
             arr[k, NUM_TILES] = 1.0 if tg else 0.0
             arr[k, NUM_TILES + 1 + TL_ACTION_KINDS.index(action)] = 1.0
-            arr[k, -1] = turn_norm
+            arr[k, -1] = snapshot_turn
+            turns[k] = min(turn / 18.0, 1.5)
+            ages[k] = min(max(now_turn - turn, 0) / 18.0, 1.5)
+            for c, t in enumerate(consumed[:2]):
+                if t >= 0:
+                    consumed_arr[k, c] = t
+            flags[k, 0] = 1.0 if post_riichi else 0.0
+            flags[k, 1] = 1.0 if called else 0.0
             mask[k] = True
-        out = (arr, mask)
+        out = (arr, mask, turns, ages, consumed_arr, flags)
         self.tl_cache[key] = out
         return out
 
@@ -327,6 +375,22 @@ class GameReplayer:
             if ev.get('type') == 'end_kyoku':
                 break
             if ev.get('type') == 'dahai' and ev.get('actor') == target_abs:
+                return tile_id(ev['pai'])
+        return NO_DISCARD
+
+    def _next_tedashi_label(self, from_idx: int, target_abs: int) -> int:
+        """从 from_idx 之后扫本局内 target 的下一张**手切**（跳过摸切）。
+
+        RM14：辅助任务「预测目标家下一张手切牌」。摸切打出的牌是当回摸到的
+        牌（模型可直接用），手切才携带「他手里留了什么/拆了什么」的顺序信息；
+        因此这里跳过 tsumogiri，直到本局结束；无则 NO_DISCARD。
+        """
+        for k in range(from_idx + 1, len(self.events)):
+            ev = self.events[k]
+            if ev.get('type') == 'end_kyoku':
+                break
+            if (ev.get('type') == 'dahai' and ev.get('actor') == target_abs
+                    and not bool(ev.get('tsumogiri', False))):
                 return tile_id(ev['pai'])
         return NO_DISCARD
 
@@ -373,6 +437,7 @@ class GameReplayer:
         alloc = np.zeros((3, NUM_TILES), dtype=np.uint8)
         wait = np.zeros((3, NUM_WAIT_CLASSES), dtype=np.float32)
         next_discard = np.full(3, NO_DISCARD, dtype=np.int64)
+        next_tedashi = np.full(3, NO_DISCARD, dtype=np.int64)
         called_flag = np.zeros(3, dtype=np.float32)
         meld_counts = np.zeros(3, dtype=np.int64)
         tenpai_flag = np.zeros(3, dtype=np.float32)
@@ -403,6 +468,7 @@ class GameReplayer:
             tenpai_flag[rel - 1] = 1.0 if structural_tenpai else 0.0
 
             next_discard[rel - 1] = self._next_discard_label(ev_idx, tgt)
+            next_tedashi[rel - 1] = self._next_tedashi_label(ev_idx, tgt)
             riichi_flag[rel - 1] = 1.0 if self.riichi[tgt] else 0.0
             called_flag[rel - 1] = 1.0 if self.meld_tiles[tgt] > 0 else 0.0
             meld_counts[rel - 1] = self.n_melds[tgt]
@@ -412,14 +478,22 @@ class GameReplayer:
         # ---- v2 新增：时序 token + 结构标签（按 (事件, 座位) 缓存，4 视角共享）----
         tl_tokens = np.zeros((3, TL_MAX_LEN, TL_FEATURES), dtype=np.float32)
         tl_mask = np.zeros((3, TL_MAX_LEN), dtype=bool)
+        tl_turn = np.zeros((3, TL_MAX_LEN), dtype=np.float32)
+        tl_age = np.zeros((3, TL_MAX_LEN), dtype=np.float32)
+        tl_consumed = np.full((3, TL_MAX_LEN, 2), -1, dtype=np.int8)
+        tl_flags = np.zeros((3, TL_MAX_LEN, 2), dtype=np.float32)
         struct_form = np.zeros(3, dtype=np.int64)
         struct_counts = np.zeros((3, S_NUM_COUNTS, S_COUNT_BINS), dtype=np.float32)
         struct_shanten = np.zeros(3, dtype=np.int64)
         for rel in (1, 2, 3):
             tgt = (observer + rel) % 4
-            arr, mask = self._tl_of(ev_idx, tgt)
+            arr, mask, turns, ages, cons, flags = self._tl_of(ev_idx, tgt)
             tl_tokens[rel - 1] = arr
             tl_mask[rel - 1] = mask
+            tl_turn[rel - 1] = turns
+            tl_age[rel - 1] = ages
+            tl_consumed[rel - 1] = cons
+            tl_flags[rel - 1] = flags
             st_lab = self._struct_of(ev_idx, tgt)
             struct_form[rel - 1] = st_lab['form']
             struct_counts[rel - 1] = st_lab['counts']
@@ -431,6 +505,7 @@ class GameReplayer:
             'alloc': alloc,
             'wait': wait,
             'next_discard': next_discard,
+            'next_tedashi': next_tedashi,
             'shanten': struct_shanten,
             'riichi': riichi_flag,
             'called': called_flag,
@@ -444,6 +519,10 @@ class GameReplayer:
             'own_hand': own_tehai > 0,
             'tl_tokens': tl_tokens,
             'tl_mask': tl_mask,
+            'tl_turn': tl_turn,
+            'tl_age': tl_age,
+            'tl_consumed': tl_consumed,
+            'tl_flags': tl_flags,
             'struct_form': struct_form,
             'struct_counts': struct_counts,
             '_observer': observer,
@@ -533,8 +612,13 @@ def replay_file(
     持有 1 个文件 + prefetch 批次，故 worker RSS ≈ 文件峰值 × NW（NW=16 时实测
     15.7GB/个，251GB 机器可用内存一度只剩 24GB）。`MALLOC_ARENA_MAX=2` 只缓解
     glibc arena 保留，**根治需流式化（逐样本 yield）或 obs 降精度**（通道多为
-    0/1 与小整数，fp16/uint8 近无损）——该改动会变更数值/迭代口径，必须安排在
-    轮次间隙，不可与在训实验并行（A2c 在训，故本轮仅记录不动手）。
+    0/1 与小整数，fp16/uint8 近无损）——该改动会变更数值/迭代口径，必须安排
+    在轮次间隙，不可与在训实验并行。
+    ⚠️ **2026-10-21 P0 已修**：worker RSS 线性增长的主因不是本节的文件物化
+    高水位，而是 `structure._DECOMP_CACHE` 进程级缓存跨文件累积（值均值 236
+    个分解/手、深尺寸 38KB，200k 上限 ⇒ 7.6GB 活对象/worker）。现在每次回放
+    结束（含异常路径）调用 `clear_decomp_cache()` 释放；剩余 RSS 为单文件
+    物化的阶段性高水位，会随文件切换复用而不再线性增长。
     stage：课程阶段过滤器（1=仅有立直家，2=巡目>=4，3=全部），在 obs 编码前生效。
     max_samples：早停保护（调试用），达到即裁剪。
     """
@@ -550,7 +634,14 @@ def replay_file(
         lines = [json.dumps(ev, separators=(',', ':')) for ev in events]
 
     rep = GameReplayer(events, lines)
-    samples = rep.run(stage=stage)
+    try:
+        samples = rep.run(stage=stage)
+    finally:
+        # P0（2026-10-21）：分解 memo 是进程级缓存，值=全部向听层级的叶子
+        # 分解（均值 236 条/手、深尺寸均值 38KB），跨文件累积会让每个 worker
+        # 常驻 ~7.6GB 活对象（实测 RSS 11.4GB/个）。跨文件手牌几乎不重复，
+        # 文件内复用已由 struct_cache 承担 ⇒ 回放结束（含异常）即清。
+        clear_decomp_cache()
     stats = dict(rep.stats)
     stats['file'] = str(path)
     if max_samples is not None and len(samples) > max_samples:

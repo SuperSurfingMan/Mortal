@@ -48,12 +48,18 @@ def load_net(path, device):
         net = M2.build_model_v2(conv_channels=cfg.get('conv_channels', 96),
                                 num_blocks=cfg.get('num_blocks', 12),
                                 with_aux=not cfg.get('no_aux', False),
-                                wait_head=cfg.get('wait_head', 'flat'))
+                                wait_head=cfg.get('wait_head', 'flat'),
+                                tl_mode=cfg.get('tl_mode', 'pooled'),
+                                next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                                tile_order=cfg.get('tile_order', False))
     elif kind == 'v2s':
         net = M2.build_model_v2s(conv_channels=cfg.get('conv_channels', 96),
                                  num_blocks=cfg.get('num_blocks', 12),
                                  with_aux=not cfg.get('no_aux', False),
-                                 wait_head=cfg.get('wait_head', 'flat'))
+                                 wait_head=cfg.get('wait_head', 'flat'),
+                                 tl_mode=cfg.get('tl_mode', 'pooled'),
+                                 next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                                 tile_order=cfg.get('tile_order', False))
     else:
         net = M.build_model(conv_channels=cfg.get('conv_channels', 96),
                             num_blocks=cfg.get('num_blocks', 12),
@@ -73,7 +79,7 @@ def predict(net, samples, device, bs=2048):
         wb = T.wait_bias_of(batch).to(device)
         if isinstance(net, M2.ReadNetV2):
             o = net(batch['obs'], batch['unseen'], wb,
-                    batch['tl_tokens'], batch['tl_mask'])
+                    batch['tl_tokens'], batch['tl_mask'], **net.tl_extra(batch))
         else:
             o = net(batch['obs'], batch['unseen'], wb)
         E.append(o['exp_counts'].cpu().numpy())

@@ -19,11 +19,19 @@
      token，Δexp_counts[m] 对逐样本期望（∓ΔΔ_cell，非立直层真值）回归，
      斜率 b（=1 完美利用顺序，=0 无响应）与 r²。
 
-判据（README §12.8 RM12~RM15 验收；A2b 现状全部 FAIL，作为基线存档）：
-  RM12  b ≥ 0.3 且 r² ≥ 0.2                 （A2b：b=0.0144, r²=3.3%）
-  RM13  非立直层 单张扣地板复现率 ≥ 90%      （A2b：67%）
-  RM14  立直层   单张扣地板复现率 ≥ +30%     （A2b：≈0%/−12%）
-  RM15  立直层   窗口超地板 CI95 下界 > 0     （A2b：显著为负）
+判据（历史 `verdicts` 保留 A2b 时代线，仅作对照；P1b 判决用 `p1b_verdicts`）：
+
+  **P1b 主判据（2026-10-21 预注册，基线 A2c）**
+  RM12  b ≥ 0.3 且 r² ≥ 0.2                 （A2c：b=0.0093, r²=1.28%）
+  RM15  立直层 窗口超地板 CI95 下界 > 0       （A2c：−0.1134）
+
+  **P1b 不退线（A2c 实测）**
+  RM13  非立直层 单张扣地板复现率 ≥ 92.696%   （A2c 92.696%（显示 92.7%）；历史线 90% 仅存档）
+  RM14  立直层   单张扣地板复现率 ≥ 66.2%     （A2c 66.2%；历史线 +30% 仅存档；
+                                                +50 低于 A2c 66.2，作为新线无效）
+
+  历史线（`verdicts`）：RM12 b≥0.3/r²≥0.2、RM13 ≥90%、RM14 ≥+30%、RM15 CI>0；
+  A2b 时代口径，保留用于逐位回归，**不得**用作 P1b 判决。
 
 用法：
     python tools/read_model/order_metrics.py                # 默认 A2b，cache 缺失/过期自动重建（需 GPU）
@@ -51,6 +59,83 @@ DIAG = HERE / 'diagnostics'
 #: cache schema 版本。1 = 原始（AP/EC/EC2/RAP/REC/CE/…）；
 #: 2 = 增 REC_OB（A3 真顺序盲变体，README §11.5-⑩）。版本不符即重建 cache。
 CACHE_SCHEMA = 2
+
+#: P1b 预注册判据（2026-10-21，基线 A2c；历史 `verdicts` 不动）
+P1B_BASELINE = 'A2c@153k（2026-10-21 官方验收）'
+P1B_BASELINE_VALUES = {
+    'RM12': {'b': 0.009343552759278253, 'r2': 0.012849632174707222},
+    'RM13': 92.69611640513835,
+    'RM14': 66.21802819482939,
+    'RM15': {'ci95_lower': -0.1133666826794949},
+}
+P1B_THRESHOLDS = {'RM12_b': 0.3, 'RM12_r2': 0.2, 'RM13': 92.696, 'RM14': 66.2, 'RM15': 0.0}
+
+
+def _pct(d, k):
+    v = d.get(k) if isinstance(d, dict) else None
+    return v if isinstance(v, (int, float)) else None
+
+
+def build_p1b_verdicts(single_ob, window, cf, single=None):
+    """P1b 预注册判据（A2c 基线）：主判据 RM12/RM15，RM13/RM14 不退线。
+
+    与 `verdicts`（A2b 时代 90%/+30% 历史线）解耦：本函数不改历史判决，
+    只新增一套可机器判读的 P1b 判决。地板优先用真顺序盲 `single_ob`，
+    缺失时退回规则法 `single`（与历史 verdicts 同口径，并在 rule 里标注）。
+    """
+    floor = single_ob if single_ob is not None else (single or {})
+    floor_kind = ('order_blind' if single_ob is not None else 'rule_as_is')
+    s_nr = floor.get('nonriichi', {})
+    s_ri = floor.get('riichi', {})
+    w_ri = window.get('riichi', {}) if isinstance(window, dict) else {}
+    b = cf.get('slope_b') if isinstance(cf, dict) else None
+    r2 = cf.get('r2') if isinstance(cf, dict) else None
+    rm13 = _pct(s_nr, 'net_minus_floor_pct')
+    rm14 = _pct(s_ri, 'net_minus_floor_pct')
+    rm15 = (w_ri.get('excess_ci95') or [None])[0]
+    return {
+        'RM12': {
+            'role': 'primary',
+            'rule': 'P1b 主判据：反事实斜率 b>=0.3 且 r2>=0.2（时序流真的在用顺序）',
+            'value': {'b': b, 'r2': r2},
+            'passed': bool(b is not None and b >= P1B_THRESHOLDS['RM12_b']
+                           and r2 is not None and r2 >= P1B_THRESHOLDS['RM12_r2']),
+            'baseline_a2c': P1B_BASELINE_VALUES['RM12'],
+        },
+        'RM15': {
+            'role': 'primary',
+            'rule': 'P1b 主判据：立直层窗口超地板 CI95 下界 > 0',
+            'value': rm15,
+            'passed': bool(rm15 is not None and rm15 > P1B_THRESHOLDS['RM15']),
+            'baseline_a2c': P1B_BASELINE_VALUES['RM15'],
+        },
+        'RM13': {
+            'role': 'no_regression',
+            'rule': (f'P1b 不退线：非立直层单张扣地板复现率 >= 92.696%'
+                     f'（地板={floor_kind}；A2c 92.696%（显示 92.7%）；'
+                     f'历史线 90% 仅存档；线取精确基线，避免 A2c 自身 FAIL）'),
+            'value': rm13,
+            'passed': bool(rm13 is not None and rm13 >= P1B_THRESHOLDS['RM13']),
+            'baseline_a2c': P1B_BASELINE_VALUES['RM13'],
+        },
+        'RM14': {
+            'role': 'no_regression',
+            'rule': (f'P1b 不退线：立直层单张扣地板复现率 >= 66.2%'
+                     f'（地板={floor_kind}；A2c 66.2%；历史线 +30% 仅存档；'
+                     f'+50 低于 A2c 66.2，作为新线无效，不能沿用）'),
+            'value': rm14,
+            'passed': bool(rm14 is not None and rm14 >= P1B_THRESHOLDS['RM14']),
+            'baseline_a2c': P1B_BASELINE_VALUES['RM14'],
+            'note': 'RM14 +30% 历史线无区分力；+50 也低于 A2c 66.2，不能当新线。',
+        },
+        'meta': {
+            'baseline': P1B_BASELINE,
+            'primary': ['RM12', 'RM15'],
+            'no_regression': ['RM13', 'RM14'],
+            'historical_verdicts': 'verdicts（A2b 时代 90%/+30%，仅存档，不作 P1b 判决）',
+            'thresholds': P1B_THRESHOLDS,
+        },
+    }
 
 
 def main():
@@ -330,6 +415,11 @@ def main():
                   if single_ob is not None else
                   'rule_as_is（A3 原样，非顺序盲 ⇒ 判据偏保守，见 §11.5-⑩）')
     s_nr, s_ri = floor_src.get('nonriichi', {}), floor_src.get('riichi', {})
+    # 原样 A3（规则法）地板版复现率：与 OB 版并列留档（2026-10-21 修复：这两个变量
+    # 此前从未定义，加 REC_OB 后拼 verdicts 必 NameError —— cache 已算完、报告却不落盘；
+    # 这里用 single 即规则法地板作「原样」侧）。
+    s_nr_asis = single.get('nonriichi', {})
+    s_ri_asis = single.get('riichi', {})
     w_ri = window.get('riichi', {})
     # A3 自身的顺序敏感度 = 规则法地板 − 真顺序盲地板（逐层）
     a3_order_sens = ({k: {'floor_rule': pct(single.get(k, {}), 'floor_dd'),
@@ -344,12 +434,12 @@ def main():
                  'passed': bool(cf.get('slope_b') is not None
                                 and cf['slope_b'] >= 0.3 and cf.get('r2', 0) >= 0.2)},
         'RM13': {'rule': f'非立直层 单张扣地板复现率 >= 90%（地板={floor_kind}；'
-                         f'A2b 现状 67%）',
+                         f'A2b 现状 OB 81.9% / 原样 A3 67%）',
                  'value': pct(s_nr, 'net_minus_floor_pct'),
                  'value_rule_floor_as_is': pct(s_nr_asis, 'net_minus_floor_pct'),
                  'passed': bool((pct(s_nr, 'net_minus_floor_pct') or -1e9) >= 90.0)},
         'RM14': {'rule': f'立直层 单张扣地板复现率 >= +30%（地板={floor_kind}；'
-                         f'A2b 现状 ≈0/−12%）',
+                         f'A2b 现状 OB +31.0% / 原样 A3 −12%；⚠️ 阈值无区分力）',
                  'value': pct(s_ri, 'net_minus_floor_pct'),
                  'value_rule_floor_as_is': pct(s_ri_asis, 'net_minus_floor_pct'),
                  'passed': bool((pct(s_ri, 'net_minus_floor_pct') or -1e9) >= 30.0)},
@@ -357,11 +447,17 @@ def main():
                  'value': (w_ri.get('excess_ci95') or [None])[0],
                  'passed': bool((w_ri.get('excess_ci95') or [-1e9])[0] > 0.0)},
     }
+    # P1b 预注册判决（新增段；历史 verdicts 保持逐位不变）
+    p1b_verdicts = build_p1b_verdicts(single_ob, window, cf, single)
 
     report = {
         'meta': {'ckpt': str(CKPT), 'n': n, 'boot': B, 'generated_at': time.time(),
                  'cache': str(CACHE), 'cache_schema': CACHE_SCHEMA,
                  'floor_kind': floor_kind,
+                 'verdict_protocol': ('verdicts=历史（A2b 时代 90%/+30%，仅存档）；'
+                                      'p1b_verdicts=A2c 基线（主 RM12/RM15，'
+                                      '不退 RM13/RM14）'),
+                 'p1b_baseline': P1B_BASELINE,
                  'dd_convention': ('聚合/表头 = (非自然−自然)；cells 里两种顺序都给'
                                    '（m∈{6,7,8} 二者反号，勿混，见 README §12.4）'),
                  'protocol': '202609 holdout + seed 20261016（与 s3158 系列同源）'},
@@ -371,15 +467,25 @@ def main():
         'window_pm2': window,
         'counterfactual': cf,
         'verdicts': verdicts,
+        'p1b_verdicts': p1b_verdicts,
     }
     out_path = Path(args.out) if args.out else Path(CKPT).parent / 'order_metrics.json'
     out_path.parent.mkdir(parents=True, exist_ok=True)
     json.dump(report, open(out_path, 'w'), ensure_ascii=False, indent=1, default=float)
 
-    print('\n---- 判据（RM12~RM15 验收）----', flush=True)
+    print('\n---- 历史判据（A2b 时代 90%/+30%，仅存档，不作 P1b 判决）----', flush=True)
     for k, v in verdicts.items():
         print(f'  {k}: {"PASS" if v["passed"] else "FAIL"}   {v["rule"]}   '
               f'value={v["value"]}', flush=True)
+    print('\n---- P1b 判据（A2c 基线；主判据 RM12/RM15，RM13/RM14 不退线）----',
+          flush=True)
+    for k, v in p1b_verdicts.items():
+        if k == 'meta':
+            continue
+        print(f'  {k} [{v["role"]}]: {"PASS" if v["passed"] else "FAIL"}   '
+              f'{v["rule"]}   value={v["value"]}', flush=True)
+    print(f'  baseline={p1b_verdicts["meta"]["baseline"]}；'
+          f'RM14 +50 < A2c 66.2 ⇒ 不作为新线', flush=True)
     print(f'\n[out] {out_path}', flush=True)
 
 

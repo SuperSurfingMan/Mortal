@@ -24,6 +24,13 @@
 输出与 v1 一致（alloc_probs / exp_counts / wait_probs / 辅助头；wait_probs 为
 RM1 因子化读法，见 ``model.factorized_wait_probs``），另加
 ``struct_counts`` / ``struct_form`` / ``struct_shanten`` 供诊断与消融。
+
+**RM12（P1b，2026-10-21）**：``tl_mode='tile'`` 把时序流从 mean-pool 的
+``[B,3,dT]`` 改为逐牌列 ``[B,3,dT,34]``——每个 token 在自身牌列 ±1/±2 散射
+（chi/pon 的 consumed 也散射），配逐 token 真实巡目（dataset 的 tl_turn）与
+``recency=exp(-age)`` 加权；H1 与 tile H2 头消费 ``e_col``，结构头/H3/tenpai
+仍消费 pooled ``e_T``。``tl_mode='pooled'`` 是 A2b/A2c 旧路径，参数集与
+数值逐位不变（旧 ckpt 直接加载）。
 """
 from __future__ import annotations
 
@@ -94,24 +101,61 @@ class TimelineEncoder(nn.Module):
     输入 tokens [B, J, L, F] + mask [B, J, L]（True=有效）。
     2 层 pre-norm Transformer（d=64, 4 heads）+ attention pooling。
     空序列（如一局开始时的快照）输出全零嵌入。
+
+    ``tile_indexed``（RM12）：额外输出逐牌列时序图 ``[B,J,d,34]``。除 attention
+    pooling 的全局 e_T 外，把逐 token 表示按牌列 ±1/±2 散射（chi/pon 的 consumed
+    也散射），并拼上「recency 加权均值 + 邻域计数」，使 H1/H2 能直接看到
+    「哪一列、第几巡、先切还是后切」。旧 ckpt 走 ``tile_indexed=False``，参数集
+    与数值路径完全不变。
+
+    ``order_features``（RM15/显式 order）：在 tile 图上再加**显式顺序特征**——
+    每列 last-token 的 turn/age/embedding、邻域平均 turn、以及 ``turn[m−1]−
+    turn[m+1]`` 的局部先后差。加权均值/recency 仍是软聚合；这些通道直接给
+    「左邻先切还是右邻先切」一个可线性读取的坐标。旧 tile ckpt 走 False，
+    ``tile_proj`` 形状不变。
     """
 
     def __init__(self, d_in: int, d_model: int = 64, nhead: int = 4,
-                 nlayers: int = 2, max_len: int = 32, dropout: float = 0.0):
+                 nlayers: int = 2, max_len: int = 32, dropout: float = 0.0,
+                 tile_indexed: bool = False, order_features: bool = False):
         super().__init__()
+        assert not order_features or tile_indexed
         self.max_len = max_len
+        self.d_model = d_model
+        self.tile_indexed = tile_indexed
+        self.order_features = bool(order_features)
         self.proj = nn.Linear(d_in, d_model)
         self.pos = nn.Parameter(torch.randn(1, max_len, d_model) * 0.02)
         self.layers = nn.ModuleList(
             [_ManualEncoderLayer(d_model, nhead) for _ in range(nlayers)])
         self.attn_query = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        if tile_indexed:
+            # 逐 token 时间/上下文进入 Transformer（旧路径不加，保证兼容）
+            self.turn_proj = nn.Linear(1, d_model)
+            self.age_proj = nn.Linear(1, d_model)
+            self.flag_proj = nn.Linear(2, d_model)
+            self.tile_mlp = nn.Sequential(
+                nn.Linear(d_model + 4, d_model), nn.GELU(),
+                nn.Linear(d_model, d_model))
+            tile_in = ((3 * d_model + 5) if order_features else (2 * d_model + 1))
+            self.tile_proj = nn.Linear(tile_in, d_model)
+            self.tile_norm = nn.LayerNorm(d_model)
+            # 散射权重：本列 1.0、±1 0.6、±2 0.3；consumed 本列 0.8、±1 0.3。
+            # 同花色限制在 _scatter_weights 里做（9m 不散射到 1p）。
+            self._offset_weights = ((0, 1.0), (-1, 0.6), (1, 0.6), (-2, 0.3), (2, 0.3))
+            self._c_offset_weights = ((0, 0.8), (-1, 0.3), (1, 0.3))
 
-    def forward(self, tokens: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    def _encode_tokens(self, tokens: torch.Tensor, mask: torch.Tensor,
+                       turn=None, age=None, flags=None):
+        """token 序列 -> (上下文表示 h [N,L,d], mask [N,L], empty [N,1])。"""
         B, J, L, _ = tokens.shape
         if L > self.max_len:                        # 防御：超出预置位置编码长度
             raise ValueError(f'timeline length {L} > max_len {self.max_len}')
         # pos: [1, max_len, d] -> [1, L, d]，广播到 [B, J, L, d]
         h = self.proj(tokens) + self.pos[:, :L, :]
+        if self.tile_indexed:                        # RM12：真实巡目/衰减进 token
+            h = (h + self.turn_proj(turn[..., None])
+                 + self.age_proj(age[..., None]) + self.flag_proj(flags))
         h = h.reshape(B * J, L, -1)
         m = mask.reshape(B * J, L)
         # 全 padding 行会让 softmax 出 NaN：强制首位有效，输出时再把空行清零。
@@ -119,14 +163,117 @@ class TimelineEncoder(nn.Module):
         m_safe = m | empty
         for layer in self.layers:
             h = layer(h, ~m_safe)
-        # attention pooling（只在有效位上进行）
-        score = (h * self.attn_query).sum(-1)                       # [B*J, L]
+        return h, m, empty
+
+    def _pool(self, h: torch.Tensor, m: torch.Tensor, empty: torch.Tensor) -> torch.Tensor:
+        """attention pooling（只在有效位上进行；空序列输出零向量）。"""
+        score = (h * self.attn_query).sum(-1)                       # [N, L]
         score = score.masked_fill(~m, float('-inf'))
         w = torch.softmax(score, dim=-1)
         w = torch.nan_to_num(w, nan=0.0)
-        e = (h * w.unsqueeze(-1)).sum(dim=1)                        # [B*J, d]
-        e = e * empty.logical_not()
-        return e.reshape(B, J, -1)
+        e = (h * w.unsqueeze(-1)).sum(dim=1)                        # [N, d]
+        return e * empty.logical_not()
+
+    def forward(self, tokens: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """旧路径（pooled e_T [B,J,d]），逐位保持 A2b/A2c 口径。"""
+        B, J, L, _ = tokens.shape
+        h, m, empty = self._encode_tokens(tokens, mask)
+        return self._pool(h, m, empty).reshape(B, J, -1)
+
+    def _scatter_weights(self, idx: torch.Tensor, mask: torch.Tensor,
+                         consumed: torch.Tensor) -> torch.Tensor:
+        """token 牌列 -> 逐列散射权重 [N,L,34]（同花色 ±2，字牌只本列）。"""
+        N, L = idx.shape
+        S = idx.new_zeros((N, L, NUM_TILES), dtype=torch.float32)
+        valid = mask & (idx >= 0)
+        for d, w in self._offset_weights:
+            col = idx + d
+            num = (idx >= 0) & (idx < 27)
+            same = num & (col >= 0) & (col < 27) & ((col // 9) == (idx // 9))
+            # 字牌只散射本列；用 OR 而不是 torch.where(Tensor, Tensor, Tensor)，
+            # 避免 onnxruntime 的 Where 类型实现缺失（RM12 ONNX 导出必需）。
+            honor_ok = (valid & (idx >= 27)) if d == 0 else torch.zeros_like(valid)
+            ok = same | honor_ok
+            S.scatter_add_(-1, col.clamp(0, NUM_TILES - 1).unsqueeze(-1),
+                           (ok.to(S.dtype) * w).unsqueeze(-1))
+        for c in range(consumed.shape[-1]):
+            cidx = consumed[..., c]
+            cvalid = mask & (cidx >= 0)
+            for d, w in self._c_offset_weights:
+                col = cidx + d
+                num = (cidx >= 0) & (cidx < 27)
+                same = num & (col >= 0) & (col < 27) & ((col // 9) == (cidx // 9))
+                honor_ok = (cvalid & (cidx >= 27)) if d == 0 else torch.zeros_like(cvalid)
+                ok = same | honor_ok
+                S.scatter_add_(-1, col.clamp(0, NUM_TILES - 1).unsqueeze(-1),
+                               (ok.to(S.dtype) * w).unsqueeze(-1))
+        return S
+
+    def encode_tile(self, tokens: torch.Tensor, mask: torch.Tensor,
+                    turn: torch.Tensor, age: torch.Tensor,
+                    consumed: torch.Tensor, flags: torch.Tensor):
+        """RM12：返回 (pooled e_T [B,J,d], tile-indexed e [B,J,d,34])。"""
+        B, J, L, _ = tokens.shape
+        h, m, empty = self._encode_tokens(tokens, mask, turn, age, flags)
+        e = self._pool(h, m, empty)
+
+        idx = tokens[..., :NUM_TILES].argmax(-1).reshape(B * J, L)
+        has = (tokens[..., :NUM_TILES].sum(-1) > 0.5).reshape(B * J, L)
+        # reach token 无牌：置 -1（用算术而不是 torch.where，避免 ONNX Where）
+        idx = idx * has.to(idx.dtype) - (~has).to(idx.dtype)
+        v = self.tile_mlp(torch.cat([
+            h, turn.reshape(B * J, L, 1), age.reshape(B * J, L, 1),
+            flags.reshape(B * J, L, 2)], dim=-1))          # [N,L,d]
+        S = self._scatter_weights(idx, m, consumed.reshape(B * J, L, -1))
+        den = S.sum(dim=-2)                                 # [N,34]
+        e_mean = (torch.einsum('nld,nlt->ndt', v, S)
+                  / den.clamp(min=1.0).unsqueeze(1))
+        # recency：exp(-age) 加权均值（age 归一化到 18 巡），让「先切/后切」可分
+        w_rec = torch.exp(-age.reshape(B * J, L)) * m.to(v.dtype)
+        S_rec = S * w_rec.unsqueeze(-1)
+        den_rec = S_rec.sum(dim=-2)
+        e_rec = (torch.einsum('nld,nlt->ndt', v, S_rec)
+                 / den_rec.clamp(min=1.0).unsqueeze(1))
+        cnt = torch.log1p(den).unsqueeze(1)                 # [N,1,34]
+        if self.order_features:
+            # 显式顺序：每列 last-token 的 turn/age/embedding + 邻域平均 turn
+            # + turn[m−1]−turn[m+1] 的局部先后差。30× 温度让“最新 token”
+            # 近似硬选（相邻巡目差 1/18≈0.055 ⇒ 权重比≈5），但保持可导。
+            turn_flat = turn.reshape(B * J, L)
+            age_flat = age.reshape(B * J, L)
+            S_bin = (S > 0).to(v.dtype)                     # [N,L,34]
+            has_col = (den > 0).to(v.dtype)                 # [N,34]
+            score = turn_flat.unsqueeze(-1) * torch.ones_like(S) * 30.0
+            score = score.masked_fill(S_bin == 0, -1e9)     # [N,L,34]
+            w_last = torch.softmax(score, dim=1) * has_col.unsqueeze(1)
+            last_turn = (w_last * turn_flat.unsqueeze(-1)).sum(1)   # [N,34]
+            last_age = (w_last * age_flat.unsqueeze(-1)).sum(1)     # [N,34]
+            last_v = torch.einsum('nlt,nld->ntd', w_last, v).transpose(1, 2)
+            turn_mean = ((S * turn_flat.unsqueeze(-1)).sum(1)
+                         / den.clamp(min=1.0))              # [N,34]
+            # 同花色左右邻（m−1 / m+1）的 last-turn 差；边界/字牌/缺列置 0
+            tm = last_turn
+            left = F.pad(tm, (1, 0))[..., :NUM_TILES]
+            right = F.pad(tm, (0, 1))[..., 1:]
+            lhas = F.pad(has_col, (1, 0))[..., :NUM_TILES]
+            rhas = F.pad(has_col, (0, 1))[..., 1:]
+            midx = torch.arange(NUM_TILES, device=tm.device)
+            num = (midx < 27).to(tm.dtype)
+            lok = ((midx % 9) != 0).to(tm.dtype) * num
+            rok = ((midx % 9) != 8).to(tm.dtype) * num
+            valid = lhas * rhas * lok * rok
+            turn_diff = (left - right) * valid              # [N,34]
+            raw = torch.cat([
+                e_mean, e_rec, last_v, cnt,
+                turn_mean.unsqueeze(1), last_turn.unsqueeze(1),
+                turn_diff.unsqueeze(1), last_age.unsqueeze(1)], dim=1)
+            raw = raw.permute(0, 2, 1)                      # [N,34,3d+5]
+        else:
+            raw = torch.cat([e_mean, e_rec, cnt], dim=1).permute(0, 2, 1)
+        e_tile = self.tile_proj(raw).permute(0, 2, 1)       # [N,d,34]
+        e_tile = self.tile_norm(e_tile.transpose(1, 2)).transpose(1, 2)
+        e_tile = e_tile * empty.logical_not().view(-1, 1, 1)
+        return e.reshape(B, J, -1), e_tile.reshape(B, J, self.d_model, NUM_TILES)
 
 
 class GroupedLinear(nn.Module):
@@ -190,7 +337,8 @@ class ReadNetV2(nn.Module):
     def __init__(self, version: int = 4, conv_channels: int = 96, num_blocks: int = 12,
                  with_aux: bool = True, tl_features: int = 43, tl_len: int = 26,
                  d_time: int = 64, struct_shanten_belief: bool = False,
-                 wait_head: str = 'flat'):
+                 wait_head: str = 'flat', tl_mode: str = 'pooled',
+                 next_tedashi: bool = False, tile_order: bool = False):
         super().__init__()
         self.version = version
         self.with_aux = with_aux
@@ -198,6 +346,15 @@ class ReadNetV2(nn.Module):
         self.struct_shanten_belief = struct_shanten_belief
         assert wait_head in ('flat', 'tile'), wait_head
         self.wait_head = wait_head
+        assert tl_mode in ('pooled', 'tile'), tl_mode
+        assert not tile_order or tl_mode == 'tile', tile_order
+        self.tl_mode = tl_mode
+        # RM15/显式 order：tile 图上加 last-turn/turn-diff/last-embedding 通道。
+        # 旧 tile ckpt（config 无 tile_order）默认 False ⇒ tile_proj 形状不变。
+        self.tile_order = bool(tile_order and tl_mode == 'tile')
+        # RM14：next-tedashi 辅助头只在「tile 时序流 + aux」下存在；旧 tile
+        # ckpt（config 无 next_tedashi_weight）默认 False ⇒ 参数集不变、严格加载。
+        self.next_tedashi = bool(next_tedashi and with_aux and tl_mode == 'tile')
         in_channels = obs_shape(version)[0]
 
         # 空间流（与 v1 完全同构，保证可比）
@@ -205,8 +362,12 @@ class ReadNetV2(nn.Module):
         self.C = conv_channels
 
         # 时序流（三家共享权重：token 语义与座位无关）
+        # tl_mode='tile'（RM12）：额外输出逐牌列时序图 [B,3,dT,34]；
+        # 'pooled'（A2b/A2c 旧 ckpt）：只输出全局 e_T [B,3,dT]，参数集不变。
         self.timeline = TimelineEncoder(tl_features, d_model=d_time,
-                                        max_len=max(tl_len, 32))
+                                        max_len=max(tl_len, 32),
+                                        tile_indexed=(tl_mode == 'tile'),
+                                        order_features=self.tile_order)
 
         # 结构流
         s_in = conv_channels + d_time
@@ -242,11 +403,34 @@ class ReadNetV2(nn.Module):
         self.shanten_head = GroupedLinear(3, 128, MAX_SHANTEN_BUCKET + 1)
         self.riichi_head = GroupedLinear(3, 128, 1)
         self.called_head = GroupedLinear(3, 128, 1)
+        if self.next_tedashi:
+            # RM14：H1 逐列特征直接预测「目标家下一张手切牌」的 34 类 logit，
+            # 无手切标量（第 35 类）由 H3 的 x3 提供——直接给 tile 时序通路压力。
+            self.next_tedashi_head = GroupedLinear(3, 128, 1)
+            self.next_tedashi_none = GroupedLinear(3, 128, 1)
 
-    def forward(self, obs, unseen, wait_bias, tl_tokens, tl_mask):
+    def tl_extra(self, batch):
+        """RM12 侧车字段（pooled 模式返回空 dict，旧 ckpt/旧调用零改动）。"""
+        if self.tl_mode != 'tile':
+            return {}
+        return {k: batch[k] for k in ('tl_turn', 'tl_age', 'tl_consumed', 'tl_flags')}
+
+    def forward(self, obs, unseen, wait_bias, tl_tokens, tl_mask,
+                tl_turn=None, tl_age=None, tl_consumed=None, tl_flags=None):
         B = obs.shape[0]
         h, g = self.backbone(obs)                             # [B,C,34], [B,C]
-        e_T = self.timeline(tl_tokens, tl_mask)               # [B,3,dT]
+        if self.tl_mode == 'tile':
+            # RM12：逐牌列时序图。e_T 仍保留给结构头/H3/tenpai（全局），
+            # e_col 进 H1/H2——替换原来把 e_T 在 34 列上复制的广播。
+            if tl_turn is None or tl_age is None or tl_consumed is None or tl_flags is None:
+                raise ValueError('tl_mode="tile" 需要 tl_turn/tl_age/tl_consumed/'
+                                 'tl_flags（RM12；dataset._emit 已提供）')
+            e_T, e_tile = self.timeline.encode_tile(
+                tl_tokens, tl_mask, tl_turn, tl_age, tl_consumed, tl_flags)
+            e_col = e_tile.transpose(-1, -2)                  # [B,3,34,dT]
+        else:
+            e_T = self.timeline(tl_tokens, tl_mask)           # [B,3,dT]
+            e_col = e_T[:, :, None, :].expand(B, 3, NUM_TILES, e_T.shape[-1])
 
         # ---- 结构估计（粗到细的第一步）----
         z = torch.cat([g[:, None, :].expand(B, 3, self.C), e_T], dim=-1)
@@ -263,9 +447,8 @@ class ReadNetV2(nn.Module):
         # ---- H1：逐列计数分配 ----
         # h: [B,C,34] -> [B,3,34,C]（三家共享列特征，头各自特化）
         h_j = h.unsqueeze(1).expand(B, 3, self.C, NUM_TILES).transpose(-1, -2)
-        e_T_b = e_T[:, :, None, :].expand(B, 3, NUM_TILES, e_T.shape[-1])
         s_b = s_belief[:, :, None, :].expand(B, 3, NUM_TILES, self.S)
-        x1 = torch.cat([h_j, e_T_b, s_b], dim=-1)                       # [B,3,34,*]
+        x1 = torch.cat([h_j, e_col, s_b], dim=-1)                       # [B,3,34,*]
         x1 = F.gelu(self.h1(x1))
         alloc_logits = self.h1_out(x1)                                  # [B,3,34,5]
 
@@ -287,7 +470,7 @@ class ReadNetV2(nn.Module):
             ec_j = exp_counts[..., None]                                # [B,3,34,1]
             un_j = unseen[:, None, :, None].expand(B, 3, NUM_TILES, 1)  # [B,3,34,1]
             bias_j = torch.tanh(wait_bias)[..., None]                   # [B,3,34,1]
-            x2 = torch.cat([h_j, e_T_b, s_b, ec_j, un_j, bias_j], dim=-1)
+            x2 = torch.cat([h_j, e_col, s_b, ec_j, un_j, bias_j], dim=-1)
             x2 = F.gelu(self.h2(x2))
             cond_logits = self.h2_out(x2).squeeze(-1) + wait_bias       # [B,3,34]
             tenpai_logit = self.tenpai_head(
@@ -324,21 +507,32 @@ class ReadNetV2(nn.Module):
             out['shanten_logits'] = self.shanten_head(x3)
             out['riichi_logit'] = self.riichi_head(x3).squeeze(-1)
             out['called_logit'] = self.called_head(x3).squeeze(-1)
+            if self.next_tedashi:
+                # [B,3,34] 逐列 + [B,3] 无手切 → [B,3,35]
+                out['next_tedashi_logits'] = torch.cat([
+                    self.next_tedashi_head(x1).squeeze(-1),   # [B,3,34]
+                    self.next_tedashi_none(x3)], dim=-1)       # [B,3,1] → [B,3,35]
         return out
 
 
 def build_model_v2(version: int = 4, conv_channels: int = 96, num_blocks: int = 12,
                    with_aux: bool = True, tl_features: int = 43,
-                   tl_len: int = 26, wait_head: str = 'flat') -> ReadNetV2:
+                   tl_len: int = 26, wait_head: str = 'flat',
+                   tl_mode: str = 'pooled', next_tedashi: bool = False,
+                   tile_order: bool = False) -> ReadNetV2:
     return ReadNetV2(version=version, conv_channels=conv_channels,
                      num_blocks=num_blocks, with_aux=with_aux,
-                     tl_features=tl_features, tl_len=tl_len, wait_head=wait_head)
+                     tl_features=tl_features, tl_len=tl_len,
+                     wait_head=wait_head, tl_mode=tl_mode,
+                     next_tedashi=next_tedashi, tile_order=tile_order)
 
 
 def build_model_v2s(version: int = 4, conv_channels: int = 96, num_blocks: int = 12,
                     with_aux: bool = True, tl_features: int = 43, tl_len: int = 26,
                     struct_shanten_belief: bool = True,
-                    wait_head: str = 'flat') -> ReadNetV2:
+                    wait_head: str = 'flat', tl_mode: str = 'pooled',
+                    next_tedashi: bool = False,
+                    tile_order: bool = False) -> ReadNetV2:
     """v2s = v2 + 向听分布注入结构瓶颈（结构头专项，见模块 docstring）。
 
     ``wait_head``：``flat``（**本 builder 的**默认）= 旧 H2（tile-agnostic，A2b
@@ -355,4 +549,5 @@ def build_model_v2s(version: int = 4, conv_channels: int = 96, num_blocks: int =
                      num_blocks=num_blocks, with_aux=with_aux,
                      tl_features=tl_features, tl_len=tl_len,
                      struct_shanten_belief=struct_shanten_belief,
-                     wait_head=wait_head)
+                     wait_head=wait_head, tl_mode=tl_mode,
+                     next_tedashi=next_tedashi, tile_order=tile_order)

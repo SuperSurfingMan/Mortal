@@ -46,8 +46,14 @@ def load_net():
     net = M2.build_model_v2s(conv_channels=cfg['conv_channels'],
                              num_blocks=cfg['num_blocks'],
                              with_aux=not cfg['no_aux'],
-                             wait_head=cfg.get('wait_head', 'flat')).to(DEV).eval()
+                             wait_head=cfg.get('wait_head', 'flat'),
+                             tl_mode=cfg.get('tl_mode', 'pooled'),
+                             next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                             tile_order=cfg.get('tile_order', False)).to(DEV).eval()
     net.load_state_dict(st['model'])
+    if net.tl_mode != 'pooled':
+        raise SystemExit('s315_head_probe 手工重建 H1/H2 广播 e_T，仅支持 pooled；'
+                         'tile 模式请用 order_metrics / evaluate 的常规通路')
     return net
 
 

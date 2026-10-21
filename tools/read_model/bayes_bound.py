@@ -420,7 +420,8 @@ def model_probs(state_path, batch, device, bs=2048):
         ch = {k: v[i:i + bs].to(device) for k, v in batch.items()}
         wb = T.wait_bias_of(ch).to(device)
         if hasattr(net, 'timeline'):
-            o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'])
+            o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'],
+                    **net.tl_extra(ch))
         else:
             o = net(ch['obs'], ch['unseen'], wb)
         A.append(torch.softmax(o['alloc_logits'], -1).cpu().numpy())

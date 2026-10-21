@@ -1,0 +1,133 @@
+{
+ "meta": {
+  "source": "mortal/read_model_v2s_a2c/order_metrics.json",
+  "layer": "window_pm2.riichi",
+  "ckpt": "A2c@153k",
+  "generated_at": 1792568752.7363508,
+  "note": "逐格 excess=(net-floor)；contribution=excess*weight；用于 RM12 scatter/衰减定位，不改变历史判据"
+ },
+ "aggregate": {
+  "truth_dd": 0.03324239069680343,
+  "net_dd": -0.020860926875315815,
+  "floor_dd": 0.04477819222340147,
+  "excess_over_floor": -0.06563911909871728,
+  "excess_ci95": [
+   -0.1133666826794949,
+   -0.014190436011059964
+  ],
+  "n_desc": 747,
+  "n_asc": 937,
+  "n_cells": 9,
+  "sum_contribution": -0.06563911909871725
+ },
+ "cells": [
+  {
+   "cell": "索7",
+   "n_desc": 111,
+   "n_asc": 92,
+   "weight": 0.21296296296296297,
+   "truth_dd": 0.8279642449831243,
+   "net_dd": -0.07666240669761404,
+   "floor_dd": 0.231502786978767,
+   "excess_over_floor": -0.30816519367638107,
+   "contribution": -0.06562777272737745,
+   "natural_order": "desc(先切 m+1)"
+  },
+  {
+   "cell": "万6",
+   "n_desc": 65,
+   "n_asc": 72,
+   "weight": 0.15046296296296297,
+   "truth_dd": -0.3783749375333134,
+   "net_dd": -0.44349616235559886,
+   "floor_dd": -0.1583627965946037,
+   "excess_over_floor": -0.28513336576099513,
+   "contribution": -0.04290201105200158,
+   "natural_order": "desc(先切 m+1)"
+  },
+  {
+   "cell": "万3",
+   "n_desc": 33,
+   "n_asc": 87,
+   "weight": 0.0763888888888889,
+   "truth_dd": -1.9752985191694,
+   "net_dd": -0.7186467864345919,
+   "floor_dd": -0.2928852544496052,
+   "excess_over_floor": -0.4257615319849867,
+   "contribution": -0.03252345035996426,
+   "natural_order": "asc(先切 m−1)"
+  },
+  {
+   "cell": "筒2",
+   "n_desc": 27,
+   "n_asc": 207,
+   "weight": 0.0625,
+   "truth_dd": -1.0418026447296143,
+   "net_dd": -0.28419076568366,
+   "floor_dd": -0.09371400643709965,
+   "excess_over_floor": -0.19047675924656032,
+   "contribution": -0.01190479745291002,
+   "natural_order": "asc(先切 m−1)"
+  },
+  {
+   "cell": "筒8",
+   "n_desc": 148,
+   "n_asc": 51,
+   "weight": 0.11805555555555555,
+   "truth_dd": 0.05369437162166686,
+   "net_dd": 0.08625268779766167,
+   "floor_dd": 0.11045885708323218,
+   "excess_over_floor": -0.02420616928557051,
+   "contribution": -0.002857672762879852,
+   "natural_order": "desc(先切 m+1)"
+  },
+  {
+   "cell": "万8",
+   "n_desc": 235,
+   "n_asc": 36,
+   "weight": 0.08333333333333333,
+   "truth_dd": -0.8779349765720519,
+   "net_dd": 0.19302986717718784,
+   "floor_dd": 0.06491906187336358,
+   "excess_over_floor": 0.12811080530382427,
+   "contribution": 0.010675900441985355,
+   "natural_order": "desc(先切 m+1)"
+  },
+  {
+   "cell": "筒6",
+   "n_desc": 28,
+   "n_asc": 92,
+   "weight": 0.06481481481481481,
+   "truth_dd": 0.7293173345673529,
+   "net_dd": 0.2890967284532601,
+   "floor_dd": -0.10663822779188986,
+   "excess_over_floor": 0.39573495624515,
+   "contribution": 0.025649487904778237,
+   "natural_order": "desc(先切 m+1)"
+  },
+  {
+   "cell": "索2",
+   "n_desc": 64,
+   "n_asc": 185,
+   "weight": 0.14814814814814814,
+   "truth_dd": 0.41387259162383505,
+   "net_dd": 0.34213905713530385,
+   "floor_dd": 0.1636509695662991,
+   "excess_over_floor": 0.17848808756900475,
+   "contribution": 0.026442679639852553,
+   "natural_order": "asc(先切 m−1)"
+  },
+  {
+   "cell": "万2",
+   "n_desc": 36,
+   "n_asc": 115,
+   "weight": 0.08333333333333333,
+   "truth_dd": 1.0570669637390093,
+   "net_dd": 0.46992210654300304,
+   "floor_dd": 0.1410198993054061,
+   "excess_over_floor": 0.32890220723759694,
+   "contribution": 0.027408517269799745,
+   "natural_order": "asc(先切 m−1)"
+  }
+ ]
+}

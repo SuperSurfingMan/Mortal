@@ -116,7 +116,19 @@ def _cached_decompose(counts: tuple, len_div3: int):
     return hit
 
 
+#: 进程级分解 memo（键=手牌计数，值=**全部**向听层级的叶子分解）。
+#: ⚠️ 生命周期必须限定在单文件（2026-10-21 实测）：每条 value 均值 236 个
+#: 分解、深尺寸均值 38KB（中位 20.5KB、最大 360KB），200k 上限会让每个
+#: DataLoader worker 常驻约 7.6GB 活对象（叠加分配器高水位后 RSS 11.4GB/个，
+#: NW=16 时逼近 251GB 上限）。跨文件手牌几乎不重复，全局 memo 没有收益；
+#: 文件内复用由 GameReplayer.struct_cache 承担，故 dataset.replay_file 每次
+#: 回放结束调用 clear_decomp_cache() 释放。
 _DECOMP_CACHE: dict = {}
+
+
+def clear_decomp_cache() -> None:
+    """释放进程级分解 memo（按文件作用域使用，见 dataset.replay_file）。"""
+    _DECOMP_CACHE.clear()
 
 
 def shanten_chitoi(counts) -> int:

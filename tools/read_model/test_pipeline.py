@@ -1,6 +1,6 @@
 """读牌模型数据管线回归测试（对应 memory §14-35/36：断言设计意图 + 独立重算 + 数值门禁）。
 
-十层检查（A~I，共 67 项；P0/P1 新增 H/I 两层口径与架构门禁）：
+十层检查（A~I，共 88 项；P0/P1 新增 H/I 两层口径与架构门禁；RM12 追加 F5 侧车字段 + I7 tile 时序流门禁；RM14 追加 F5d/I7h-j；RM15 显式 order 追加 I7k-l）：
   A. 标签不变量（全部从**事件流独立重算**，不复用被测代码输出）：
      A1 手牌数   : 每家 alloc.sum() == 13 - 3*(吃+碰+大明杠+暗杠)（加杠净贡献 0）
      A2 136 守恒 : 四家手牌 + 河牌 + 手牌外 tile + 牌山 + 14(死庄) == 136
@@ -26,7 +26,10 @@
   I. P1 架构门禁（RM4/RM5）：tile 头前向/掩码/参数；逐列通路主导与
      因子化隔离（tenpai 只过 tenpai_head）；CE34 损失；A2b 旧 ckpt 必须
      走 flat 架构严格加载；flat 路径小训练 smoke；resume 后 lr>0 且与
-     绝对基准一致（防 cosine 钳零静默冻结，2026-10-20 事故门禁）
+     绝对基准一致（防 cosine 钳零静默冻结，2026-10-20 事故门禁）；
+     RM12 tile 时序流：参数/形状/梯度/散射边界/A2c 旧 ckpt 兼容；
+     RM14 next-tedashi 辅助头：形状/CE/梯度/旧 tile ckpt 兼容；
+     RM15 显式 order：tile_proj 3d+5 形状与旧 ckpt 拒绝。
 
 用法：
     python tools/read_model/test_pipeline.py [--n-files 12]
@@ -60,7 +63,7 @@ N_ITEMS = 0                # 已报告项数（OK+FAIL+SKIP），用于「期望
 #: 连续三次蒙混，是因为本文件有 5 处早退 `return`——subprocess 一崩，该层后续 check
 #: 既不执行也不记 FAIL，覆盖静默缩水而摘要照样打印 ALL PASS。项数断言把「少跑」变成
 #: 显式失败。新增/删除 check 时必须同步此数（或用 --expect 覆盖）。
-EXPECTED_ITEMS = 71
+EXPECTED_ITEMS = 88
 TILE_SEEN_ROW = 835        # v4 obs 的 tiles_seen/4 行（布局推算 + 受控实验双重确认）
 KAN_SELECT_ROW = 870       # at_kan_select 标志行（本测试用受控探针动态确认）
 
@@ -386,6 +389,77 @@ def test_structure_and_timeline(files):
     check(f'F2 时序 token 与事件流一致（{n_tl} 个 (样本,目标)）', bad_tl == 0,
           f'不一致 {bad_tl} 首例 {first_bad}')
 
+    # F5 RM6/RM12 侧车字段：逐 token 真实巡目/age、被鸣 consumed、被鸣标记。
+    # 旧 43 维 token 的末位仍应是「快照巡目常数」（A2b/A2c 数值兼容），真实
+    # 巡目只走 tl_turn——这两条必须同时成立。
+    bad_turn = bad_cons = bad_called = 0
+    n_side = 0
+    for f in files[:3]:
+        samples, _ = D.replay_file(f)
+        for s in samples:
+            for rel in (1, 2, 3):
+                mask = s['tl_mask'][rel - 1]
+                n = int(mask.sum())
+                if n == 0:
+                    continue
+                n_side += 1
+                turn = s['tl_turn'][rel - 1][:n]
+                age = s['tl_age'][rel - 1][:n]
+                tok_turn = s['tl_tokens'][rel - 1][:n, -1]
+                if (np.any(turn < 0) or np.any(age < 0)
+                        or np.any(np.diff(turn) < -1e-6)
+                        or not np.allclose(turn + age, (turn + age)[0], atol=1e-5)
+                        or not np.allclose(tok_turn, tok_turn[0], atol=1e-6)):
+                    bad_turn += 1
+                acts = s['tl_tokens'][rel - 1][:n, 35:42].argmax(-1)
+                cons = s['tl_consumed'][rel - 1][:n]
+                for k in range(n):
+                    act = D.TL_ACTION_KINDS[int(acts[k])]
+                    if act in ('chi', 'pon', 'daiminkan', 'ankan'):
+                        if np.any(cons[k] < 0):
+                            bad_cons += 1
+                            break
+                    elif np.any(cons[k] >= 0):
+                        bad_cons += 1
+                        break
+                called = s['tl_flags'][rel - 1][:n, 1] > 0.5
+                if np.any(called) and not np.all(acts[called] == 0):
+                    bad_called += 1
+    check(f'F5a 逐 token 真实巡目/age 一致（{n_side} 个 (样本,目标)；turn 非降、'
+          'age>=0、turn+age 恒定、旧末位仍为快照常数）',
+          bad_turn == 0, f'违例 {bad_turn}')
+    check('F5b consumed 仅出现在 chi/pon/da/ankan token 上',
+          bad_cons == 0, f'违例 {bad_cons}')
+    check('F5c 「被鸣」标记只落在 dahai token 上',
+          bad_called == 0, f'违例 {bad_called}')
+
+    # F5d RM14 next_tedashi 标签：独立扫事件流「下一张手切」（跳过摸切，本局内）。
+    bad_nt = 0
+    n_nt = 0
+    for f in files[:3]:
+        with gzip.open(f, 'rt', encoding='utf-8') as fh:
+            evs = [json.loads(ln) for ln in fh if ln.strip()]
+        samples, _ = D.replay_file(f)
+        for s in samples:
+            ev0 = int(s['_event'])
+            obs_id = int(s['_observer'])
+            for rel in (1, 2, 3):
+                tgt = (obs_id + rel) % 4
+                exp = D.NO_DISCARD
+                for j in range(ev0 + 1, len(evs)):
+                    e = evs[j]
+                    if e.get('type') == 'end_kyoku':
+                        break
+                    if (e.get('type') == 'dahai' and e.get('actor') == tgt
+                            and not bool(e.get('tsumogiri', False))):
+                        exp = D.tile_id(e['pai'])
+                        break
+                n_nt += 1
+                if int(s['next_tedashi'][rel - 1]) != exp:
+                    bad_nt += 1
+    check(f'F5d next_tedashi 与事件流下一张手切一致（{n_nt} 个目标）',
+          bad_nt == 0, f'违例 {bad_nt}')
+
     # F3 结构标签自洽：counts 归一化；向听>0 ⟹ 非听牌（反向不成立：
     # waits 还按可见性过滤，全部待牌都可见的极稀有结构听牌 waits 为空，
     # 属已知语义差异而非错误）
@@ -405,6 +479,14 @@ def test_structure_and_timeline(files):
     check(f'F3 结构标签自洽（{n_s} 个目标）', bad_norm == 0 and bad_cons == 0,
           f'归一化违例 {bad_norm}，向听/听牌不一致 {bad_cons}'
           f'（已知稀有差异：结构听牌但待牌全可见 {rare_vis} 例）')
+
+    # F4 分解 memo 按文件释放（P0，2026-10-21）：_DECOMP_CACHE 是进程级缓存，
+    # 值=全部向听层级的叶子分解（均值 236 条/手、深尺寸均值 38KB）；若跨文件
+    # 累积，200k 上限会让每个 DataLoader worker 常驻 ~7.6GB 活对象（实测 RSS
+    # 11.4GB/个，NW=16 时逼近机器上限）。跨文件手牌几乎不重复，回放结束必须清空。
+    D.replay_file(files[0])
+    check('F4 分解 memo 按文件释放（worker RSS 泄漏防线）',
+          len(S._DECOMP_CACHE) == 0, f'残留 {len(S._DECOMP_CACHE)} 条')
 
 
 def test_model_and_learning(files, tmp_out='/tmp/read_model_test_train'):
@@ -860,6 +942,167 @@ def test_p1_architecture(files):
         check('I4b tile 架构拒绝 A2b state_dict（证明默认 flat 的必要性）', mismatch)
     else:
         skip('I4 A2b ckpt 不在仓库（兼容断言未执行）')
+
+    # ---- I7：RM12 tile-indexed 时序流（P1b）----
+    # 判据：tile 模式只增时序流参数、H1/H2 输入维度不变；编码器能出
+    # [B,3,64]（pooled）+ [B,3,64,34]（逐列）；tile_proj 接 H1/H2 梯度；
+    # 散射不跨花色；旧 ckpt 必须走 pooled 严格加载。
+    tl_turn = torch.zeros(B, 3, 26)
+    tl_turn[0, 0, :7] = 0.1
+    tl_turn[1, 1, :26] = 0.3
+    tl_age = torch.zeros_like(tl_turn)
+    tl_cons = torch.full((B, 3, 26, 2), -1, dtype=torch.long)
+    tl_flags = torch.zeros(B, 3, 26, 2)
+    # I7 专用非空 token：I1/I2 故意用空序列验边界，不能复用那份 tl/tm。
+    tl7 = tl.clone()
+    tm7 = tm.clone()
+    tl7[0, 0, :7, 3] = 1.0
+    tm7[0, 0, :7] = True
+    tl7[1, 1, :26, 10] = 1.0
+    tm7[1, 1, :26] = True
+    net_pool = M2.build_model_v2s(wait_head='tile', tl_mode='pooled')
+    net_tile = M2.build_model_v2s(wait_head='tile', tl_mode='tile')
+    n_pool = sum(p.numel() for p in net_pool.parameters())
+    n_tl = sum(p.numel() for p in net_tile.parameters())
+    check('I7a tile 模式只增时序流参数，H1/H2 输入维度不变',
+          n_tl > n_pool and (n_tl - n_pool) < 50000
+          and net_tile.h1.weight.shape == net_pool.h1.weight.shape
+          and net_tile.h2.weight.shape == net_pool.h2.weight.shape,
+          f'pooled {n_pool:,} vs tile {n_tl:,}')
+    e_pool, e_tile = net_tile.timeline.encode_tile(
+        tl7, tm7, tl_turn, tl_age, tl_cons, tl_flags)
+    check('I7b tile 编码器输出 pooled [B,3,64] + tile [B,3,64,34] 且有限',
+          tuple(e_pool.shape) == (B, 3, 64)
+          and tuple(e_tile.shape) == (B, 3, 64, D.NUM_TILES)
+          and bool(torch.isfinite(e_pool).all())
+          and bool(torch.isfinite(e_tile).all()),
+          f'{tuple(e_pool.shape)} {tuple(e_tile.shape)}')
+    net_tile.zero_grad()
+    out_t = net_tile(obs, unseen, bias, tl7, tm7, tl_turn=tl_turn,
+                     tl_age=tl_age, tl_consumed=tl_cons, tl_flags=tl_flags)
+    out_t['alloc_logits'].sum().backward()
+    g_tile = float(net_tile.timeline.tile_proj.weight.grad.abs().sum())
+    check('I7c tile 编码器接 H1/H2 梯度（tile_proj grad > 0）',
+          g_tile > 0, f'grad {g_tile:.2e}')
+    check('I7d pooled 模式不创建 RM12 参数（旧 ckpt 参数集逐位不变）',
+          not hasattr(net_pool.timeline, 'tile_proj')
+          and not hasattr(net_pool.timeline, 'turn_proj'))
+    idx = torch.tensor([[8, 17, 27]], dtype=torch.long)   # 9m / 9p / E
+    m1 = torch.ones_like(idx, dtype=torch.bool)
+    c1 = torch.full((1, 3, 2), -1, dtype=torch.long)
+    S = net_tile.timeline._scatter_weights(idx, m1, c1)
+    mcols = torch.nonzero(S[0, 0] > 0).flatten().tolist()
+    pcols = torch.nonzero(S[0, 1] > 0).flatten().tolist()
+    ecols = torch.nonzero(S[0, 2] > 0).flatten().tolist()
+    check('I7e 散射同花色 ±2 边界：9m→{6,7,8}、9p→{15,16,17}、字牌只本列',
+          mcols == [6, 7, 8] and pcols == [15, 16, 17] and ecols == [27],
+          f'{mcols} {pcols} {ecols}')
+    a2c = Path('/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2c/best.pth')
+    if a2c.exists():
+        stc = torch.load(a2c, map_location='cpu', weights_only=False)
+        cfgc = stc.get('config', {})
+        npool = M2.build_model_v2s(
+            conv_channels=cfgc.get('conv_channels', 96),
+            num_blocks=cfgc.get('num_blocks', 12),
+            with_aux=not cfgc.get('no_aux', False),
+            wait_head=cfgc.get('wait_head', 'flat'),
+            tl_mode=cfgc.get('tl_mode', 'pooled'))
+        try:
+            npool.load_state_dict(stc['model'])
+            ok_c = True
+        except Exception as exc:                            # noqa: BLE001
+            ok_c = False
+            print(f'    A2c pooled 加载失败: {exc}', flush=True)
+        check('I7f A2c 旧 ckpt 以 pooled 严格加载成功（tl_mode 缺省兼容）', ok_c)
+        ntile_c = M2.build_model_v2s(
+            conv_channels=cfgc.get('conv_channels', 96),
+            num_blocks=cfgc.get('num_blocks', 12),
+            with_aux=not cfgc.get('no_aux', False),
+            wait_head=cfgc.get('wait_head', 'flat'), tl_mode='tile')
+        try:
+            ntile_c.load_state_dict(stc['model'])
+            mismatch = False
+        except Exception:                                   # noqa: BLE001
+            mismatch = True
+        check('I7g tile 架构拒绝 A2c state_dict（tl_mode 必须从 config 读）', mismatch)
+    else:
+        skip('I7f A2c ckpt 不在仓库（pooled 兼容断言未执行）')
+        skip('I7g A2c ckpt 不在仓库（tile 拒绝断言未执行）')
+
+    # ---- I7h~j：RM14 next-tedashi 辅助头 ----
+    net_nt = M2.build_model_v2s(wait_head='tile', tl_mode='tile', next_tedashi=True)
+    out_nt = net_nt(obs, unseen, bias, tl7, tm7, tl_turn=tl_turn,
+                    tl_age=tl_age, tl_consumed=tl_cons, tl_flags=tl_flags)
+    nt_logits = out_nt.get('next_tedashi_logits')
+    check('I7h next-tedashi 头输出 [B,3,35] 且有限、softmax 行和 1',
+          nt_logits is not None and tuple(nt_logits.shape) == (B, 3, 35)
+          and bool(torch.isfinite(nt_logits).all())
+          and torch.allclose(torch.softmax(nt_logits, -1).sum(-1),
+                             torch.ones(B, 3), atol=1e-5))
+    net_nt.zero_grad()
+    wb_nt = T.wait_bias_of(batch)
+    out_b = net_nt(batch['obs'], batch['unseen'], wb_nt,
+                   batch['tl_tokens'], batch['tl_mask'], **net_nt.tl_extra(batch))
+    loss_nt, parts_nt = T.compute_loss(out_b, batch)
+    loss_nt.backward()
+    g_nt = float(net_nt.next_tedashi_head.weight.grad.abs().sum())
+    nt_ce = float(parts_nt.get('next_tedashi', float('nan')))
+    check('I7i next-tedashi CE 有限且头/时序通路获得梯度',
+          0.0 < nt_ce < 10.0 and np.isfinite(nt_ce) and g_nt > 0,
+          f'ce {nt_ce:.4f} grad {g_nt:.2e}')
+    a2d = Path('/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2d_probe20k/best.pth')
+    if a2d.exists():
+        stp = torch.load(a2d, map_location='cpu', weights_only=False)
+        cfp = stp.get('config', {})
+        old = M2.build_model_v2s(
+            conv_channels=cfp.get('conv_channels', 96),
+            num_blocks=cfp.get('num_blocks', 12),
+            with_aux=not cfp.get('no_aux', False),
+            wait_head=cfp.get('wait_head', 'flat'),
+            tl_mode=cfp.get('tl_mode', 'pooled'),
+            next_tedashi=cfp.get('next_tedashi_weight', 0.0) > 0)
+        try:
+            old.load_state_dict(stp['model'])
+            ok_old = True
+        except Exception as exc:                            # noqa: BLE001
+            ok_old = False
+            print(f'    旧 tile ckpt 加载失败: {exc}', flush=True)
+        new_nt = M2.build_model_v2s(
+            conv_channels=cfp.get('conv_channels', 96),
+            num_blocks=cfp.get('num_blocks', 12),
+            with_aux=not cfp.get('no_aux', False),
+            wait_head=cfp.get('wait_head', 'flat'),
+            tl_mode='tile', next_tedashi=True)
+        try:
+            new_nt.load_state_dict(stp['model'])
+            reject = False
+        except Exception:                                   # noqa: BLE001
+            reject = True
+        check('I7j 旧 tile ckpt（无 next-tedashi 头）严格加载；新头架构拒绝',
+              ok_old and reject)
+        new_ord = M2.build_model_v2s(
+            conv_channels=cfp.get('conv_channels', 96),
+            num_blocks=cfp.get('num_blocks', 12),
+            with_aux=not cfp.get('no_aux', False),
+            wait_head=cfp.get('wait_head', 'flat'),
+            tl_mode='tile', tile_order=True)
+        try:
+            new_ord.load_state_dict(stp['model'])
+            ord_reject = False
+        except Exception:                                   # noqa: BLE001
+            ord_reject = True
+        check('I7k 旧 tile ckpt 被显式 order 架构拒绝（tile_proj 197 vs 129）',
+              ord_reject)
+    else:
+        skip('I7j 旧 tile v1 ckpt 不在仓库（兼容断言未执行）')
+        skip('I7k 旧 tile v1 ckpt 不在仓库（显式 order 拒绝断言未执行）')
+    net_ord = M2.build_model_v2s(wait_head='tile', tl_mode='tile', tile_order=True)
+    out_ord = net_ord(obs, unseen, bias, tl7, tm7, tl_turn=tl_turn,
+                      tl_age=tl_age, tl_consumed=tl_cons, tl_flags=tl_flags)
+    check('I7l 显式 order：tile_order=True、tile_proj 输入 3d+5、前向有限',
+          net_ord.tile_order
+          and net_ord.timeline.tile_proj.in_features == 3 * net_ord.timeline.d_model + 5
+          and bool(torch.isfinite(out_ord['alloc_probs']).all()))
 
     # ---- I5：flat 路径小训练 smoke（旧架构仍可训，CE34 不回退能力）----
     import shutil

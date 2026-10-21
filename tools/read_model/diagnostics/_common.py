@@ -65,21 +65,27 @@ def load_net(ckpt=None):
     net = M2.build_model_v2s(conv_channels=cfg['conv_channels'],
                              num_blocks=cfg['num_blocks'],
                              with_aux=not cfg['no_aux'],
-                             wait_head=cfg.get('wait_head', 'flat')).to(DEV).eval()
+                             wait_head=cfg.get('wait_head', 'flat'),
+                             tl_mode=cfg.get('tl_mode', 'pooled'),
+                             next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                             tile_order=cfg.get('tile_order', False)).to(DEV).eval()
     net.load_state_dict(st['model'])
     return net
 
 
 def forward(net, batch, keys=('obs', 'unseen', 'tl_tokens', 'tl_mask'),
             tl_override=None, bs=1024):
-    """跑 A2b，返回 (alloc_probs[n,3,34,5], exp_counts[n,3,34])，均 float64。
+    """跑读牌模型，返回 (alloc_probs[n,3,34,5], exp_counts[n,3,34])，均 float64。
 
-    `tl_override` 用于配对反事实：只替换 tl_tokens，其余输入（尤其 obs）不变。
+    `tl_override` 用于配对反事实：只替换 tl_tokens（tensor）或同时替换
+    token 及其侧车字段（RM12：dict[tl_tokens/tl_turn/tl_age/tl_consumed/tl_flags]）；
+    其余输入（尤其 obs）不变。pooled 模式忽略侧车字段，A2b/A2c 数值不受影响。
     """
     import train as T
     m = batch['obs'].shape[0]
     AP = np.zeros((m, 3, 34, 5), np.float32)
     EC = np.zeros((m, 3, 34), np.float32)
+    extra_keys = ('tl_turn', 'tl_age', 'tl_consumed', 'tl_flags')
     with torch.no_grad():
         for i in range(0, m, bs):
             sl = slice(i, i + min(bs, m - i))
@@ -87,9 +93,17 @@ def forward(net, batch, keys=('obs', 'unseen', 'tl_tokens', 'tl_mask'),
                    ('unseen', 'river', 'post_riichi_river', 'riichi', 'own_hand')}
             wb = T.wait_bias_of(sub).to(DEV)
             ch = {k: batch[k][sl].to(DEV) for k in keys}
+            if getattr(net, 'tl_mode', 'pooled') == 'tile':
+                for k in extra_keys:
+                    ch[k] = batch[k][sl].to(DEV)
             if tl_override is not None:
-                ch['tl_tokens'] = tl_override[sl].to(DEV)
-            o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'])
+                if isinstance(tl_override, dict):
+                    for k, v in tl_override.items():
+                        ch[k] = v[sl].to(DEV)
+                else:
+                    ch['tl_tokens'] = tl_override[sl].to(DEV)
+            o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'],
+                    **net.tl_extra(ch))
             AP[sl] = o['alloc_probs'].cpu().numpy()
             EC[sl] = o['exp_counts'].cpu().numpy()
     return AP.astype(np.float64), EC.astype(np.float64)

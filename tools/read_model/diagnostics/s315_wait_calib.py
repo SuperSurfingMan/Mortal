@@ -24,7 +24,10 @@ st = torch.load(str(CKPT),
 cfg = st['config']
 net = M2.build_model_v2s(conv_channels=cfg['conv_channels'], num_blocks=cfg['num_blocks'],
                          with_aux=not cfg['no_aux'],
-                         wait_head=cfg.get('wait_head', 'flat')).to(DEV).eval()
+                         wait_head=cfg.get('wait_head', 'flat'),
+                         tl_mode=cfg.get('tl_mode', 'pooled'),
+                         next_tedashi=cfg.get('next_tedashi_weight', 0.0) > 0,
+                         tile_order=cfg.get('tile_order', False)).to(DEV).eval()
 net.load_state_dict(st['model'])
 files = sorted(glob.glob(VAL_GLOB,
                          recursive=True))
@@ -36,7 +39,8 @@ with torch.no_grad():
     for i in range(0, n, 2048):
         ch = {k: v[i:i + 2048].to(DEV) for k, v in b.items()}
         wb = T.wait_bias_of(ch).to(DEV)
-        o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'])
+        o = net(ch['obs'], ch['unseen'], wb, ch['tl_tokens'], ch['tl_mask'],
+                **net.tl_extra(ch))
         L34.append(o['wait_logits'][..., 34].cpu().numpy())
         lg = o['wait_logits'][..., :34].double()
         ZSUM.append(torch.logsumexp(lg, -1).cpu().numpy())

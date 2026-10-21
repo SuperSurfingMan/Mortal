@@ -1,6 +1,6 @@
 """读牌模型数据管线回归测试（对应 memory §14-35/36：断言设计意图 + 独立重算 + 数值门禁）。
 
-十层检查（A~I，共 88 项；P0/P1 新增 H/I 两层口径与架构门禁；RM12 追加 F5 侧车字段 + I7 tile 时序流门禁；RM14 追加 F5d/I7h-j；RM15 显式 order 追加 I7k-l）：
+十层检查（A~I，共 91 项；P0/P1 新增 H/I 两层口径与架构门禁；RM12 追加 F5 侧车字段 + I7 tile 时序流门禁；RM14 追加 F5d/I7h-j；RM15 显式 order 追加 I7k-l；P1b 输入消融追加 F6a-c）：
   A. 标签不变量（全部从**事件流独立重算**，不复用被测代码输出）：
      A1 手牌数   : 每家 alloc.sum() == 13 - 3*(吃+碰+大明杠+暗杠)（加杠净贡献 0）
      A2 136 守恒 : 四家手牌 + 河牌 + 手牌外 tile + 牌山 + 14(死庄) == 136
@@ -63,7 +63,7 @@ N_ITEMS = 0                # 已报告项数（OK+FAIL+SKIP），用于「期望
 #: 连续三次蒙混，是因为本文件有 5 处早退 `return`——subprocess 一崩，该层后续 check
 #: 既不执行也不记 FAIL，覆盖静默缩水而摘要照样打印 ALL PASS。项数断言把「少跑」变成
 #: 显式失败。新增/删除 check 时必须同步此数（或用 --expect 覆盖）。
-EXPECTED_ITEMS = 88
+EXPECTED_ITEMS = 91
 TILE_SEEN_ROW = 835        # v4 obs 的 tiles_seen/4 行（布局推算 + 受控实验双重确认）
 KAN_SELECT_ROW = 870       # at_kan_select 标志行（本测试用受控探针动态确认）
 
@@ -459,6 +459,57 @@ def test_structure_and_timeline(files):
                     bad_nt += 1
     check(f'F5d next_tedashi 与事件流下一张手切一致（{n_nt} 个目标）',
           bad_nt == 0, f'违例 {bad_nt}')
+
+    # F6 P1b 输入消融（2026-10-21）：obs 牌河顺序可被抹掉而不动集合。
+    # 判据：① 只允许牌河窗口/recency/最近手切行变化；② 每个牌河窗口的
+    # item 多重集逐位不变；③ recency 与最近手切平面清零；④ 顺序确实被打乱。
+    f0 = files[0]
+    D.set_obs_river_order('keep')
+    sk, _ = D.replay_file(f0)
+    try:
+        D.set_obs_river_order('set')
+        ss, _ = D.replay_file(f0)
+    finally:
+        D.set_obs_river_order('keep')
+
+    def _river_items(obs, base, ch):
+        slots = [base + ch * i for i in range(6)]
+        slots += [base + ch * (6 + j) for j in range(18)]
+        return [obs[r:r + ch].copy() for r in slots if obs[r:r + ch].any()]
+
+    allowed = set()
+    for base, ch, rec in D._OBS_RIVER_BLOCKS:
+        allowed |= set(range(base, base + ch * 24))
+        allowed |= set(range(rec, rec + (1 if ch == 4 else 3)))
+    for row in D._OBS_LAST_TEDASHI_ROWS:
+        allowed |= set(range(row, row + 3))
+    zero_rows = (131, 324, 325, 326, 519, 520, 521, 714, 715, 716)
+
+    bad_rows = n_win = n_set_ok = n_order_changed = bad_zero = 0
+    for a, b in zip(sk, ss):
+        rows = np.nonzero(np.abs(a['obs'] - b['obs']).sum(1) > 1e-6)[0]
+        bad_rows += int((~np.isin(rows, list(allowed))).sum())
+        if any(np.any(b['obs'][r]) for r in zero_rows + D._OBS_LAST_TEDASHI_ROWS):
+            bad_zero += 1
+        for base, ch, rec in D._OBS_RIVER_BLOCKS:
+            ia = _river_items(a['obs'], base, ch)
+            ib = _river_items(b['obs'], base, ch)
+            if not ia:
+                continue
+            n_win += 1
+            sa = sorted(tuple(np.round(x, 3).ravel()) for x in ia)
+            sb = sorted(tuple(np.round(x, 3).ravel()) for x in ib)
+            n_set_ok += int(sa == sb)
+            if len(ia) > 1 and ([int(x.sum(1).argmax()) for x in ia]
+                                != [int(x.sum(1).argmax()) for x in ib]):
+                n_order_changed += 1
+    check('F6a obs 消融只改牌河/recency/最近手切行', bad_rows == 0,
+          f'越界行 {bad_rows}')
+    check(f'F6b obs 消融保留牌河 item 多重集（{n_win} 个窗口）',
+          n_set_ok == n_win, f'不等 {n_win - n_set_ok}')
+    check('F6c obs 消融确实打乱顺序并清零 recency/最近手切',
+          n_order_changed > 0 and bad_zero == 0,
+          f'顺序改变 {n_order_changed}，未清零样本 {bad_zero}')
 
     # F3 结构标签自洽：counts 归一化；向听>0 ⟹ 非听牌（反向不成立：
     # waits 还按可见性过滤，全部待牌都可见的极稀有结构听牌 waits 为空，

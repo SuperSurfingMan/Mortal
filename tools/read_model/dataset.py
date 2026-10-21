@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import random
 from pathlib import Path
 from typing import Iterator, Optional
@@ -78,6 +79,54 @@ NUM_TILES = 34
 NUM_WAIT_CLASSES = NUM_TILES + 1          # 34 种听牌 + 未听
 NO_DISCARD = NUM_TILES                    # next_discard 的「本局无后续打牌」
 MAX_SHANTEN_BUCKET = 7                    # 0..6 + (>=6 归 7)
+
+# ---- obs 牌河顺序消融（P1b 输入消融：遮 obs 牌河顺序、只留集合）----
+# libriichi v4 obs（``obs_repr.rs``，with_sp_tables=False）的牌河块布局：
+#   自家河：35 起 4ch×6（正序）+ 4ch×18（倒序），recency 平面 131；
+#   他家河：132/327/522 起 8ch×6 + 8ch×18，recency 平面 base+192..194；
+#   最近手切：836/839/842 起各 3ch（tile/aka/dora）；835 是 tiles_seen，
+#   其前 831..834 是 ankan_overview（不能动）。
+# 消融做法：在每个窗口内对「有效 item 块」做随机置换（item 连同 aka/dora/
+# tedashi/riichi/kan 标记整体搬动），并清零 recency 平面与最近手切平面
+# ⇒ 集合与标记不变，时间顺序不可恢复。默认 ``keep``（旧口径逐位不变）。
+OBS_RIVER_ORDER = os.environ.get('RM_OBS_RIVER_ORDER', 'keep')
+_OBS_RIVER_BLOCKS = ((35, 4, 131), (132, 8, 324), (327, 8, 519), (522, 8, 714))
+_OBS_LAST_TEDASHI_ROWS = (836, 839, 842)
+
+
+def set_obs_river_order(mode: str) -> None:
+    """切换 obs 牌河顺序消融（``keep`` 原样 / ``set`` 只留集合）。"""
+    global OBS_RIVER_ORDER
+    assert mode in ('keep', 'set'), mode
+    OBS_RIVER_ORDER = mode
+
+
+def _ablate_river_order(obs: np.ndarray, seed: int) -> None:
+    """就地抹掉 obs 里的牌河顺序（P1b 输入消融）。
+
+    每个窗口内的 item 块随机重排，recency 与最近手切平面清零。牌河集合、
+    张数与 aka/tedashi/riichi/kan 标记全部保留，但「哪张先切」在 obs 里
+    不可恢复——顺序只能从 tile-indexed 时序流（tl_turn/tl_age）读到。
+    """
+    rng = np.random.default_rng(seed)
+    for base, ch, rec in _OBS_RIVER_BLOCKS:
+        slots = [base + ch * i for i in range(6)]
+        slots += [base + ch * (6 + j) for j in range(18)]
+        occupied, blocks = [], []
+        for row in slots:
+            if obs[row:row + ch].any():
+                occupied.append(row)
+                blocks.append(obs[row:row + ch].copy())
+        for row in slots:
+            obs[row:row + ch] = 0.0
+        obs[rec:rec + (1 if ch == 4 else 3)] = 0.0
+        if not blocks:
+            continue
+        perm = rng.permutation(len(blocks))
+        for row, k in zip(occupied, perm):
+            obs[row:row + ch] = blocks[k]
+    for row in _OBS_LAST_TEDASHI_ROWS:
+        obs[row:row + 3] = 0.0
 
 # ---- 时序 token（v2 时序流）----
 # 每目标家一条「公开动作序列」：打牌（含摸切标志）/ 立直宣言 / 鸣牌。
@@ -426,6 +475,8 @@ class GameReplayer:
 
         obs_arr, _mask = st_obs.encode_obs(4, False)  # (obs, mask)；mask 对读牌无用
         obs = np.asarray(obs_arr, dtype=np.float32)
+        if OBS_RIVER_ORDER != 'keep':          # P1b 输入消融：抹掉 obs 牌河顺序
+            _ablate_river_order(obs, (ev_idx << 3) ^ (observer + 1) ^ 0x5EED)
 
         tiles_seen = own_tehai.astype(np.int64) + self.c_total
         unseen = (4 - tiles_seen).astype(np.float32)

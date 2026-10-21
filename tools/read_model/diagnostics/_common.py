@@ -110,10 +110,17 @@ def forward(net, batch, keys=('obs', 'unseen', 'tl_tokens', 'tl_mask'),
 
 
 def build_eval(n_eval=40000, seed=EVAL_SEED):
-    """官方固定评估集（202609 holdout）。返回 (batch, batch_as_numpy, 文件数)。"""
+    """官方固定评估集（202609 holdout）。返回 (batch, batch_as_numpy, 文件数)。
+
+    P1b 输入消融：ckpt config 里 ``obs_river_order='set'`` 时必须用同一口径
+    构建评估集（遮掉 obs 牌河顺序），否则训练/评估分布不一致、指标不可比。
+    """
     import glob as _glob
 
     import train as T
+    import dataset as D
+    st = torch.load(CKPT, map_location='cpu', weights_only=False)
+    D.set_obs_river_order(st.get('config', {}).get('obs_river_order', 'keep'))
     files = sorted(_glob.glob(VAL_GLOB, recursive=True))
     batch = T.build_fixed_eval_set(files, n_eval, seed=seed)
     bn = {k: v.numpy() for k, v in batch.items()}

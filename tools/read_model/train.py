@@ -574,6 +574,10 @@ def main():
                     help='RM15/显式 order：tile 图上加 last-turn/age/embedding、'
                          '邻域 mean-turn 与 turn[m−1]−turn[m+1] 局部先后差 '
                          '（仅 tl_mode=tile；旧 ckpt 缺省 false）')
+    ap.add_argument('--obs-river-order', choices=('keep', 'set'), default='keep',
+                    help='P1b 输入消融：set = 抹掉 obs 牌河顺序（保留集合/标记，'
+                         'recency 与最近手切平面清零），逼模型只能从 tile 时序流'
+                         '读顺序；keep = 旧口径（逐位不变）')
     ap.add_argument('--no-aux', action='store_true')
     ap.add_argument('--w-shanten', type=float, default=DEFAULT_LOSS_CFG['w_shanten'],
                     help='aux 头向听 CE 权重（v2s 起默认 0.15，即 v1 的 0.05 ×3）')
@@ -606,6 +610,8 @@ def main():
     ap.add_argument('--resume', default=None)
     ap.add_argument('--max-files', type=int, default=0, help='>0 时限制训练文件数（冒烟用）')
     args = ap.parse_args()
+    # P1b 输入消融：必须在建数据集/DataLoader 之前生效（worker 靠 fork 继承）
+    D.set_obs_river_order(args.obs_river_order)
 
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
@@ -687,6 +693,7 @@ def main():
           f'wait_head={args.wait_head if args.model != "v1" else "-"} '
           f'tl_mode={args.tl_mode if args.model != "v1" else "-"} '
           f'tile_order={args.tile_order if args.model != "v1" else "-"} '
+          f'obs_river={args.obs_river_order} '
           f'nt_aux={args.next_tedashi_weight if args.model != "v1" else "-"}', flush=True)
 
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)

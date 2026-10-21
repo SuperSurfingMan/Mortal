@@ -450,10 +450,20 @@ def main():
     # P1b 预注册判决（新增段；历史 verdicts 保持逐位不变）
     p1b_verdicts = build_p1b_verdicts(single_ob, window, cf, single)
 
+    # 审计：ckpt 是否在 obs 牌河顺序消融下训练（P1b 输入消融，§13.10）。
+    # 该开关会同时决定评估集构建口径，必须进报告，否则报告无法事后归因。
+    try:
+        import torch as _torch
+        _cfg = _torch.load(CKPT, map_location='cpu',
+                           weights_only=False).get('config', {})
+        obs_river_order = _cfg.get('obs_river_order', 'keep')
+    except Exception:
+        obs_river_order = 'unknown'
+
     report = {
         'meta': {'ckpt': str(CKPT), 'n': n, 'boot': B, 'generated_at': time.time(),
                  'cache': str(CACHE), 'cache_schema': CACHE_SCHEMA,
-                 'floor_kind': floor_kind,
+                 'floor_kind': floor_kind, 'obs_river_order': obs_river_order,
                  'verdict_protocol': ('verdicts=历史（A2b 时代 90%/+30%，仅存档）；'
                                       'p1b_verdicts=A2c 基线（主 RM12/RM15，'
                                       '不退 RM13/RM14）'),

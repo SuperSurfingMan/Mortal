@@ -5,6 +5,12 @@
 > 从单一玩家视角，用可见历史监督预测其他三家的暗牌后验与听牌（荣和威胁）分布，
 > 输出校准概率 + 硬约束层，为将来注入 Mortal 提升防守做准备。
 
+> **P1b 顺序通路结论（2026-10-21）**：五版 20k（tile 时序流 / next-tedashi 辅助 / 显式
+> order / 输入消融 / 修时钟+最小 order）全部未达预注册判据（RM12 b≥0.3 且 r²≥0.2；
+> RM15 CI 下界>0）；输入消融证明 alloc/wait 对牌河顺序的边际信息量≈ 0（alloc_ce
+> 0.6601→0.6605）⇒ **顺序通路关闭，回注入主线**。整合结论与重启条件见 §13.12；
+> A2c（best@153k）仍为注入基线。
+
 ## 0. 交付物与边界
 
 | 项 | 状态 |
@@ -16,10 +22,10 @@
 | 训练（课程学习/增广/holdout/AdamW+cosine/fp32；--wait-head flat/tile + --tl-mode pooled/tile） | ✅ `train.py` + `run_v2s.sh`/`run_a2c.sh`/`run_p1b.sh` |
 | 离线诊断（log-loss/ECE/hit@k/信息增益 + 均匀先验基线） | ✅ `evaluate.py` |
 | ONNX 导出（路径 B 前置） | ✅ `export_onnx.py` |
-| 回归测试（10 层 86 项，含与 Rust loader 逐位一致性、枚举器交叉验证、梯度流门禁、P0 口径门禁 H 层、P1 架构门禁 I 层、RM12/RM14 F5/I7 门禁） | ✅ `test_pipeline.py`（86 项 ALL PASS） |
+| 回归测试（10 层 91 项，含与 Rust loader 逐位一致性、枚举器交叉验证、梯度流门禁、P0 口径门禁 H 层、P1 架构门禁 I 层、RM12/RM14/RM15 F5/I7 门禁、输入消融 F6 门禁） | ✅ `test_pipeline.py`（91 项 ALL PASS） |
 | A3 规则法基线（纯 numpy：现物/筋/壁+立直枚举+见逃排除，A2b 的人类规则参照） | ✅ `rule_baseline.py` + `a3_eval.py` + `compare_a3.py` + `calibrate_a3.py` + `test_rule_baseline.py`（§0quinquies） |
-| 复核与判决修正（RM1~RM11 + RM12~RM16） | ✅ `diagnostics/`（10 脚本 + `results/*.json`），结论见 §11/§12/§13.5~§13.8；⚠️ 已推翻本文 §0quinquies/§9 的 4 条旧陈述（映射见 §16） |
-| **P1b 顺序通路（RM12/RM14）** | 🔶 代码/门禁 **86 项 ALL PASS**；RM12 v1 20k **b=0.0131**、RM14 aux 20k **b=0.0038**，均 FAIL；不启动 200k，下一步显式 order 特征/输入消融（§13.5~§13.8） |
+| 复核与判决修正（RM1~RM11 + RM12~RM16） | ✅ `diagnostics/`（10 脚本 + `results/*.json`），结论见 §11/§12/§13.5~§13.12；⚠️ 已推翻本文 §0quinquies/§9 的 4 条旧陈述（映射见 §16） |
+| **P1b 顺序通路（RM12/RM14/RM15 + 输入消融 + 修时钟）** | 🔶 代码/门禁 **91 项 ALL PASS**；五版 20k 全 FAIL（v1 b=0.0131 / aux 0.0038 / 显式 order 0.0088 / 输入消融 0.0040 / 修时钟+最小 order 0.0111）；**修时钟相对显式 order 四项小幅回升（b 0.0088→0.0111、RM13 79.6→85.0、RM15 −0.1095→−0.0970），但相对 RM12 v1 仍全面更差（b 0.0131、RM13 86.85、RM14 52.15、RM15 −0.0857），且远低于 b≥0.3；消融后 alloc_ce 几乎不变（0.6605 vs 0.6601）⇒ 顺序对 alloc 几乎无价值，顺序通路到此为止，转注入主线**（整合结论见 §13.12；各版细节 §13.5~§13.11） |
 | **P0 口径修正落地（RM1 因子化读法 + RM2 选型判据 v2 + RM3 CE 拆分/分层/R-P 双口径 + RM16 顺序级常规诊断）** | ✅ **2026-10-19 已实现并复跑验收**（§13.3）：AUC 0.9685 / 标定 1.0137 / cond_ce 2.8961 逐位复现诊断值；三份报告 + `order_metrics.py` 全部按新口径重生成 |
 | 注入 Mortal（路径 C/A/B） | ⬜ 未做（本版不碰 `mortal/` 与 `libriichi/` 任何文件）；RM1 已落地 ⇒ P(听牌) 可直接当概率注入，无需 Platt/isotonic |
 
@@ -1102,9 +1108,9 @@ json 产物在 `diagnostics/results/`（`diag1/probe/local_order_report/local_or
 | 读牌 H2 架构（逐牌特征） | ✅ 已由 RM5 落地（A2c tile H2 头；§11.3/§13.4a） | 冻结骨干探针：同预算只加逐列 `h_x` → cond_ce −0.152、hit@1 **+35% 相对**、立直 hit@1 **+34% 相对**；探针只训 1 epoch 即超 A2b 端到端 hit@1 |
 | 读牌输出层参数化 | ✅ 已由 RM4 落地（A2c CE34 + 因子化；§11.7/§13.4a） | 35 类 softmax 让 `L_wait`（14.6% 目标）与 `L_wait_tenpai`（全目标）抢同一归一化 → 配分函数 sd 1.94 同时污染判别与标定；因子化后 P0 探针 AUC 即 0.9640、meanP(听) 0.1535 |
 | 读牌训练规模 | 🔶 A2c 200k 已完成（val 2.0524 < 2.0924）；未探边界（§11.4） | 50k×512 = 全量 6.32 亿样本的 **4.05%**；val 到 43k 仍在降，最后 7k 步是 cosine LR 归零区 ⇒「平台」与退火混淆 |
-| 读牌局部手牌信息（顺序级） | 🔶 **集合级充分、顺序级通路仍未因果打通**（§12 + §13.5~13.7） | A2c：单张扣地板全样本 **85%** / 非立直 **92.7%** / 立直 **66.2%**，但配对反事实 b=**0.0093**、立直窗口 excess −0.0656（CI[−0.1134,−0.0142]）⇒ 单张敏感性主要来自 obs 按槽牌河通道。P1b 两版 20k 均 FAIL：RM12 tile-indexed 时序流 b=**0.0131**、RM14 next-tedashi aux b=**0.0038**；时序通路接上但未被因果使用（H1 e_col 权重增长、合成对调能改 exp_counts，方向不对齐）。下一步显式 order 特征（turn_last / turn[m−1]−turn[m+1] / last-token）或辅助头只喂 e_col / 输入消融；逐格负 excess 集中 索7/万6/万3（§13.7） |
+| 读牌局部手牌信息（顺序级） | 🔶 **集合级充分、顺序级通路仍未因果打通**（§12 + §13.5~§13.12） | A2c：单张扣地板全样本 **85%** / 非立直 **92.7%** / 立直 **66.2%**，但配对反事实 b=**0.0093**、立直窗口 excess −0.0656（CI[−0.1134,−0.0142]）⇒ 单 张敏感性主要来自 obs 按槽牌河通道。P1b 五版 20k 均 FAIL：RM12 tile-indexed 时序 流 b=**0.0131**、RM14 next-tedashi aux b=**0.0038**、RM15 显式 order b=**0.0088**、输入消融（遮 obs 牌河顺序）b=**0.0040**、修时钟+最小显式特征 b=**0.0111**；时序通路接上但未被因果使用（H1 e_col/显式通道权重增长、合成对调能改 exp_counts，方向不对齐）。修时钟（§13.11）让 b 0.0088→0.0111、RM13 79.6→85.0、RM15 −0.1095→−0.0970，相对显式 order 小幅回升；但相对 RM12 v1（b=0.0131、RM13 86.85、RM14 52.15、RM15 −0.0857）仍全面更差，且远低于阈值。**消融后 alloc_ce 仅 0.6605（无消融 0.6601）⇒ 牌河顺序对 alloc 预测几乎无价值（“不需要学”而非“学不会”），顺序通路到此为止**；逐格负 excess 在 A2c 集中于 索7/万6/万3；修时钟后窗口层为 万3/索7/筒8（§13.7/§13.11）。**五版整合结论见 §13.12。** |
 | 诊断脚本资产 | ✅ 已入仓（§12.9） | `tools/read_model/diagnostics/`（10 个脚本 + `_common.py` + `README.md` + `results/*.json`）；路径全部由 `_common` 解析，`RM_CKPT`/`RM_VAL_GLOB`/`RM_TRAIN_GLOB`/`RM_OUT_DIR`/`RM_CACHE_DIR` 可覆盖；120 MB `cache.npz` 落仓库外 scratch |
-| S6b 读牌后验 | ⏳ 当前信息侧主线 | 尚未注入；A2c 已定为注入基线（§10/§13.4a）；**P(听牌) 已可直接当概率注入**（§11.1：sigmoid 口径标定比值 0.998，不再需要重标定）；**RM1~RM3+RM16 已落地（§13.3）**，三份报告已按新口径重跑 ⇒ **注入特征口径可以冻结**；**P1（RM4+RM5+RM7）已实现且 A2c 官方验收全通过（best@153k，val_score 2.0524 < A2b 2.0924，§13.4a）；P1b（RM12/RM14）两版 20k FAIL，不阻塞注入**；路径 C 注入（B0→B1→B2）可并行推进 |
+| S6b 读牌后验 | ⏳ 当前信息侧主线 | 尚未注入；A2c 已定为注入基线（§10/§13.4a）；**P(听牌) 已可直接当概率注入**（§11.1：sigmoid 口径标定比值 0.998，不再需要重标定）；**RM1~RM3+RM16 已落地（§13.3）**，三份报告已按新口径重跑 ⇒ **注入特征口径可以冻结**；**P1（RM4+RM5+RM7）已实现且 A2c 官方验收全通过（best@153k，val_score 2.0524 < A2b 2.0924，§13.4a）；P1b（RM12/RM14/RM15+输入消融+修时钟）五版 20k FAIL，不阻塞注入**；路径 C 注入（B0→B1→B2）可并行推进 |
 
 ### 13.2 优先级（P0 零成本 → P1 需重训 → P2/P3）
 
@@ -1114,8 +1120,8 @@ json 产物在 `diagnostics/results/`（`diag1/probe/local_order_report/local_or
 | **P0** | 读牌模型 A2b 收尾 | **已完成**：预注册全满足，A2b 定为注入基线。**A3 规则法基线已完成**（§10）。⚠️ **§11 复核修正两处判决**：tenpai_auc 实为 **0.9685 vs 规则 0.9468**（不是打平）；wait_ce 的 +0.758 nats 优势里 **71% 是听牌因子伪影**，真实待牌条件分布优势 **+0.217 nats**。→ 下一步路径 C 注入（B0 吞吐 → B1 限域注入 → B2 ladder 门禁） |
 | **P0** | 立直专项（基线已换） | §9 地板：counts 0.077 / hard（听牌先验）**0.100 hit@1、CE 3.35** / A2b 0.1116。**§11.3 已给出可达路径**：冻结骨干探针加逐牌列特征即得立直 hit@1 **0.1338**（只训 1 epoch）→ RM5 端到端验收线设 **≥0.135**，而不是对照 0.112。**§12 补一条机制线索**：立直层的切牌顺序效应是非立直的 **2.9 倍**（+0.1895 vs +0.0660 张）而 A2b 超出顺序盲地板为 **−0.0171** ⇒ 立直读不准很可能与「顺序信息没通路」同源（见 RM15） |
 | **P0** ✅ | **读牌 RM16：区域级/顺序级评测指标**（§12.8） | **2026-10-19 已落地**：三项指标（① 单张格内分层 ΔΔ 扣 A3 地板、② ±2 窗口版、③ 配对反事实回归 b/r²）沉淀为常规工具 **`tools/read_model/order_metrics.py`**（一条命令 → `<ckpt>/order_metrics.json` + **历史 `verdicts` + P1b `p1b_verdicts`**；cache 复用 s3158 extract + sidecar 防串）。**验收** ✅：对 A2b 逐位再现 §12 数字（b=0.0144、r²=3.3%、扣地板复现 all +41%/非立直 +67%/立直 −12%、立直窗口超地板 CI [−0.198,−0.099]），判据全 FAIL 作为基线存档（§13.3） |
-| **P1** ✅ | **读牌 RM4~RM7：一次重训、小改架构**（§11.7，预期最大单点收益） | **RM4+RM5+RM7 已实现，A2c 200k 已结项 + 官方 20000 集验收全通过（§13.4a）**：best@153k，RM4 AUC 0.9698/标定 1.0364/cond_ce 2.7532、RM5 hit@1 0.1993 + 立直 0.1724、RM7 val_score 2.0524 → **A2c 取代 A2b 成为注入基线，特征口径冻结**。顺带修 `order_metrics` 判据段 NameError（坑 61）并完成 RM13/RM14 阈值重标定（§13.4a-⑤）。**RM6min+RM12 已落地（§13.5）**：代码/门禁 RM12 时 82 项、RM14 后 86 项 ALL PASS、500 步 smoke 通过、20k 探针 **b=0.0131 FAIL**（不启动 200k）；RM14 next-tedashi 辅助头 20k **b=0.0038 FAIL**（§13.6），转显式 order 特征/输入消融；RM13/RM14 已被 A2c 满足（92.7%/66.2%），RM15 等下一版再测 |
-| **P1** | **读牌 RM12~RM15：局部手牌信息（顺序级）通路**（§12.8） | 判定＝**架构能表达、损失没压力、时序流空转、per-target 表示被共享**。RM12 **时序流改 tile-indexed**（`e_T` 从 mean-pool `[B,3,64]` 改为 `[B,3,C,34]` 逐列时序图，token 在其牌列 ±1/±2 散射写入 + 逐 token 真实巡目 + tedashi/riichi/被鸣标记 + turn 衰减；证据＝反事实斜率 **0.0144**、r² **3.3%**；验收（P1b 主判据）b≥0.3、r²≥0.2）。RM13 **H1 补 per-(target,tile) 特征**（当前 `h_j = h.expand(B,3,…)` 三家共享同一份 `h`，目标家身份只经 tile-agnostic 的 `e_T`/`s_belief` 注入；验收（P1b 不退线）非立直层扣地板复现率 ≥92.696%（显示 92.7；A2c 92.696%；历史 90% 存档））。RM14 **顺序敏感的损失放大**（alloc CE 按「是否邻接目标家最近 k 巡手切牌」加权 1.5~3×，或加「预测下一张手切牌」辅助任务；证据＝顺序项只占总增益 **1~3%**、对 `alloc_ce` 贡献 ≈0.001~0.003 nats 完全不可见；验收（P1b 不退线）立直层 ≥66.2%（A2c 66.218%；历史 +30% 存档；+50 低于 A2c 66.2 无效）且总 alloc_ce 不退）。RM15 **立直层专项**（顺序效应 2.9× 而捕捉为零，疑与「立直 hit@1 0.1116 < 非立直 0.155」同源；验收（P1b 主判据）立直层窗口 ΔΔ 超出地板 CI 下界>0）。⚠️ **RM6 与 RM12 需一起做**：RM6 补 token 内容、RM12 改输出形态，单独做任一项都已被实测否证（§11.3 P3 注意力零增量 / §12.5 斜率 0.0144）。**2026-10-21 状态：RM6min+RM12 已落地（§13.5），20k 探针 b=0.0131 FAIL（不启动 200k）；RM13/RM14 判据已被 A2c 满足（92.7%/66.2%）；RM14 next-tedashi 辅助头 20k **b=0.0038 FAIL**（§13.6），转显式 order 特征/输入消融，RM15 等下一版时序通路再测。** |
+| **P1** ✅ | **读牌 RM4~RM7：一次重训、小改架构**（§11.7，预期最大单点收益） | **RM4+RM5+RM7 已实现，A2c 200k 已结项 + 官方 20000 集验收全通过（§13.4a）**：best@153k，RM4 AUC 0.9698/标定 1.0364/cond_ce 2.7532、RM5 hit@1 0.1993 + 立直 0.1724、RM7 val_score 2.0524 → **A2c 取代 A2b 成为注入基线，特征口径冻结**。顺带修 `order_metrics` 判据段 NameError（坑 61）并完成 RM13/RM14 阈值重标定（§13.4a-⑤）。**RM6min+RM12 已落地（§13.5）**：代码/门禁 RM12 时 82 项、RM14 后 86 项 ALL PASS、500 步 smoke 通过、20k 探针 **b=0.0131 FAIL**（不启动 200k）；RM14 next-tedashi 辅助头 20k **b=0.0038 FAIL**（§13.6）；显式 order 特征 20k **b=0.0088 FAIL**（§13.9）、修时钟+最小 order 20k **b=0.0111 FAIL**（§13.11），五版均不启动 200k（输入消融/瓶颈亦未翻盘）；RM13/RM14 已被 A2c 满足（92.7%/66.2%），RM15 仅在重启该线时再测 |
+| **P1** | **读牌 RM12~RM15：局部手牌信息（顺序级）通路**（§12.8） | 判定＝**架构能表达、损失没压力、时序流空转、per-target 表示被共享**。RM12 **时序流改 tile-indexed**（`e_T` 从 mean-pool `[B,3,64]` 改为 `[B,3,C,34]` 逐列时序图，token 在其牌列 ±1/±2 散射写入 + 逐 token 真实巡目 + tedashi/riichi/被鸣标记 + turn 衰减；证据＝反事实斜率 **0.0144**、r² **3.3%**；验收（P1b 主判据）b≥0.3、r²≥0.2）。RM13 **H1 补 per-(target,tile) 特征**（当前 `h_j = h.expand(B,3,…)` 三家共享同一份 `h`，目标家身份只经 tile-agnostic 的 `e_T`/`s_belief` 注入；验收（P1b 不退线）非立直层扣地板复现率 ≥92.696%（显示 92.7；A2c 92.696%；历史 90% 存档））。RM14 **顺序敏感的损失放大**（alloc CE 按「是否邻接目标家最近 k 巡手切牌」加权 1.5~3×，或加「预测下一张手切牌」辅助任务；证据＝顺序项只占总增益 **1~3%**、对 `alloc_ce` 贡献 ≈0.001~0.003 nats 完全不可见；验收（P1b 不退线）立直层 ≥66.2%（A2c 66.218%；历史 +30% 存档；+50 低于 A2c 66.2 无效）且总 alloc_ce 不退）。RM15 **立直层专项**（顺序效应 2.9× 而捕捉为零，疑与「立直 hit@1 0.1116 < 非立直 0.155」同源；验收（P1b 主判据）立直层窗口 ΔΔ 超出地板 CI 下界>0）。⚠️ **RM6 与 RM12 需一起做**：RM6 补 token 内容、RM12 改输出形态，单独做任一项都已被实测否证（§11.3 P3 注意力零增量 / §12.5 斜率 0.0144）。**2026-10-21 状态：RM6min+RM12 已落地（§13.5），20k 探针 b=0.0131 FAIL（不启动 200k）；RM13/RM14 判据已被 A2c 满足（92.7%/66.2%）；RM14 next-tedashi 辅助头 20k **b=0.0038 FAIL**（§13.6）；显式 order 特征 20k **b=0.0088 FAIL**（§13.9）、修时钟+最小 order 20k **b=0.0111 FAIL**（§13.11），P1b 顺序通路停止投入，RM15 仅在重启该线时再测。** |
 | **P1** | **读牌 RM7：吞吐 + 扩步数**（§11.4） | `encode_obs(with_sp_tables=False)`（SP 表 119 通道对读牌无用却是 2.2ms/样本大头）→ 步数 50k→200k+ 并重设 cosine 终点。**验收**：200k 的 val_score 显著低于 2.0924，否则才可判「数据/容量到顶」。当前只用了全量数据的 **4.05%** |
 | **P2** | **读牌 RM11：决策级离线门禁**（§11.7） | 现有指标全是单帧/逐家/边际，且 29% 样本是 turn≤3（听牌率 0.6%）→ 不敏感。补：固定一个防守策略（按 `Σ_j P(听_j)·P(wait_x\|听_j)` 给自家 13 张排序取最安全），分别用 A2b 与 A3 的后验驱动，比放铳率/期望失点。这是唯一能预测 ladder 收益的离线量，作注入前的门槛 |
 | **P3** | **读牌 RM8~RM10：结构/标签**（§11.7） | RM8 chiitoi 专项（7.2% 目标、form precision 仅 0.109，且 `s_belief` 的搭子计数标签对七对取 normal 分解边际 ⇒ 瓶颈里无七对维度；补「#对子数/#牌种数」+ focal 或提高逆频权重）；RM9 枚举式 H2（从 alloc 后验采样手牌→精确算 waits→平均；`rule_predict` 0.7 ms/样本，成本可行）；RM10 未来信息辅助标签（k 巡内是否听牌、终局揭示手牌作轨迹级监督） |
@@ -1319,7 +1325,7 @@ meanP(听) 0.1519 vs 实际 0.145 / 向听 acc 0.5590）；终局 eval（200k）
 **解读**：RM4/RM5 的收益几乎全部落在「集合级 + 非立直层单张顺序」——立直层单张复现率
 31%→66%（翻倍），窗口级仍为负、时序流反事实斜率仍≈0 ⇒ **tile 头把「逐牌列」通路激活了，
 但 `tl_tokens` 时序注意力依旧空转**，与 RM6 未做一致。P1b（RM6 + RM12 tile-indexed 时序流）
-因此被本轮实测确认为下一步最高价值项；2026-10-21 已试 RM12 v1 与 RM14 aux 两版 20k，均 FAIL（b=0.0131/0.0038），见 §13.5~§13.8；下一步转显式 order 特征，而不是继续「读侧到顶」的讨论。
+因此被本轮实测确认为下一步最高价值项；2026-10-21 已试 RM12 v1 / RM14 aux / 显式 order 三版 20k（b=0.0131/0.0038/0.0088）、输入消融 20k（b=0.0040，且 alloc_ce 几乎不变）与修时钟+最小 order 20k（b=0.0111，相对显式 order 小幅回升但仍低于 RM12 v1、且远低于阈值），均 FAIL，见 §13.5~§13.11；**顺序通路结论：alloc/wait 不需要牌河顺序，不再投入**，而不是继续「读侧到顶」的讨论。
 
 **⑤ 阈值重标定（AUDIT_20261020 §6 推迟项，现一并给出）**
 
@@ -1404,6 +1410,9 @@ obs 空间流已带顺序，alloc CE 没压力让新增通路对齐真方向。R
 | **A2c（基线）** | FAIL（b=0.0093） | FAIL（CI −0.113） | **PASS（92.696%）** | **PASS（66.218%）** |
 | a2d 20k（RM12 v1） | FAIL（b=0.0131） | FAIL（CI −0.0857） | FAIL（86.85%） | FAIL（52.15%） |
 | a2d_nt 20k（RM14 aux） | FAIL（b=0.0038） | FAIL（CI −0.0812） | FAIL（82.04%） | FAIL（51.15%） |
+| a2d_order 20k（显式 order） | FAIL（b=0.0088） | FAIL（CI −0.1095） | FAIL（79.59%） | FAIL（43.39%） |
+| a2d_ablate 20k（输入消融） | FAIL（b=0.0040） | FAIL（CI −0.1010） | FAIL（91.86%） | FAIL（43.47%） |
+| **a2d_clock 20k（修时钟+最小 order）** | FAIL（b=0.0111） | FAIL（CI −0.0970） | FAIL（85.02%） | FAIL（44.23%） |
 
 ⚠️ **RM13 线取 92.696 而非 92.7**：A2c 精确值 92.696116，写成 92.7 会让基线自身 FAIL（2026-10-21 实测）；**RM14 +50 低于 A2c 66.2，作为新线无效**。
 
@@ -1440,23 +1449,24 @@ CI95 **[−0.1134,−0.0142]**；`Σ contribution == −0.0656` 与聚合逐位�
 3. **防止过拟合 9 格**：验收要求「至少 2/3 个最差格改善，且聚合 CI 不变差」；
    单格 n 只有 33~235，不能按格调参。
 
-### 13.8 2026-10-21 三轮总结与当前决策（RM12 → RM14 → 零成本收口）
+> **2026-10-21 后续**：修时钟+最小 order（§13.11）已验证「`at_turn` 并列」不是主瓶颈；
+> τ/r sweep 不再作为下一步，见 §13.8 结论。矩阵中的 clock 行使用独立副本
+> `tools/read_model_clock/` 与独立 cache，判据协议与上表一致。
+
+### 13.8 2026-10-21 P1b 各版 20k 总结与当前决策（RM12 → RM14 → 零成本收口 → 显式 order → 输入消融 → 修时钟）
 
 | 轮次 | 做了什么 | 20k/离线结果 | 决策 |
 |---|---|---|---|
 | **RM12 v1（§13.5）** | dataset 侧车 `tl_turn`/`tl_age`/`tl_consumed`/`tl_flags`；TimelineEncoder tile-indexed `[B,3,dT,34]`（±2 散射 + recency）；`--tl-mode tile`；evaluate/export/diagnostics/test 全链路；500 步 smoke + ONNX 校验 | best_val **2.127777**；alloc 0.6602 / hit@1 0.1747 / AUC 0.9671；**RM12 b=0.0131、r²=2.76%**；RM13 86.85%、RM14 52.15%、RM15 −0.0857 | **FAIL；不启动 200k** |
 | **RM14 aux（§13.6）** | dataset `next_tedashi`（跳过摸切）；H1 逐列 `[B,3,34]` + x3 无手切标量头；CE 权重 0.2；86 项门禁 | best_val **2.123568**；alloc 0.6592 / hit@1 0.1792 / AUC 0.9681；**b=0.0038、r²=0.28%**；RM13 82.04%、RM14 51.15%、RM15 −0.0812 | **FAIL；辅助头可绕过 e_col，不启动 200k** |
 | **零成本收口（§13.7）** | `p1b_verdicts`（历史 `verdicts` 不动）；§12.8/§13.2 同步；A2c 立直窗口逐格定位；CPU 复算验证 | A2c 是唯一 PASS RM13/RM14 的 ckpt（92.696%/66.218%）；RM12/RM15 全 FAIL；负 excess 集中 **索7/万6/万3**，正贡献 **万2/索2/筒6** | 判据冻结；下一步显式 order 特征 / 辅助头只喂 e_col / 输入消融 |
+| **显式 order（§13.9）** | `tile_order`：每列 `last_v`/`last_turn`/`last_age`/`turn_mean`/`turn[m−1]−turn[m+1]`；`tile_proj` 129→197；当时 88 项门禁 | best_val **2.127070**；alloc 0.6601 / hit@1 0.1711 / AUC 0.9667；**b=0.0088、r²=1.28%**；RM13 79.59%、RM14 43.39%、RM15 −0.1095 | **FAIL；通道权重长起来但方向没对齐，不启动 200k** |
+| **输入消融（§13.10）** | `--obs-river-order set`：obs 牌河窗口随机重排 + recency/最近手切清零（集合/标记保留）；ckpt config 记录；evaluate/order_metrics 同口径；F6a-c；91 项门禁 | best_val **2.139538**；alloc **0.6605**（无消融 0.6601）/ hit@1 0.1756 / AUC 0.9660；**b=0.0040、r²=0.28%**；RM13 91.86%、RM14 43.47%、RM15 −0.1010 | **FAIL；alloc 几乎不受影响 ⇒ “不需要学”，顺序通路停止投入** |
+| **修时钟+最小 order（§13.11）** | 独立复制 `tools/read_model_clock/`：`tl_pos` 全局事件索引 + `tl_age_ev`；`e_last`/`pos_diff`/`valid`；`tile_proj` 3d+3=195；反事实同步交换 `tl_pos`/`tl_age_ev`；120 步 smoke + 自动 order_metrics | best_val **2.121390**（best@19k，同点 hit@1 0.1941）；末点 20k：alloc **0.6595** / hit@1 0.1946 / AUC 0.9680 / meanP 0.1498；**b=0.0111、r²=1.66%**；RM13 **85.02%**、RM14 **44.23%**、RM15 **−0.0970** | **FAIL；相对 §13.9 四项小幅回升（b 0.0088→0.0111、RM13 79.6→85.0、RM15 −0.1095→−0.0970），但相对 RM12 v1 仍全面更差（0.0131/86.85/52.15/−0.0857），且远低于 b≥0.3，不启动 200k** |
 
-**当前结论**：A2c 仍是注入基线，特征口径冻结；RM12/RM15 未解决；**P1b 的同构 200k 不再跑**。顺序通路下一步优先级：
+**当前结论**：A2c 仍是注入基线，特征口径冻结；**P1b 五版 20k 全部 FAIL，顺序通路归因为「alloc/wait 不需要牌河顺序」而非「通路学不会」，该条线停止投入，回注入主线**。修时钟（§13.11）相对显式 order 四项小幅回升（b 0.0088→0.0111、RM13 79.6→85.0、RM15 −0.1095→−0.0970），但相对 RM12 v1（0.0131/86.85/52.15/−0.0857）仍全面更差，且远低于阈值，故不改变停止决策。剩余可选探索（优先级低，不建议现在做）：强制瓶颈（tile 图只经 `e_col` 进 H1）、辅助头只喂 `e_col`、τ/r sweep。**五版整合结论与重启条件见 §13.12。**
 
-1. **显式 order 特征**：每列补 `turn_last`、`turn[m−1]−turn[m+1]`、last-token embedding，直接把“谁先切”喂给模型；
-2. **辅助头只喂 `e_col`**：或加瓶颈，避免 next-tedashi 头从 `h_j`/obs 绕过时序通路；
-3. **输入消融**：训练时遮掉 obs 牌河顺序，证明 tile 通路本身能学顺序（归因用，不作生产路径）。
-
-τ/r sweep 属于第 2 条的调参分支；按当前逐格证据，先做显式特征更直接。
-
-### 13.7 RM15 显式 order 特征（2026-10-21，20k 探针进行中）
+### 13.9 RM15 显式 order 特征（2026-10-21，20k 探针 FAIL）
 
 **动机**：RM12 v1（b=0.0131）与 RM14 aux（b=0.0038）都证明「软聚合/可绕过的辅助头」
 不会让 tile 通路对齐真顺序。本版直接把顺序做成**可线性读取的通道**：
@@ -1472,14 +1482,203 @@ CI95 **[−0.1134,−0.0142]**；`Σ contribution == −0.0656` 与聚合逐位�
 `2d+1=129` 变 `3d+5=197`；旧 tile ckpt 走 `tile_order=False` 严格加载。
 `train.py` 增 `--tile-order`，ckpt config 记录；evaluate/compare/export/diagnostics
 全部读 `cfg.get('tile_order', False)`。`test_pipeline` 增 I7k/I7l（旧 ckpt 拒绝 +
-新架构形状/前向），**88 项 ALL PASS**。`run_p1b.sh` 增 `TILE_ORDER=1`（默认 0）。
+新架构形状/前向），**当时 88 项 ALL PASS（现 91，见 §13.10）**。`run_p1b.sh` 增 `TILE_ORDER=1`（默认 0）。
 
-**20k 探针**：tmux `read_p1b_order_probe`（2026-10-21 08:11 启动，
+**20k 探针**：tmux `read_p1b_order_probe`（2026-10-21 08:11–09:50，5923s，
 `mortal/read_model_v2s_a2d_order_probe20k/`，参数量 1,368,400，`tile_order=True`，
-`nt_aux=0`——干净归因，不带 RM14 头）。判读口径：**RM12 反事实 b/r²** + RM15 立直窗口；
-若 b 仍 <0.05，说明仅靠输入通道不够，需输入消融/瓶颈（遮 obs 牌河顺序或只喂 tile 图）。
+`nt_aux=0`——干净归因，不带 RM14 头）。
 
-## 14. 读牌坑位总表（编号沿用 MEMORY.md §5.2 的 **42~63**，便于历史回查）
+**结果：best_val 2.127070**（alloc_ce 0.6601 / hit@1 0.1711 / AUC 0.9667 / meanP 0.1491
+vs 实际 0.145）；`order_metrics`（n=40000）：**b=0.0088、r²=1.28%（FAIL）**；RM13 79.59%、
+RM14 43.39%、RM15 −0.1095（CI 仍为负）。7k 中途点 b=0.0067（`logs/read_model/order_a2d_order_7k.json`）
+⇒ 显式通道既没让 b 离开 0.01 水位，还让 RM13/RM14 比 RM12 v1 更低（86.85%→79.59%、
+52.15%→43.39%）。
+
+**为什么仍失败**：`tile_proj` 的显式通道权重确实长起来了（`last_v` 154.3、turn/age/diff 五列
+合计 12.2，base 197 维里旧 129 维 327.0），说明表示被使用——但反事实对调 token 时
+**方向仍不对齐**。当时三版对照（v1 0.0131 / aux 0.0038 / order 0.0088）都指向同一结论；修时钟版见 §13.11：
+obs 空间流里的牌河顺序已经足够解释 alloc CE，新增通路的边际压力趋近于零（坑 62~64）。
+
+**判决**：显式 order 特征 FAIL，**不启动 200k**。下一步只剩「输入消融/瓶颈」这一族——
+训练时遮掉 obs 牌河顺序（只留集合），或把 tile 图强制过瓶颈后再进 H1，否则无法区分
+「模型不需要顺序」与「模型从 obs 免费拿到顺序」。
+
+### 13.10 P1b 输入消融：遮掉 obs 牌河顺序（2026-10-21）
+
+**动机**：此前三版 20k（v1/aux/显式 order）均 FAIL，且 obs 空间流已按槽位携带牌河顺序。
+在「换特征形态」之前必须先做一次归因实验：训练期把 obs 里的**牌河顺序**抹掉（只留
+集合与标记），逼模型只能从 tile-indexed 时序流（`tl_turn`/`tl_age`/`tl_consumed`）
+读顺序。若 b 上升到 0.3 量级 ⇒ 通路能学，只是此前被 obs 免费信息压制；若 b 仍≈ 0
+⇒ 该通路本身学不到顺序（或 alloc CE 不需要），换特征/加步数都无意义。
+
+**obs 布局（v4，`with_sp_tables=False`，已由解码验证）**：自家河 35 起 4ch×6 + 4ch×18
+（倒序）、recency 平面 131；他家河 132/327/522 起 8ch×6 + 8ch×18、recency base+192..194；
+最近手切 836/839/842（各 tile/aka/dora 3 行）；835 是 `tiles_seen`、831..834 是
+`ankan_overview`——**这两块不能动**。
+
+**做法**（`dataset.py`）：新增 `OBS_RIVER_ORDER`/`set_obs_river_order()`/
+`_ablate_river_order()`。`set` 模式下在每个窗口内对「有效 item 块」做随机置换（item 连同
+aka/dora/tedashi/riichi/kan 标记整体搬动），并清零 recency 与最近手切平面；牌河多重集
+逐位不变。置换种子由 `(event, observer)` 决定，训练/评测/重建 cache 完全可复现。
+
+**链路**：`train.py --obs-river-order {keep,set}`（写进 ckpt config `obs_river_order`）；
+`evaluate.py` 与 `diagnostics/_common.build_eval()` 自动读 ckpt config 同口径（否则训练/
+评估分布不一致）；`run_p1b.sh` 接 `OBS_ABLATE=set`。门禁新增 **F6a-c**（只改允许行 /
+牌河多重集逐位不变 / 顺序确实被打乱且 recency、最近手切清零），**91 项**。
+
+**探针（2026-10-21 10:19–12:15，6940s，tmux `read_p1b_ablate_probe`）**：`STEPS=20000 NTW=0 TILE_ORDER=1 OBS_ABLATE=set`（保留最强时序通路，与
+§13.9 只差 obs 消融）；`order_metrics` 用全新 `RM_CACHE_DIR` 重建 cache（含 ablated obs）。
+读法：**主看 RM12 b/r²**；RM13/RM14 在同口径下相对 §13.9 的变化作为辅助信息；若 b 仍
+<0.05，则不再在「顺序通路」上投入，转回注入主线。
+
+**结果：best_val 2.139538**（alloc_ce **0.6605** / hit@1 0.1756 / AUC 0.9660 / meanP 0.1494
+vs 实际 0.145）——与无消融的 §13.9（0.6601 / 0.1711 / 0.9667）几乎一致：**拿掉 obs
+牌河顺序，alloc 预测几乎不受影响**。`order_metrics`（n=40000，全新 cache）：
+**b=0.0040、r²=0.28%（FAIL）**；RM13 **91.86%**（↑79.59%）、RM14 43.47%（≈43.39%）、
+RM15 −0.1010；6k 中途点 b=0.0026、RM13 104%（后期回落）。
+
+**判读**：① b 没有因为「逼模型只能看 token」而上升（仍≈0.004，与 RM14 aux 持平）；
+② 消融后 alloc_ce 仅升 0.0004 ⇒ 牌河顺序对 alloc/wait 任务的**边际信息量接近零**，
+模型不需要它，所以 alloc CE 没有压力把 tile 时序通路推到「正确方向」；③ RM13 的
+91.9% 是聚合符号统计，与配对反事实 b 不是同一量（前者可被粗粒度/噪声利用，后者
+才是因果响应）。⇒ 按预注册判据（b<0.05）**顺序通路到此为止**，不跑 200k、不再换
+特征形态；保留 `--obs-river-order` 作为后续审计工具（默认 keep 逐位不变）。
+
+### 13.11 修时钟 + 最小显式特征（clock probe，2026-10-21，20k FAIL）
+
+**动机（§13.9 的时钟缺陷）**：`tl_turn`/`tl_age` 来自目标家自己的 `at_turn`，只在
+**自家摸牌**时 +1；吃/碰后的切牌不递增，因此相邻 token 可能并列。202609 的 10 个文件实测：
+
+| 统计 | 数值 |
+|---|---:|
+| 相邻 token 对 `Δat_turn=0` | **9.42%**（13,471 / 143,045） |
+| 鸣牌 token 与前一 token 同 `at_turn` | **94.61%**（5,586 / 5,904） |
+| RM12 反事实式 `(m−1, m+1)` 手切对中 `at_turn` 相等 | **6.89%**（288 / 4,182） |
+
+⇒ `at_turn` 是「自家摸牌计数」，不是全局顺序时钟；反事实对调时约 7% 的样本时间侧车完全不变。
+
+**独立副本**：不修改主 `tools/read_model/`，复制到 `tools/read_model_clock/`（dataset/model_v2/
+train/evaluate/order_metrics/rule_baseline/diagnostics）。
+
+- `dataset.py` 新增 `tl_pos`（token 的全局事件索引）与 `tl_age_ev`（快照事件索引 − token
+  事件索引）；旧 `tl_turn/tl_age` 保留以兼容旧 ckpt。
+- `model_v2.py` 的 `tile_order` 改为**最小集**：`tile_proj` 输入 `3d+3=195`（主任务是
+  `3d+5=197`），只加 `e_last`（按 `tl_pos` 选每列最近 token）、
+  `pos_diff = tanh((pos_last[m−1] − pos_last[m+1]) / 8)` 与 `valid`（左右邻是否都存在）；
+  `e_rec` 改用 `tl_age_ev/4`（约 4 事件/巡），不再用 `tl_age`。
+- `s3158_local_extract.py` 副本在反事实中同时交换 `tl_pos`/`tl_age_ev`；cache 独立到
+  `/tmp/read_model_diag_cache_clock`，不覆盖主任务 cache。
+- 120 步 smoke、128 样本 evaluate、256 样本 order_metrics 链路均通过。
+
+**20k 探针**：2026-10-21 09:31–12:28 UTC，10,617s，tmux `read_p1b_clock_probe`；
+产物 `mortal/read_model_v2s_a2d_clock_probe20k/`。best_val **2.121390**（best@19k；同点
+alloc 0.6595 / hit@1 0.1941 / AUC 0.9680）；末点 20k：alloc_ce **0.6595** / hit@1
+**0.1946** / AUC **0.9680** / meanP 0.1498（实际 0.145）。
+`order_metrics`（n=40000，boot=400）：**b=0.01110、r²=1.66%（FAIL）**；
+RM13 **85.02%**、RM14 **44.23%**、RM15 excess **−0.05877**
+（CI95 `[−0.09703,−0.02002]`）⇒ **P1b 四项全 FAIL**。
+
+**与各版对照**（P1b 20k 同协议；A2c 为 200k 注入基线，best_val 不可直接横比）：
+
+| 指标 | RM12 v1（§13.5） | 主 order（§13.9） | **修时钟（本版）** | A2c（§13.4a） |
+|---|---:|---:|---:|---:|
+| RM12 b / r² | 0.0131 / 2.76% | 0.0088 / 1.28% | **0.0111 / 1.66%** | 0.0093 / 1.28% |
+| RM13 非立直 | 86.85% | 79.59% | **85.02%** | 92.696% |
+| RM14 立直 | 52.15% | 43.39% | **44.23%** | 66.218% |
+| RM15 CI 下界（excess） | −0.0857（−0.0450） | −0.1095（−0.0701） | **−0.0970（−0.0588）** | −0.1134（−0.0656） |
+| best_val | 2.127777 | 2.127070 | **2.121390** | 2.0524（200k） |
+
+**判读**：
+
+1. 修时钟相对主 order 四项一致小幅回升，收回了显式 order 造成的一部分退化；但相对
+   **RM12 v1 仍全面更差**（b 0.0131→0.0111、RM13 86.85→85.02、RM14 52.15→44.23、
+   RM15 −0.0857→−0.0970）。标准指标（alloc/hit@1/AUC）改善，不等于顺序因果响应改善。
+2. **at_turn 并列不是主瓶颈**：把时钟换成严格递增的全局事件索引后，b 仍只有 0.0111，
+   距离 0.3 差约 **27 倍**；RM13/RM14 仍远低于 A2c。
+3. **逐格定位**：单张立直层总 excess **+0.102**，其中 **索7** net `+0.131` / floor `−0.131`
+   （贡献约 +0.056），说明局部 pair 特征能修正 A2c 的索7负 excess；但窗口立直层仍被
+   **万3（−0.041）、索7（−0.038）、筒8（−0.033）** 抵消，正贡献为 万2（+0.032）、
+   筒6（+0.021）。即「单张索7 修好了，区域级/RM13 没有」。
+4. 与 §13.10 的输入消融合并：拿掉 obs 牌河顺序后 alloc_ce 仅 0.6601→0.6605，b 仍
+   0.0040 ⇒ **alloc/wait 任务本身几乎不需要牌河顺序**；时钟再准，也没有 loss 压力把它
+   推到正确方向。
+
+**判决**：修时钟+最小显式特征 **FAIL，不启动 200k**；P1b 顺序通路停止投入。后续不再做
+τ/r sweep 或换一版手工特征；若重启，必须先有一个**真正需要顺序信息的新任务/损失**，或
+有注入侧收益证据，否则只是重复同一结论。
+
+**注意**：本版 ckpt 的 `tile_proj=3d+3`，不能用主 `tools/read_model/evaluate.py` 直接加载；
+评测必须用 `tools/read_model_clock/` 下的副本。主路线文件与已有 ckpt 未改动。
+
+**产物**：`mortal/read_model_v2s_a2d_clock_probe20k/`（`best.pth`/`last.pth`、`train_log.jsonl`、
+`order_metrics.json`）；`mortal/logs/read_model/read_model_v2s_a2d_clock_probe20k{,.monitor,.order_metrics}.log`；
+独立 cache `/tmp/read_model_diag_cache_clock`。
+
+### 13.12 P1b 终局结论：五版 20k 与因果归因（2026-10-21 整合）
+
+**一句话结论**：P1b 试了五种注入顺序信息的方式（tile 时序流 / next-tedashi 辅助头 /
+显式 turn 特征 / 输入消融 / 修时钟+最小特征），在 20k 早探针上**全部达不到预注册判据**
+（RM12 b≥0.3 且 r²≥0.2；RM15 CI 下界>0）；输入消融给出根因：**alloc/wait 任务对牌河
+顺序的边际信息量≈0**——不是通路缺失，也不是时钟不准。**顺序通路到此关闭，回注入主线。**
+
+**五版对照**（同 20k 协议；A2c 200k 仅作注入基线参照，best_val 不可直接横比）：
+
+| # | 版本 | 相对基准的关键变量 | best_val | alloc_ce | RM12 b / r² | RM13 | RM14 | RM15 CI 下界 | 判决 |
+|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| 0 | A2c（200k 基线） | — | 2.0524 | — | 0.0093 / 1.28% | 92.70% | 66.22% | −0.1134 | 判据 FAIL，但为注入基线 |
+| 1 | RM12 v1（§13.5） | `tl_mode=tile` + 真实巡目/被鸣（NTW=0） | 2.127777 | 0.6602 | 0.0131 / 2.76% | 86.85% | 52.15% | −0.0857 | FAIL |
+| 2 | RM14 aux（§13.6） | 在 #1 上 + next-tedashi 辅助头（NTW=0.2） | 2.123568 | 0.6592 | 0.0038 / 0.28% | 82.04% | 51.15% | −0.0812 | FAIL |
+| 3 | 显式 order（§13.9） | 去掉 aux + 加 last_v/turn/diff 通道 | 2.127070 | 0.6601 | 0.0088 / 1.28% | 79.59% | 43.39% | −0.1095 | FAIL |
+| 4 | 输入消融（§13.10） | 在 #3 基础上 obs 牌河顺序抹掉 | 2.139538 | 0.6605 | 0.0040 / 0.28% | 91.86% | 43.47% | −0.1010 | FAIL |
+| 5 | 修时钟+最小 order（§13.11） | 独立副本：全局事件时钟 + 最小 `e_last`/`pos_diff` | 2.121390（best@19k） | 0.6595 | 0.0111 / 1.66% | 85.02% | 44.23% | −0.0970 | FAIL |
+
+**五条机制结论**（每条都有独立证据，不可互相替代）：
+
+1. **通路能接上，但不会被 alloc CE 因果使用**：v1 的 H1 `e_col` 权重 75.7→577、合成对调
+   能改 exp_counts；b 仍 0.0131（坑 62）。
+2. **可绕过的辅助头不给目标通路压力**：next-tedashi 头挂在 H1 `x1`（含 h_j/s_b），任务 CE
+   降了，b 反降到 0.0038（坑 63）。
+3. **显式特征被权重使用 ≠ 因果响应**：`tile_proj` 的 last_v 通道权重 154.3、turn 系 12.2，
+   但 b 仅 0.0088，且 RM13 从 86.85% 掉到 79.59%（坑 64）。
+4. **根因是任务不需要顺序**：抹掉 obs 牌河顺序后 alloc_ce 0.6601→0.6605、hit@1 0.1711→
+   0.1756，b 仍 0.0040 ⇒ 模型不需要学；加特征/换时钟/加辅助损失都不会有用（坑 65）。
+5. **时钟不是瓶颈**：`at_turn` 并列只占 9.42%，换成全局事件索引后 b=0.0111，距 0.3 差
+   约 **27 倍**；标准指标改善（best_val 2.1214、hit@1 ≈0.194）与顺序因果响应正交。
+
+**判据层面的结论**（防止下一轮再用错指标）：
+
+- **唯一因果判据是 RM12 配对反事实 b/r²**。RM13/RM14 是聚合符号统计，会给出误导信号
+  （aux 6k 曾 130.9%；order 版 RM13 下降但权重在涨；消融版 91.9% 也不能证明因果）。
+- **RM15 五版全部为负**（CI 下界 −0.081 ~ −0.110），立直层区域级顺序效应始终没被捕捉。
+  它与 RM12 方向一致，可作第二道门，但不能替代 b/r²。
+- **best_val/alloc_ce/hit@1 与顺序因果正交**：修时钟版标准指标最好，b 仍只有 0.0111。
+  报主判据必须同时报不退线项（RM13/RM14），否则会把「标准指标改善」误读成「顺序成功」。
+
+**决策（2026-10-21 冻结）**：
+
+1. **P1b 顺序通路停止投入**：不启动任何 200k，不再追 τ/r sweep 或手工 turn 特征。
+2. **A2c（best@153k，官方验收全通过）继续作为注入基线**，特征口径与 ckpt 冻结。
+3. 保留三个开关作为**审计/复现工具**（默认全关，旧 ckpt 逐位不变）：`--tile-order`、
+   `--obs-river-order`、`tools/read_model_clock/`（修时钟副本 + 独立 cache）。
+4. **重启条件**（满足任一才回到顺序通路）：① 出现真正需要顺序的新任务/损失（如决策级
+   防守门禁 RM11、或注入侧按顺序的配对实验）；② 注入侧证据表明防守收益依赖顺序。
+   重启时第一步必须是**输入消融量边际 CE**，而不是再造特征。
+
+**复现入口**：
+
+```bash
+# 各版 20k（run_p1b.sh；按 §13.5~§13.11 的变量逐项改）
+STEPS=20000 NTW=0 TILE_ORDER=1 OBS_ABLATE=set TAG=... OUT=... LOG=... \
+  bash tools/read_model/run_p1b.sh
+# 判读（必须用全新 cache；消融 ckpt 会按 config 自动同口径）
+RM_CACHE_DIR=/tmp/<new> python tools/read_model/order_metrics.py \
+  --state <ckpt> --n 40000 --rebuild
+```
+
+产物清单见 §15（`a2d_probe20k` / `a2d_nt_probe20k` / `a2d_order_probe20k` /
+`a2d_ablate_probe20k` / `a2d_clock_probe20k`）。
+
+## 14. 读牌坑位总表（编号沿用 MEMORY.md §5.2 的 **42~65**，便于历史回查）
 
 | # | 主题 | 坑与处置 |
 |---|---|---|
@@ -1505,6 +1704,8 @@ CI95 **[−0.1134,−0.0142]**；`Σ contribution == −0.0656` 与聚合逐位�
 | 61 | 工具 | **判据/报告拼装段与指标计算段解耦 ⇒ 重构后必崩，且只崩最后三行**（2026-10-21 实证）：`order_metrics.py` 在 10-20 加 REC_OB 双地板时把 verdicts 改成引用 `s_nr_asis`/`s_ri_asis`，二者从未定义 ⇒ A2c 首跑 Phase 1 重建 cache 150s、三项指标全部打印正常，拼 verdicts 时 `NameError`，报告不落盘（`ORDER_RC=1`）。教训：① 新增/改动**判据或报告字段**后，必须端到端跑通一次并校验 `[out]` 行 + JSON 存在，不能只看中间指标打印；② 修完要用基线 ckpt 做**数值回归**（本次 A2b 逐位复现 67%/82.0%/+31.1%、b=0.0144，证明修复不带口径变化）；③ **阈值必须随地板定义一起复核**——RM14 的 +30% 在真顺序盲地板下已被 A2b 基线（+31.1%）满足，判据失去区分力（§13.4a-⑤）。 |
 | 62 | 建模 | **冗余通路不会被 alloc CE 主动使用**（2026-10-21 RM12 实证）：obs 空间流本就带按槽牌河顺序，新增 tile-indexed 时序流后，H1 的 e_col 权重确实长大（75.7→577）、合成对调能改 exp_counts（列 m 0.02~0.11 张），但 20k 探针反事实 b 仅 **0.0131**（A2b 0.0144 / A2c 0.0093），RM12 FAIL。**「通路接上」≠「因果使用」**；判据必须用反事实 b/r²，单张复现率/RM13 会掩盖。下一步需 RM14 辅助任务（next-tedashi）或显式顺序特征（turn-difference / last-token），而不是继续加步数。 |
 | 63 | 建模 | **辅助头若可绕过目标通路，就不会给目标通路压力**（2026-10-21 RM14 实证）：next-tedashi 头挂在 H1 `x1`（含 h_j/e_col/s_b），20k 训练 CE 从 2.05 降到 1.7~2.8，整体 val **2.1236** 略优于 RM12 v1 2.1278，但反事实 b 反而从 **0.0131 降到 0.0038**（r² 0.28%），RM13 82.0%、RM14 51.2%、RM15 −0.0812。头可以从 h_j/obs 满足任务，`e_col` 仍不被因果使用。教训：辅助任务必须限制在目标通路（只喂 e_col / 加瓶颈），或改用显式顺序特征；判据仍是 b/r²。 |
+| 64 | 建模 | **显式特征被权重使用 ≠ 反事实响应**（2026-10-21 RM15 实证）：tile 图加 `last_v`/`last_turn`/`last_age`/`turn_mean`/`turn[m−1]−turn[m+1]` 后，`tile_proj` 新通道权重确实长起来（last_v 154.3、turn 系 5 列 12.2，base 129 维 327.0），但 20k 反事实 b **0.0088**（r² 1.28%）、RM13 79.6%、RM14 43.4%、RM15 −0.1095，均比 RM12 v1 差。三版证据合并：只要 obs 空间流已免费提供牌河顺序，新增的显式/隐式通路都不会被 alloc CE 推到对齐方向 ⇒ **归因前必须先做输入消融（遮 obs 牌河顺序），否则无法区分「学不会」与「不需要学」**。另外：加显式特征会拉低单张复现率（RM13 86.9%→79.6%），报主判据时必须同报不退线项，否则会误判为改进。 |
+| 65 | 建模 | **输入消融先于通路工程：拿掉信息后 CE 不变 ⇒ 任务不需要它，任何架构都不会被推到用它**（2026-10-21 输入消融实证）：把 obs 牌河顺序完全抹掉（集合/标记保留）后重训 20k，alloc_ce 仅 0.6601→**0.6605**（hit@1 0.1711→0.1756、AUC 0.9667→0.9660），而反事实 b 仍 **0.0040**（r² 0.28%）。这否证了「obs 免费信息压制了时序通路」这一假设：真正原因是 **alloc/wait 任务对牌河顺序的边际信息量≈ 0**，CE 没有任何压力去用它。教训：① 新通路连续多版 FAIL 时，先做输入消融量出该信息的边际 CE 价值，再决定要不要造特征/加辅助损失；② 聚合符号指标（RM13 91.9%）与配对反事实 b 不是同一量，后者才是因果响应，不可互相代替；③ 消融开关要进 ckpt config 并让评测自动同口径，否则训练/评估分布错位。 |
 
 ## 15. 读牌工具与产物台账（迁自 MEMORY.md §6.1/§6.2/§6.3）
 
@@ -1512,7 +1713,8 @@ CI95 **[−0.1134,−0.0142]**；`Σ contribution == −0.0656` 与聚合逐位�
 
 | 工具 | 用途 |
 |---|---|
-| `tools/read_model/` | 读牌模型 v1/v2/v2s/v2x/A2b/**A2c(200k 结项)**/**A2d 20k 探针** + **86 项回归（RM12 时 82）**（含 H/I 层 P0/P1 门禁 + RM12 F5/I7 门禁）+ ONNX 导出 + A3 规则法基线（rule_baseline/a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3）+ `order_metrics.py`（RM16 顺序 级常规诊断）+ `run_v2.sh`/`run_v2s.sh`/`run_a2c.sh`/`run_p1b.sh` 训练脚本 |
+| `tools/read_model/` | 读牌模型 v1/v2/v2s/v2x/A2b/**A2c(200k 结项)**/**A2d 20k 探针** + **91 项回归（RM12 时 82、RM14 后 86、输入消融后 91）**（含 H/I 层 P0/P1 门禁 + RM12 F5/I7 门禁 + F6 输入消融门禁）+ ONNX 导出 + A3 规则法基线（rule_baseline/a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3）+ `order_metrics.py`（RM16 顺序 级常规诊断）+ `run_v2.sh`/`run_v2s.sh`/`run_a2c.sh`/`run_p1b.sh` 训练脚本 |
+| `tools/read_model_clock/` | **修时钟+最小 order 独立副本（2026-10-21）**：dataset `tl_pos`/`tl_age_ev`；model `e_last`/`pos_diff`/`valid`、`tile_proj=3d+3`；train/evaluate/order_metrics/diagnostics 全链路副本 + `run_p1b_clock.sh`/`monitor_probe.sh`；独立 cache `/tmp/read_model_diag_cache_clock`，不改主路线 |
 | `tools/read_model/run_a2c.sh` | A2c 正式训练（v2s + RM5 tile 头 + RM4 CE34 + RM7 200k 步/NW16；tmux `read_a2c`） |
 | `tools/read_model/run_p1b.sh` | P1b 训练（v2s + tile 头 + `--tl-mode tile` + `--next-tedashi-weight`；`NTW` 默认 0.2，`NTW=0` 复现 RM12 v1；RM6min+RM12+RM14 aux；默认 200k，STEPS/OUT/LOG 可覆盖 20k 早探针） |
 | `tools/read_model/bayes_bound.py` | 读牌 Bayes 上界（§9）：counts（精确超几何）/hard（立直⇒听牌）/behave（MH + 静态逆规划似然）三档 + `--leak-test`/`--calibrate` |
@@ -1525,6 +1727,7 @@ CI95 **[−0.1134,−0.0142]**；`Σ contribution == −0.0656` 与聚合逐位�
 | 文件 | 主要改动 |
 |---|---|
 | 读牌模型 | `tools/read_model/`：dataset/model/model_v2（**P1: `wait_head` flat/tile 双参数化，tile=RM5 逐牌列 H2 头 + tenpai 标量头**；**RM12: `tl_mode=pooled/tile` + tile-indexed 时序图；RM14: `next_tedashi` 辅助头**）/model_v2s/structure/constraints/train（**P1: L_wait 改 34 类条件 CE；`--wait-head` CLI**；**RM12: `--tl-mode`；RM14: `--next-tedashi-weight`**）/evaluate/export_onnx/compare_bootstrap 等；**RM12/RM14: dataset 侧车 `tl_turn/tl_age/tl_consumed/tl_flags` + `next_tedashi` 标签**；A3 规则法基线（rule_baseline.py + a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3.sh）；P0：model.factorized_wait_probs/val_score v2/order_metrics.py；dataset 增补 meld_counts/dora_indicators 公开字段 |
+| 时钟探针副本 | `tools/read_model_clock/`：dataset 增 `tl_pos`/`tl_age_ev`；model_v2 `tile_order` 最小集（`e_last`/`pos_diff`/`valid`、`tile_proj=3d+3`、`e_rec` 用事件年龄）；train/evaluate/order_metrics/diagnostics 副本；`s3158` 反事实同步交换时钟侧车；`run_p1b_clock.sh` + `monitor_probe.sh`；独立 cache |
 
 ### 15.3 产物
 
@@ -1537,6 +1740,9 @@ CI95 **[−0.1134,−0.0142]**；`Σ contribution == −0.0656` 与聚合逐位�
 | `mortal/read_model_v2s_a2c/` | **A2c 200k 结项 + 官方验收全通过（§13.4a）**：`best.pth`(153k，val 2.052388)、`last.pth`(200k)、`train_log.jsonl`、**`eval_report.json`/`strat_report.json`/`order_metrics.json`（202609/20000 固定集，seed 20261016）** | ckpt + 三报告 |
 | `mortal/read_model_v2s_a2d_probe20k/` | **P1b 20k 早探针（RM6min+RM12，2026-10-21）**：`best.pth`/`last.pth`(20k，val 2.127777)、`train_log.jsonl`、`order_metrics.json`（n=40000，**b=0.0131/r²=2.76%，RM12 FAIL**）；5k/9k 轨迹 0.0066/0.0046 在 `mortal/logs/read_model/order_a2d_{5k,9k}.json` | ckpt + 训练/顺序报告 |
 | `mortal/read_model_v2s_a2d_nt_probe20k/` | **RM14 next-tedashi 20k 探针（2026-10-21）**：`best.pth`/`last.pth`(20k，val 2.123568)、`train_log.jsonl`（含 `next_tedashi` CE）、`order_metrics.json`（n=40000，**b=0.0038/r²=0.28%，RM12 FAIL**）；6k 中途点 b=0.0052 在 `mortal/logs/read_model/order_a2d_nt_6k.json` | ckpt + 训练/顺序报告 |
+| `mortal/read_model_v2s_a2d_order_probe20k/` | **RM15 显式 order 20k 探针（2026-10-21）**：`best.pth`/`last.pth`(20k，val 2.127070)、`train_log.jsonl`、`order_metrics.json`（n=40000，**b=0.0088/r²=1.28%，RM12 FAIL**）；7k 中途点 b=0.0067 在 `mortal/logs/read_model/order_a2d_order_7k.json` | ckpt + 训练/顺序报告 |
+| `mortal/read_model_v2s_a2d_ablate_probe20k/` | **P1b 输入消融 20k 探针（2026-10-21，`obs_river_order=set`）**：`best.pth`/`last.pth`(20k，val 2.139538，alloc 0.6605)、`train_log.jsonl`、`order_metrics.json`（n=40000，**b=0.0040/r²=0.28%，RM12 FAIL**；RM13 91.86%、RM14 43.47%）；6k 中途点 b=0.0026 在 `mortal/logs/read_model/order_a2d_ablate_6k.json` | ckpt + 训练/顺序报告 |
+| `mortal/read_model_v2s_a2d_clock_probe20k/` | **修时钟+最小 order 20k 探针（2026-10-21）**：`best.pth`/`last.pth`(20k，val 2.121390（best@19k），alloc 0.6595)、`train_log.jsonl`、`order_metrics.json`（n=40000，**b=0.0111/r²=1.66%，RM12 FAIL**；RM13 85.02%、RM14 44.23%、RM15 CI 下界 −0.0970）；监控/评测日志 `read_model_v2s_a2d_clock_probe20k{,.monitor,.order_metrics}.log` | ckpt + 训练/顺序报告 |
 | `mortal/logs/read_model/a2c_accept_20261021/` | A2c 验收全套证据：`chain.log`/`status`（含四任务 RC）+ `evaluate`/`strat_metrics`/`compare_a3`/`order_metrics` 日志 + `order_metrics_a2b_regress.log`（修复后 A2b 数值回归，逐位复现 67%/82.0%/+31.1%、b=0.0144） | 日志 |
 | `tools/read_model/diagnostics/results/p1_impl_20261019/` | P1 smoke 500 步记录 + A2c 训练启动参数，§13.4 的原始出处 | ~5 KB |
 | `tools/read_model/diagnostics/results/p0_rerun_20261019/` | P0 复跑全档：4 份日志 + 旧口径报告存档（`*.prerm1.json`）+ 旧 bayes tables，§13.3 表格数字的原始出处 | ~400 KB |

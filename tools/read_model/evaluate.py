@@ -148,6 +148,8 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     state = torch.load(args.state, map_location='cpu', weights_only=False)
     cfg = state.get('config', {})
+    # P1b 输入消融：训练时遮了 obs 牌河顺序 ⇒ 评测必须同口径（否则分布不一致）
+    D.set_obs_river_order(cfg.get('obs_river_order', 'keep'))
     model_kind = cfg.get('model', 'v1')
     net = M.build_model(conv_channels=cfg.get('conv_channels', 96),
                         num_blocks=cfg.get('num_blocks', 12),

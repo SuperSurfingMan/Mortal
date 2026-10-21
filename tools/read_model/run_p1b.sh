@@ -12,6 +12,9 @@
 #   旧 tile ckpt 无该头（config 无 next_tedashi_weight）仍严格加载。
 #   RM15/显式 order：TILE_ORDER=1 时给 tile 图加 last-turn/age/embedding、
 #   邻域 mean-turn 与 turn[m−1]−turn[m+1] 局部先后差（config 记录 tile_order）。
+#   P1b 输入消融：OBS_ABLATE=set 时训练期抹掉 obs 牌河顺序（集合/标记保留，
+#   recency 与最近手切平面清零），逼模型只能从 tile 时序流读顺序；
+#   config 记录 obs_river_order，evaluate/order_metrics 自动同口径。
 #
 # 用法：
 #   20k 早探针（先判断 b/r² 是否离开 0.01 区间，别直接烧 200k）：
@@ -42,6 +45,7 @@ PY=/mnt/data8/miniconda3/envs/mortal/bin/python
 STEPS=${STEPS:-200000}
 NTW=${NTW:-0.2}
 TILE_ORDER=${TILE_ORDER:-0}
+OBS_ABLATE=${OBS_ABLATE:-keep}
 TAG=${TAG:-a2d}
 OUT=${OUT:-$REPO/mortal/read_model_v2s_${TAG}}
 LOGDIR=$REPO/mortal/logs
@@ -62,6 +66,7 @@ export MALLOC_ARENA_MAX=2
 STAGE_SCHEDULE=${STAGE_SCHEDULE:-1:0.27,2:0.30,3:0.43}
 ORDER_ARG=""
 if [ "$TILE_ORDER" = "1" ]; then ORDER_ARG="--tile-order"; fi
+if [ "$OBS_ABLATE" != "keep" ]; then ABLATE_ARG="--obs-river-order $OBS_ABLATE"; else ABLATE_ARG=""; fi
 
 cd "$REPO/mortal"
 echo "=== read_model P1b (RM6min+RM12) start $(date -u +%FT%TZ) | steps=$STEPS workers=$NW ==="
@@ -71,6 +76,7 @@ echo "=== read_model P1b (RM6min+RM12) start $(date -u +%FT%TZ) | steps=$STEPS w
   --tl-mode tile \
   --next-tedashi-weight "$NTW" \
   ${ORDER_ARG} \
+  ${ABLATE_ARG} \
   --train-globs \
     "$REPO/dataset/mjai/houou4/202[2-5]??/**/*.json.gz" \
     "$REPO/dataset/mjai/houou4_names/20260[1-8]/**/*.json.gz" \

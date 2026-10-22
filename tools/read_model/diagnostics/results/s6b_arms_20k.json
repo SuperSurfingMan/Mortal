@@ -1,0 +1,50 @@
+{
+ "meta": {
+  "n": 20000,
+  "seed": 20261016,
+  "protocol": "A2c 实时前向（tl=0）；固定评估集同 P0"
+ },
+ "a2c_safest_deal": 0.0033,
+ "arms": {
+  "A0": {
+   "n": 20000,
+   "extra_channels": 0,
+   "turn_min": 0,
+   "deal_top1": 0.012,
+   "agree_a2c": 0.27925,
+   "fixable": 0.01085,
+   "n_fixable": 217,
+   "ckpt": "mortal/checkpoints/inject_s6b/A0.pth"
+  },
+  "A1": {
+   "n": 20000,
+   "extra_channels": 2,
+   "turn_min": 0,
+   "deal_top1": 0.01215,
+   "agree_a2c": 0.2806,
+   "fixable": 0.0109,
+   "n_fixable": 218,
+   "ckpt": "mortal/checkpoints/inject_s6b/A1.pth"
+  },
+  "A2": {
+   "n": 20000,
+   "extra_channels": 2,
+   "turn_min": 0,
+   "deal_top1": 0.0118,
+   "agree_a2c": 0.28155,
+   "fixable": 0.0107,
+   "n_fixable": 214,
+   "ckpt": "mortal/checkpoints/inject_s6b/A2.pth"
+  },
+  "A3": {
+   "n": 20000,
+   "extra_channels": 2,
+   "turn_min": 8,
+   "deal_top1": 0.01225,
+   "agree_a2c": 0.2827,
+   "fixable": 0.0111,
+   "n_fixable": 222,
+   "ckpt": "mortal/checkpoints/inject_s6b/A3.pth"
+  }
+ }
+}

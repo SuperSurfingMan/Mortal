@@ -43,6 +43,16 @@ def main():
     mortal.load_state_dict(state['mortal'])
     dqn.load_state_dict(state['current_dqn'])
 
+    guard = None
+    guard_lambda = float(os.environ.get('MORTAL_GUARD_LAMBDA', '0') or 0)
+    if guard_lambda > 0:
+        from defense_guard import DefenseGuard
+        guard = DefenseGuard(
+            lambda_=guard_lambda,
+            ckpt=os.environ.get('MORTAL_GUARD_CKPT') or None,
+            device=device,
+        )
+
     engine = MortalEngine(
         mortal,
         dqn,
@@ -52,6 +62,7 @@ def main():
         enable_amp = False,
         enable_quick_eval = not review_mode,
         enable_rule_based_agari_guard = True,
+        defense_guard = guard,
         name = 'mortal',
     )
     bot = Bot(engine, player_id)

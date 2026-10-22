@@ -17,6 +17,7 @@ class MortalEngine:
         enable_amp = False,
         enable_quick_eval = True,
         enable_rule_based_agari_guard = False,
+        defense_guard = None,
         name = 'NoName',
         boltzmann_epsilon = 0,
         boltzmann_temp = 1,
@@ -34,6 +35,7 @@ class MortalEngine:
         self.enable_amp = enable_amp
         self.enable_quick_eval = enable_quick_eval
         self.enable_rule_based_agari_guard = enable_rule_based_agari_guard
+        self.defense_guard = defense_guard
         self.name = name
 
         self.boltzmann_epsilon = boltzmann_epsilon
@@ -68,6 +70,10 @@ class MortalEngine:
             case 2 | 3 | 4:
                 phi = self.brain(obs)
                 q_out = self.dqn(phi, masks)
+
+        if self.defense_guard is not None:
+            # 推理期防守守卫：Q'(t) = Q(t) - λ·risk(t)（只改打牌动作 0..33）
+            q_out = self.defense_guard(q_out, obs, masks)
 
         if self.boltzmann_epsilon > 0:
             is_greedy = torch.full((batch_size,), 1-self.boltzmann_epsilon, device=self.device).bernoulli().to(torch.bool)

@@ -85,7 +85,7 @@ def warn_mismatched_sections(exec_cfg):
                       f'ladder 只认 [1v3.ladder] 或 {flag}（如需对齐请显式设置）', flush=True)
 
 
-def load_engine(ckpt, name, exec_cfg):
+def load_engine(ckpt, name, exec_cfg, guard_lambda=0.0):
     st = torch.load(ckpt, map_location=torch.device('cpu'), weights_only=True)
     cfg = st['config']
     version = cfg['control'].get('version', 1)
@@ -93,6 +93,13 @@ def load_engine(ckpt, name, exec_cfg):
     dqn = DQN(version=version).eval()
     mortal.load_state_dict(st['mortal'])
     dqn.load_state_dict(st['current_dqn'])
+    guard = None
+    if guard_lambda > 0:
+        # 推理期防守守卫只挂在挑战者侧（双侧同挂会把对照混掉）；
+        # A2c 随 engine 同设备，obs 零拷贝（obs_aux_torch）。
+        from defense_guard import DefenseGuard
+        guard = DefenseGuard(lambda_=guard_lambda,
+                             device=torch.device(exec_cfg['device']))
     return MortalEngine(
         mortal, dqn,
         is_oracle = False,
@@ -100,6 +107,7 @@ def load_engine(ckpt, name, exec_cfg):
         device = torch.device(exec_cfg['device']),
         enable_amp = exec_cfg['enable_amp'],
         enable_rule_based_agari_guard = exec_cfg['enable_rule_based_agari_guard'],
+        defense_guard = guard,
         name = name,
     )
 
@@ -117,6 +125,8 @@ def main():
     ap.add_argument('--agari-guard', dest='agari_guard', action='store_true', default=None)
     ap.add_argument('--no-agari-guard', dest='agari_guard', action='store_false')
     ap.add_argument('--tag', default='', help='可选标记，写进 run_meta.json 便于检索')
+    ap.add_argument('--guard-lambda', type=float, default=0.0,
+                    help='推理期防守守卫 λ（只作用于挑战者侧；0=关闭）')
     args = ap.parse_args()
 
     exec_cfg = resolve_exec_cfg(args)
@@ -129,7 +139,7 @@ def main():
 
     chal_meta = ckpt_meta(args.challenger)
     cham_meta = ckpt_meta(args.champion)
-    chal = load_engine(args.challenger, 'challenger', exec_cfg)
+    chal = load_engine(args.challenger, 'challenger', exec_cfg, args.guard_lambda)
     cham = load_engine(args.champion, 'champion', exec_cfg)
 
     env = OneVsThree(disable_progress_bar = False, log_dir = log_dir)
@@ -146,6 +156,7 @@ def main():
     print(f'sets = {args.n_sets} (hanchans = {args.n_sets * 4}), seed_start = {args.seed_start}')
     print(f'log_dir = {log_dir}')
     print(f'exec_cfg = {json.dumps(exec_cfg, sort_keys=True)}')
+    print(f'guard_lambda = {args.guard_lambda} (challenger only)')
     print(f'challenger_ckpt = {json.dumps(chal_meta, sort_keys=True)}')
     print(f'champion_ckpt = {json.dumps(cham_meta, sort_keys=True)}')
     print(f'raw rankings = {rankings}')
@@ -159,6 +170,7 @@ def main():
         'challenger': chal_meta,
         'champion': cham_meta,
         'exec_cfg': exec_cfg,
+        'guard_lambda': args.guard_lambda,
         'seed_start': args.seed_start,
         'seed_key': key,
         'sets': args.n_sets,

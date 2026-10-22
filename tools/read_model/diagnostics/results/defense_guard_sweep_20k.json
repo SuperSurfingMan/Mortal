@@ -1,0 +1,83 @@
+{
+ "meta": {
+  "n": 20000,
+  "seed": 20261016,
+  "base_ckpt": "/mnt/data8/mortal/Mortal/mortal/checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth",
+  "base_steps": 756000,
+  "a2c_ckpt": "/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2c/best.pth",
+  "protocol": "A2c tl=0 实时危险度；单步诊断"
+ },
+ "base": {
+  "deal_top1": 0.0132,
+  "a2c_safest_deal": 0.0033,
+  "q_gap_mean": 1.6347594696276821,
+  "q_gap_median": 0.9349749088287354,
+  "risk_mean": 0.01983933541612834,
+  "risk_max": 0.8146403431892395
+ },
+ "sweep": [
+  {
+   "lambda": 0.0,
+   "change": 0.0,
+   "change_n": 0,
+   "deal_top1": 0.0132,
+   "risk_top1": 0.015220951879242259,
+   "a2c_agree": 0.27135,
+   "safer_ratio": 0.0
+  },
+  {
+   "lambda": 2.0,
+   "change": 0.02745,
+   "change_n": 549,
+   "deal_top1": 0.0116,
+   "risk_top1": 0.013121860340096365,
+   "a2c_agree": 0.2812,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 5.0,
+   "change": 0.0544,
+   "change_n": 1088,
+   "deal_top1": 0.0106,
+   "risk_top1": 0.011561166312989254,
+   "a2c_agree": 0.2939,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 10.0,
+   "change": 0.0798,
+   "change_n": 1596,
+   "deal_top1": 0.0094,
+   "risk_top1": 0.010346930781668203,
+   "a2c_agree": 0.30975,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 20.0,
+   "change": 0.11485,
+   "change_n": 2297,
+   "deal_top1": 0.0081,
+   "risk_top1": 0.008938158769052693,
+   "a2c_agree": 0.33685,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 50.0,
+   "change": 0.1734,
+   "change_n": 3468,
+   "deal_top1": 0.0062,
+   "risk_top1": 0.006899536802275811,
+   "a2c_agree": 0.3865,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 100.0,
+   "change": 0.2254,
+   "change_n": 4508,
+   "deal_top1": 0.0056,
+   "risk_top1": 0.005506168838138529,
+   "a2c_agree": 0.43285,
+   "safer_ratio": 1.0
+  }
+ ]
+}

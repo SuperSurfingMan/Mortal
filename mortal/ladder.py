@@ -89,7 +89,8 @@ def load_engine(ckpt, name, exec_cfg):
     st = torch.load(ckpt, map_location=torch.device('cpu'), weights_only=True)
     cfg = st['config']
     version = cfg['control'].get('version', 1)
-    mortal = Brain(version=version, **cfg['resnet']).eval()
+    extra_channels = int(cfg['control'].get('extra_channels', 0))
+    mortal = Brain(version=version, extra_channels=extra_channels, **cfg['resnet']).eval()
     dqn = DQN(version=version).eval()
     mortal.load_state_dict(st['mortal'])
     dqn.load_state_dict(st['current_dqn'])

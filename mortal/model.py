@@ -106,12 +106,20 @@ class ResNet(nn.Module):
         return self.net(x)
 
 class Brain(nn.Module):
-    def __init__(self, *, conv_channels, num_blocks, is_oracle=False, version=1):
+    def __init__(self, *, conv_channels, num_blocks, is_oracle=False, version=1,
+                 extra_channels=0):
+        """``extra_channels``：S6b 注入的额外 obs 行数（默认 0，行为与历史逐位一致）。
+
+        读牌危险度注入在 obs 尾部追加 2 行（34 维 union 危险度 + P(听)），
+        故 ``in_channels = obs_shape(version)[0] + extra_channels``。新通道在
+        暖启时零初始化（``tools/expand_ckpt_v6.py``），未注入时逐位等价。
+        """
         super().__init__()
         self.is_oracle = is_oracle
         self.version = version
+        self.extra_channels = int(extra_channels)
 
-        in_channels = obs_shape(version)[0]
+        in_channels = obs_shape(version)[0] + self.extra_channels
         if is_oracle:
             in_channels += oracle_obs_shape(version)[0]
 

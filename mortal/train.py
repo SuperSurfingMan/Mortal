@@ -141,6 +141,8 @@ def train():
     from config import config
 
     version = config['control']['version']
+    # S6b 注入：额外 obs 行数（0=关闭，与历史逐位一致）
+    extra_channels = int(config['control'].get('extra_channels', 0))
 
     online = config['control']['online']
     batch_size = config['control']['batch_size']
@@ -208,12 +210,16 @@ def train():
     augmented_first = config['dataset']['augmented_first']
     # 与部署侧 quick-eval 的 kan-select 口径对照用（默认 True = GameplayLoader 默认，等价历史行为）
     always_include_kan_select = bool(config['dataset'].get('always_include_kan_select', True))
+    # S6b 注入：读牌危险度特征目录（None=关闭）
+    danger_dir = config['dataset'].get('danger_dir')
+    danger_placebo = bool(config['dataset'].get('danger_placebo', False))
+    danger_turn_min = int(config['dataset'].get('danger_turn_min', 0))
     eps = config['optim']['eps']
     betas = config['optim']['betas']
     weight_decay = config['optim']['weight_decay']
     max_grad_norm = config['optim']['max_grad_norm']
 
-    mortal = Brain(version=version, **config['resnet']).to(device)
+    mortal = Brain(version=version, extra_channels=extra_channels, **config['resnet']).to(device)
     dqn = DQN(version=version).to(device)
     aux_net = AuxNet((4,)).to(device)
     if objective == 'iql':
@@ -227,7 +233,8 @@ def train():
             m.compile()
 
     logging.info(f'version: {version}')
-    logging.info(f'obs shape: {obs_shape(version)}')
+    logging.info(f'obs shape: {obs_shape(version)} + extra {extra_channels}'
+                 f'  danger_dir={danger_dir}')
     logging.info(
         f'env: gamma={gamma} reward_mode={reward_mode} reward_scale={reward_scale} '
         f'credit_mode={credit_mode} objective={objective} '
@@ -347,7 +354,8 @@ def train():
     ema_mortal = ema_dqn = None
     v_ema = None
     if objective == 'iql':
-        ema_mortal = Brain(version=version, **config['resnet']).to(device)
+        ema_mortal = Brain(version=version, extra_channels=extra_channels,
+                           **config['resnet']).to(device)
         ema_dqn = DQN(version=version).to(device)
         if iql_v_target_decay > 0:
             v_ema = VHead().to(device)
@@ -515,6 +523,9 @@ def train():
             gamma = gamma,
             objective = objective,
             always_include_kan_select = always_include_kan_select,
+            danger_dir = danger_dir,
+            danger_placebo = danger_placebo,
+            danger_turn_min = danger_turn_min,
         )
         logging.info(f'reward: {file_data.reward_desc()}')
         data_loader = iter(DataLoader(

@@ -1,0 +1,231 @@
+{
+  "state": "mortal/read_model_v2s_rm9_riichi/best.pth",
+  "step": 3000,
+  "n_samples": 20000,
+  "protocol": {
+    "seed": 20261016,
+    "samples": 20000,
+    "val_globs": [
+      "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202609/**/*.json.gz"
+    ],
+    "n_files": 15892,
+    "note": "固定评估集 = train.build_fixed_eval_set(files, samples, seed)"
+  },
+  "alloc": {
+    "ce_overall": 0.651861310005188,
+    "top1_acc": 0.7179078431372549,
+    "top1_conf": 0.7220444679260254,
+    "ece_top1": 0.0046542001162820324,
+    "ce_baseline_uniform": 0.7271052598953247,
+    "info_gain_nats": 0.07524394989013672,
+    "by_turn": {
+      "turn<=3": {
+        "n": 5771,
+        "ce": 0.7426376342773438,
+        "ce_baseline": 0.7711387872695923,
+        "top1": 0.679361989120722
+      },
+      "turn4-7": {
+        "n": 6330,
+        "ce": 0.6634635329246521,
+        "ce_baseline": 0.7459996938705444,
+        "top1": 0.712156552984543
+      },
+      "turn8-11": {
+        "n": 4708,
+        "ce": 0.6028894186019897,
+        "ce_baseline": 0.7064573764801025,
+        "top1": 0.7414975760907592
+      },
+      "turn12-15": {
+        "n": 2444,
+        "ce": 0.55023592710495,
+        "ce_baseline": 0.654708206653595,
+        "top1": 0.7597999101440903
+      },
+      "turn16+": {
+        "n": 747,
+        "ce": 0.49338752031326294,
+        "ce_baseline": 0.5938099026679993,
+        "top1": 0.7786964852875554
+      }
+    },
+    "constraints": {
+      "col_viol_before": 0.38666411489248276,
+      "col_viol_after": 0.0,
+      "row_err_before": 4.256120089557953,
+      "row_err_after": 5.329070518200751e-15,
+      "supply_ok": true
+    }
+  },
+  "wait": {
+    "wait_read": "factorized（RM1）：p34 = sigmoid(l34) = P(未听)，p_x = P(听)·softmax34(l_x)；*_softmax_legacy 为旧读法参照",
+    "ce_active": 3.3314194679260254,
+    "neg_logp_t_active": 0.5709683895111084,
+    "cond_ce_active": 2.760451316833496,
+    "hit1": 0.1959867745981074,
+    "hit3": 0.4508037852012313,
+    "tenpai_auc": 0.9699324367316742,
+    "tenpai_auc_softmax_legacy": 0.9688967216363874,
+    "mean_p_tenpai": 0.1486702263355255,
+    "p_tenpai_calib_ratio": 1.0157382488250732,
+    "p_tenpai_calib_ratio_softmax_legacy": 6.073481274653264,
+    "structural_tenpai_frac": 0.14636666666666667,
+    "furiten_frac": 0.0012525620587565474,
+    "riichi_target_frac": 0.06911666666666667,
+    "riichi_hit1": 0.16903785869303112,
+    "riichi_hit3": 0.4077646491439595,
+    "riichi_ce": 2.863839864730835,
+    "riichi_neg_logp_t": 0.0014486046275123954,
+    "riichi_cond_ce": 2.8623909950256348,
+    "strata": {
+      "all": {
+        "n_targets": 60000,
+        "tenpai_rate": 0.14636666666666667,
+        "tenpai_auc": 0.9699324367316742,
+        "mean_p_tenpai": 0.1486702263355255,
+        "n_active": 8771,
+        "ce_active": 3.3314194679260254,
+        "neg_logp_t": 0.5709683895111084,
+        "cond_ce": 2.760451316833496,
+        "hit1": 0.1959867745981074,
+        "hit3": 0.4508037852012313
+      },
+      "turn>=8": {
+        "n_targets": 23697,
+        "tenpai_rate": 0.30033337553276784,
+        "tenpai_auc": 0.9442928661101802,
+        "mean_p_tenpai": 0.307953417301178,
+        "n_active": 7109,
+        "ce_active": 3.1708474159240723,
+        "neg_logp_t": 0.4817126393318176,
+        "cond_ce": 2.6891353130340576,
+        "hit1": 0.211984807989872,
+        "hit3": 0.4722183148122099
+      },
+      "riichi": {
+        "n_targets": 4147,
+        "n_active": 4147,
+        "ce_active": 2.863839864730835,
+        "neg_logp_t": 0.0014486046275123954,
+        "cond_ce": 2.8623909950256348,
+        "hit1": 0.16903785869303112,
+        "hit3": 0.4077646491439595
+      },
+      "called=1": {
+        "n_targets": 10331,
+        "tenpai_rate": 0.3488529667989546,
+        "tenpai_auc": 0.8394647268523965,
+        "mean_p_tenpai": 0.35374659299850464,
+        "n_active": 3593,
+        "ce_active": 3.304852247238159,
+        "neg_logp_t": 0.7092509865760803,
+        "cond_ce": 2.5956013202667236,
+        "hit1": 0.2368494294461453,
+        "hit3": 0.5148900640133593
+      },
+      "clean_turn>=8": {
+        "n_targets": 13779,
+        "tenpai_rate": 0.06190579867914943,
+        "tenpai_auc": 0.8027145321216143,
+        "mean_p_tenpai": 0.06628807634115219,
+        "n_active": 853,
+        "ce_active": 4.997578144073486,
+        "neg_logp_t": 2.104114294052124,
+        "cond_ce": 2.893463611602783,
+        "hit1": 0.1817116060961313,
+        "hit3": 0.4196951934349355
+      }
+    }
+  },
+  "struct": {
+    "shanten_label_hist": [
+      8797,
+      15193,
+      16950,
+      12471,
+      5316,
+      1155,
+      118,
+      0
+    ],
+    "shanten_majority_class": 2,
+    "shanten_majority_baseline": 0.2825,
+    "shanten_head_acc": 0.5372166666666667,
+    "shanten_self_acc": 0.53205,
+    "shanten_consistency": 0.95755,
+    "shanten_head_by_bucket": {
+      "0": {
+        "n": 8797,
+        "recall": 0.7333181766511311,
+        "n_pred": 7358,
+        "precision": 0.8767328078282142
+      },
+      "1": {
+        "n": 15193,
+        "recall": 0.534456657671296,
+        "n_pred": 13821,
+        "precision": 0.5875117574705159
+      },
+      "2": {
+        "n": 16950,
+        "recall": 0.5951622418879056,
+        "n_pred": 21250,
+        "precision": 0.4747294117647059
+      },
+      "3": {
+        "n": 12471,
+        "recall": 0.437655360436212,
+        "n_pred": 12069,
+        "precision": 0.45223299362001823
+      },
+      "4": {
+        "n": 5316,
+        "recall": 0.3980436418359669,
+        "n_pred": 5502,
+        "precision": 0.3845874227553617
+      },
+      "5": {
+        "n": 1155,
+        "recall": 0.0,
+        "n_pred": 0,
+        "precision": null
+      },
+      "6": {
+        "n": 118,
+        "recall": 0.0,
+        "n_pred": 0,
+        "precision": null
+      },
+      "7": {
+        "n": 0,
+        "recall": null,
+        "n_pred": 0,
+        "precision": null
+      }
+    },
+    "shanten_soft_mae": 0.567627754445374,
+    "form_acc": 0.91255,
+    "form_by_class": {
+      "normal": {
+        "n": 54858,
+        "recall": 0.9861095920376244,
+        "n_pred": 58566,
+        "precision": 0.9236758528839258
+      },
+      "chiitoi": {
+        "n": 5058,
+        "recall": 0.12495057334914986,
+        "n_pred": 1393,
+        "precision": 0.45369705671213206
+      },
+      "kokushi": {
+        "n": 84,
+        "recall": 0.2976190476190476,
+        "n_pred": 41,
+        "precision": 0.6097560975609756
+      }
+    },
+    "struct_counts_l1": 0.86053466796875
+  }
+}

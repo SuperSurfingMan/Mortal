@@ -61,6 +61,11 @@ mortal/iql_probe*/
 mortal/read_model_*/*.onnx
 mortal/read_model_*/*.jsonl
 
+# ---- 本项目追加（2026-10-22）：S6b 注入的读牌危险度预计算缓存 ----
+# 按训练文件存 <stem>.npz（g0..g3, (n_steps,2,34) fp16），是运行期产物；
+# 生成脚本 tools/read_model/precompute_danger.py 入库。
+mortal/danger_cache*/
+
 # ---- 本项目追加（2026-10-17）：S6a 隔离工作区（s6a_isolated/）----
 # code/*.py（含 v5 分支的 model/engine/env_check）、config.s6a*.toml、run_s6a*.sh、
 # patches/v5_obs_features.patch、tools/ 是本轮唯一的源码载体（共享树已还原为 v4）→ 入库；

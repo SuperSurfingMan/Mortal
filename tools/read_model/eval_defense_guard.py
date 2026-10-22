@@ -82,10 +82,13 @@ def main():
     ap.add_argument('--chunk', type=int, default=1000)
     ap.add_argument('--seed', type=int, default=20261016)
     ap.add_argument('--lambdas', default='0,2,5,10,20')
+    ap.add_argument('--risk-floors', default='0',
+                    help='τ 列表；τ>0 = 只惩罚 risk>τ 的牌（gating）')
     ap.add_argument('--ckpt', default=str(BASE_CKPT))
     ap.add_argument('--out', default=str(C.OUT_DIR / 'defense_guard_sweep_20k.json'))
     args = ap.parse_args()
     lambdas = [float(x) for x in args.lambdas.split(',') if x.strip()]
+    floors = [float(x) for x in args.risk_floors.split(',') if x.strip()]
 
     files = sorted(glob.glob(
         str(REPO / 'dataset/mjai/houou4/202609/**/*.json.gz'), recursive=True))
@@ -143,31 +146,34 @@ def main():
 
     rows = []
     for lam in lambdas:
-        qq = Q - lam * RISK
-        qq[~OWN] = -1e9
-        d = qq.argmax(-1)
-        changed = d != q0
-        ch = ar[changed]
-        deal = DANGER[ar, d]
-        row = {
-            'lambda': lam,
-            'change': float(changed.mean()),
-            'change_n': int(changed.sum()),
-            'deal_top1': float(deal.mean()),
-            'risk_top1': float(RISK[ar, d].mean()),
-            'a2c_agree': float((d == a2c_safest).mean()),
-            'safer_ratio': float((RISK[ch, d[changed]] < RISK[ch, q0[changed]]).mean())
-                           if changed.any() else 0.0,
-        }
-        rows.append(row)
-        print(f"[lam {lam:>5.1f}] change {row['change']:.4f}  "
-              f"deal {row['deal_top1']:.4f}  risk {row['risk_top1']:.4f}  "
-              f"a2c {row['a2c_agree']:.4f}  safer {row['safer_ratio']:.3f}", flush=True)
+        for tau in floors:
+            qq = Q - lam * np.maximum(RISK - tau, 0.0)
+            qq[~OWN] = -1e9
+            d = qq.argmax(-1)
+            changed = d != q0
+            ch = ar[changed]
+            deal = DANGER[ar, d]
+            row = {
+                'lambda': lam,
+                'risk_floor': tau,
+                'change': float(changed.mean()),
+                'change_n': int(changed.sum()),
+                'deal_top1': float(deal.mean()),
+                'risk_top1': float(RISK[ar, d].mean()),
+                'a2c_agree': float((d == a2c_safest).mean()),
+                'safer_ratio': float((RISK[ch, d[changed]] < RISK[ch, q0[changed]]).mean())
+                               if changed.any() else 0.0,
+            }
+            rows.append(row)
+            print(f"[lam {lam:>5.1f} tau {tau:.3f}] change {row['change']:.4f}  "
+                  f"deal {row['deal_top1']:.4f}  risk {row['risk_top1']:.4f}  "
+                  f"a2c {row['a2c_agree']:.4f}  safer {row['safer_ratio']:.3f}", flush=True)
 
     report = {
         'meta': {
             'n': n, 'seed': args.seed, 'base_ckpt': args.ckpt, 'base_steps': steps,
             'a2c_ckpt': str(A2C_CKPT), 'protocol': 'A2c tl=0 实时危险度；单步诊断',
+            'formula': 'Q - lambda * max(risk - tau, 0)',
         },
         'base': {
             'deal_top1': float(d0.mean()),

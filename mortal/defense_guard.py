@@ -13,8 +13,13 @@
 里），再乘「牌值调制」等于把同一项算两遍。λ 固定 = 一次放铳的期望顺位损失
 （pt），由 ladder 扫描确定。
 
-    Q'(t) = Q(t) - λ · risk(t),  t ∈ [0, 34) 打牌动作
+    Q'(t) = Q(t) - λ · max(risk(t) - τ, 0),  t ∈ [0, 34) 打牌动作
     risk(t) = Σ_j P(听_j) · P(待牌_j = t)          （A2c 后验，三家 union）
+
+``τ``（risk_floor）是 2026-10-22 λ=20 双向 ladder 后的修正：线性版把低 risk
+区（0.001~0.01，噪声大、无区分度）也按比例扣分，导致「houjuu −21%、agari
+−7.4%、avg_pt −0.40（CI[−1.69,+0.89]）」——用和了换放铳，净不划算。τ 把
+惩罚集中到真正危险的牌上（只拦 risk 明显高于背景的牌），保留进攻。
 
 只改打牌动作（34..45 的立直/鸣牌/荣和/pass 不动）：守卫要回答的是「打哪张
 更安全」，不是「要不要和了」。
@@ -149,11 +154,13 @@ class DefenseGuard:
     torch tensor（device 上），masks ``(B,46)`` bool。返回新的 Q，不改原 tensor。
     """
 
-    def __init__(self, lambda_: float = 1.0, ckpt: Optional[str] = None,
+    def __init__(self, lambda_: float = 1.0, risk_floor: float = 0.0,
+                 ckpt: Optional[str] = None,
                  device: Optional[torch.device] = None):
         M2, cons = _load_read_stack()
         self._cons = cons
         self.lam = float(lambda_)
+        self.risk_floor = float(risk_floor)
         self.device = torch.device(device or 'cpu')
 
         path = Path(ckpt) if ckpt else DEFAULT_CKPT
@@ -201,5 +208,6 @@ class DefenseGuard:
 
         self.n_calls += 1
         q = q_out.clone()
-        q[:, :N_DISCARD] -= (self.lam * risk.to(q.device)).to(q.dtype) * live
+        pen = (risk - self.risk_floor).clamp_min(0.0) * self.lam
+        q[:, :N_DISCARD] -= pen.to(q.device).to(q.dtype) * live
         return q

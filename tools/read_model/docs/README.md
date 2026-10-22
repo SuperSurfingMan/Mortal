@@ -1918,6 +1918,13 @@ block bootstrap 报 CI），**不得**用 20k 的旧值做选型/注入判据（
 3. `tools/expand_ckpt_v6.py`：首层手术 + 内置数值自检；产物
    `mortal/checkpoints/inject_s6b/B756k_v6_init.pth`（steps=756k，extra=2）。
 
+> ⚠ **2026-10-22 回退（S6b 判 FAIL 后）**：`mortal/{model,dataloader,train,holdout_metrics,ladder}.py`
+> 已整体恢复为注入前版本 `3a793a1`，`extra_channels` / `danger_dir` / `danger_placebo` /
+> `danger_turn_min` 接口全部移除；主模型不再依赖读牌侧任何特征。因此本节与 §13.14.8 里的
+> `tools/expand_ckpt_v6.py` 与 `tools/read_model/eval_s6b_arms.py` **依赖已回退的接口，仅供查阅，
+> 不再可直接运行**；`inject_p0.py` / `precompute_danger.py` 不依赖主模型改动，仍可单独使用。
+> 验证：5 个文件与 `3a793a1` 逐位一致；B/756k holdout top1=0.8223 / dqn_loss=0.3881（与注入前相同）。
+
 **实验臂**：A0 基线 / A1 真特征 / **A2 安慰剂（同 batch 内 shuffle）** / A3 限域（仅 turn≥8）。
 **判据**：RM11 决策级（A1 vs A2 配对差，CI 不跨 0）+ holdout top1≥0.816 + ladder
 260000/270000 双向 ≥5000 sets、CI 下界>0。

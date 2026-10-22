@@ -1,6 +1,4 @@
-import os
 import random
-from pathlib import Path
 import torch
 import numpy as np
 from torch.utils.data import IterableDataset
@@ -29,9 +27,6 @@ class FileDatasetsIter(IterableDataset):
         gamma = 1.0,
         objective = 'cql_mc',
         always_include_kan_select = True,
-        danger_dir = None,
-        danger_placebo = False,
-        danger_turn_min = 0,
     ):
         """reward_mode（2026-10-12 加，对应 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
 
@@ -85,14 +80,6 @@ class FileDatasetsIter(IterableDataset):
         self.gamma = float(gamma)
         self.objective = objective
         self.always_include_kan_select = always_include_kan_select
-        # S6b 注入：读牌危险度特征目录（每个 *.json.gz → <stem>.npz，g0..g3）。
-        # None = 关闭（默认，obs 仍为 1012 行，行为与历史逐位一致）。
-        self.danger_dir = danger_dir
-        # A2 安慰剂：在 load_files 的文件批内做跨文件全局置换（保留特征边际分布，
-        # 彻底破坏「特征↔局面」对应关系）。A3 限域：turn < danger_turn_min 的
-        # 特征置零（0 = 不限域）。
-        self.danger_placebo = bool(danger_placebo)
-        self.danger_turn_min = int(danger_turn_min)
         self.iterator = None
 
     def reward_desc(self):
@@ -149,82 +136,12 @@ class FileDatasetsIter(IterableDataset):
         yield from self.buffer
         self.buffer.clear()
 
-    def _danger_for(self, path):
-        """取某文件的读牌特征（g0..g3，(n_steps,2,34) fp16）；缺失返回 None。"""
-        if self.danger_dir is None:
-            return None
-        name = os.path.basename(path)
-        stem = name[:-len('.json.gz')] if name.endswith('.json.gz') else os.path.splitext(name)[0]
-        p = Path(self.danger_dir) / f'{stem}.npz'
-        if not p.exists():
-            return None
-        z = np.load(p, allow_pickle=False)
-        n = int(z['n_games'])
-        return [z[f'g{i}'] for i in range(n)]
-
-    def _placebo_dangers(self, dangers):
-        """A2 安慰剂：把所有 feat 沿样本维全局置换后再切回原尺寸。
-
-        dangers: list[list[np.ndarray(n,2,34)] | None]，与 file_list 对齐。
-        保留每个文件的特征形状与边际分布，但样本↔局面对应关系被完全打乱。
-        """
-        parts, sizes = [], []
-        for d in dangers:
-            if d is None:
-                continue
-            for g in d:
-                parts.append(g)
-                sizes.append(g.shape[0])
-        if not parts:
-            return dangers
-        allf = np.concatenate(parts, 0)
-        allf = allf[np.random.permutation(allf.shape[0])]
-        out, pos, k = [], 0, 0
-        for d in dangers:
-            if d is None:
-                out.append(None)
-                continue
-            gs = []
-            for _ in d:
-                n = sizes[k]
-                gs.append(allf[pos:pos + n])
-                pos += n
-                k += 1
-            out.append(gs)
-        return out
-
     def populate_buffer(self, file_list):
         data = self.loader.load_gz_log_files(file_list)
-        dangers = ([self._danger_for(f) for f in file_list]
-                   if self.danger_dir else [None] * len(file_list))
-        if self.danger_placebo:
-            dangers = self._placebo_dangers(dangers)
-        for fi, file in enumerate(data):
-            danger = dangers[fi]
-            for gi, game in enumerate(file):
+        for file in data:
+            for game in file:
                 # per move
                 obs = game.take_obs()
-                if self.danger_dir is not None:
-                    # PyO3 的 Vec<u8> 映射为 bytes（不是 list[int]），必须 frombuffer。
-                    raw_at = game.take_at_turns()
-                    at_turns = (np.frombuffer(raw_at, dtype=np.uint8).astype(np.int64)
-                                if isinstance(raw_at, (bytes, bytearray))
-                                else np.asarray(raw_at, dtype=np.int64))
-                    # S6b：obs 1012 → 1014。特征缺失/长度不符时零填充（≡无信息），
-                    # 保证形状与模型 in_channels 恒定。
-                    obs = np.stack(obs)
-                    n_steps = obs.shape[0]
-                    feat = None
-                    if danger is not None and gi < len(danger) \
-                            and danger[gi].shape[0] == n_steps:
-                        feat = danger[gi]
-                    if feat is None:
-                        feat = np.zeros((n_steps, 2, 34), np.float16)
-                    elif self.danger_turn_min > 0:
-                        # A3 限域：早期巡目置零（只保留 turn >= min 的危险度）
-                        feat = feat.copy()
-                        feat[at_turns < self.danger_turn_min] = 0
-                    obs = np.concatenate([obs, feat.astype(np.float32)], axis=1)
                 if self.oracle:
                     invisible_obs = game.take_invisible_obs()
                 actions = game.take_actions()

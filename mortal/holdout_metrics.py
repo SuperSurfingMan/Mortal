@@ -57,10 +57,6 @@ def collect(month, n_batch, bs, seed, workers):
         gamma = gamma,
         objective = objective,
         always_include_kan_select = bool(config['dataset'].get('always_include_kan_select', True)),
-        # S6b：holdout 必须与训练同口径（danger_dir 需已包含 holdout 月份的预计算）
-        danger_dir = config['dataset'].get('danger_dir'),
-        danger_placebo = bool(config['dataset'].get('danger_placebo', False)),
-        danger_turn_min = int(config['dataset'].get('danger_turn_min', 0)),
     )
     it = iter(DataLoader(ds, batch_size = bs, drop_last = True,
                          num_workers = workers, pin_memory = True,
@@ -101,9 +97,7 @@ def evaluate(name, ckpt, batches, bs):
     st = torch.load(ckpt, map_location = torch.device('cpu'), weights_only = True)
     cfg = st['config']
     version = cfg['control'].get('version', 1)
-    extra_channels = int(cfg['control'].get('extra_channels', 0))
-    mortal = Brain(version = version, extra_channels = extra_channels,
-                   **cfg['resnet']).to(DEVICE).eval()
+    mortal = Brain(version = version, **cfg['resnet']).to(DEVICE).eval()
     dqn = DQN(version = version).to(DEVICE).eval()
     mortal.load_state_dict(st['mortal'])
     dqn.load_state_dict(st['current_dqn'])

@@ -6,7 +6,9 @@
 #   tmux new -d -s s6c "bash /mnt/data8/mortal/Mortal/mortal/run_s6c.sh all"
 #   STAGE=probe bash run_s6c.sh            # 只跑某段：preflight|regression|surgery|transparent|
 #                                          #          smoke|probe|formal|ladder|all
-#   可选环境变量：CUDA_VISIBLE_DEVICES（默认 2=RTX 8000）、LADDER_BLOCKS（默认 5）、LADDER_SETS（默认 500）
+#   可选环境变量：CUDA_VISIBLE_DEVICES（默认 2=RTX 8000）、LADDER_BLOCKS（默认 5）、LADDER_SETS（默认 500）、
+#   TOP1_TOL（探针 top1 容差，默认 0.005）
+#   注意：脚本运行期间**不要改本文件**（bash 增量读取，会报莫名其妙的 syntax error）。
 set -uo pipefail
 
 ROOT=/mnt/data8/mortal/Mortal
@@ -113,23 +115,25 @@ probe () {
     holdout "$CFG" "$INIT" probe
     "$PY" -u ../tools/s6c_channel_usage.py "$INIT" --ref "$INIT_REF" 2>&1 | tee "$LOGS/probe_usage.log"
     local usage_ok=${PIPESTATUS[0]}
-
-    local top1
-    top1=$(grep -ao 'top1=[0-9.]*' "$LOGS/holdout_probe.log" | tail -1 | cut -d= -f2)
-    say "探针 holdout top1=$top1（同 digest 基线见 holdout_base.log）"
     [ "$usage_ok" = 0 ] || { echo '探针门禁未过：首层新通道权重变化量低于原始 p10（等同没注入）'; exit 1; }
-    "$PY" - "$top1" "$LOGS/holdout_base.log" <<'PYEOF'
+
+    # top1 容差（默认 0.5pp）：12,288 样本上 top1 的 SE≈0.35pp，严格持平会被噪声卡住；
+    # 强度判定不在这里，只看 ladder。注意解析必须用「空白+top1=」避开 agari_top1=。
+    "$PY" - "$LOGS/holdout_probe.log" "$LOGS/holdout_base.log" "${TOP1_TOL:-0.005}" <<'PYEOF'
 import re, sys
 
-top1 = float(sys.argv[1])
-txt = open(sys.argv[2], encoding='utf-8', errors='ignore').read()
-m = re.findall(r'top1=([0-9.]+)', txt)
-base = float(m[-1])
-print(f'probe top1={top1:.4f}  baseline top1={base:.4f}')
-if top1 < base:
-    print('GATE FAIL: holdout top1 低于同 digest 基线（不退才算过）')
+def top1(path):
+    txt = open(path, encoding='utf-8', errors='ignore').read()
+    m = re.findall(r'(?:^|\s)top1=([0-9.]+)', txt, flags=re.M)
+    return float(m[-1])
+
+probe, base, tol = top1(sys.argv[1]), top1(sys.argv[2]), float(sys.argv[3])
+print(f'probe top1={probe:.4f}  baseline top1={base:.4f}  delta={probe - base:+.4f}  容差={tol:.4f}')
+print('（12,288 样本 top1 的 SE≈0.35pp，容差取 ~1.4σ；强度判定只认 ladder）')
+if probe < base - tol:
+    print('GATE FAIL: holdout top1 明显退步')
     sys.exit(1)
-print('GATE OK: holdout top1 不退')
+print('GATE OK: holdout top1 无显著退步')
 PYEOF
     [ $? = 0 ] || { echo '探针门禁未过：停在这里，不要进 200k'; exit 1; }
     say '探针门禁通过 → 可执行 STAGE=formal 继续 200k'

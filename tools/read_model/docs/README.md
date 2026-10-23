@@ -2028,7 +2028,7 @@ P(放铳) 估计器，A2c 的 AUC 0.9698 已经够用。
   **只改打牌 0..33**（立直/鸣牌/荣和/pass 不动）。
 - `mortal/engine.py`：`MortalEngine(..., defense_guard=...)`，在 `q_out` 之后、
   `argmax`/`sample_top_p` 之前调用。
-- `mortal/mortal.py`：`MORTAL_GUARD_LAMBDA`（0=关）/ `MORTAL_GUARD_CKPT`。
+- `mortal/mortal.py`：`MORTAL_GUARD_LAMBDA`（**默认 10**，设 0 关闭）/ `MORTAL_GUARD_CKPT`。
 - `mortal/ladder.py`：`--guard-lambda`，**只挂挑战者侧**（双侧同挂会把对照混掉），
   `run_meta.json` 记录 `guard_lambda`。
 - **数值契约**（实测 4000 样本）：torch 与 numpy 的 own/unseen/river/riichi/

@@ -44,7 +44,9 @@ def main():
     dqn.load_state_dict(state['current_dqn'])
 
     guard = None
-    guard_lambda = float(os.environ.get('MORTAL_GUARD_LAMBDA', '0') or 0)
+    # 推理期防守守卫：λ=10 是双向 64000 半庄的 ladder 峰值（+0.778 pt/半庄，
+    # 95%CI[+0.13,+1.42]，两方向同号；README §13.15.5）。设 0 可关闭。
+    guard_lambda = float(os.environ.get('MORTAL_GUARD_LAMBDA', '10') or 0)
     if guard_lambda > 0:
         from defense_guard import DefenseGuard
         guard = DefenseGuard(

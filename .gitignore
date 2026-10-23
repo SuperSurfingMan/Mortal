@@ -84,3 +84,7 @@ s6a_isolated/logs/
 
 # IQL AWR 温度 β 扫描探针（10-17 新增）：顶层 config.iql_beta_*.toml /
 # run_iql_beta_probe.sh 入库；臂产物目录 mortal/iql_beta_*/ 已被上面 mortal/iql_b*/ 覆盖。
+MortalSimulator_*.zip
+MortalSimulator_*.zip.sha256
+
+/simulator

@@ -153,16 +153,19 @@ ladder () {
     mkdir -p "$OUT"
     GPUS=(2 0 1 3)
     local i seed
+    # 新种子块：260000/270000 已被守卫剂量曲线（每向 8000 sets）消费；80k/90k 已被更早轮次消费
+    local SEED_A=${SEED_A:-280000}
+    local SEED_B=${SEED_B:-300000}
     say '-- A 方向（S6c 当挑战者）--'
     for ((i = 0; i < LADDER_BLOCKS; i++)); do
-        seed=$((260000 + i * 500))
+        seed=$((SEED_A + i * 500))
         ladder_job "${GPUS[$((i % ${#GPUS[@]}))]}" "A_${seed}" "$INIT" "$BASE" "$seed" "$OUT"
         [ $(( (i + 1) % ${#GPUS[@]} )) = 0 ] && wait
     done
     wait
     say '-- B 方向（B/756k 当挑战者，独立种子块）--'
     for ((i = 0; i < LADDER_BLOCKS; i++)); do
-        seed=$((270000 + i * 500))
+        seed=$((SEED_B + i * 500))
         ladder_job "${GPUS[$((i % ${#GPUS[@]}))]}" "B_${seed}" "$BASE" "$INIT" "$seed" "$OUT"
         [ $(( (i + 1) % ${#GPUS[@]} )) = 0 ] && wait
     done

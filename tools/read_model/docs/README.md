@@ -2141,7 +2141,7 @@ P(放铳) 估计器，A2c 的 AUC 0.9698 已经够用。
 **门禁**：
 1. 回归 `tools/test_s6c_features.py`（Rust 单测 19 例 / obs 口径 / attach 不改原生行）；
 2. 20k 探针：holdout top1 ≥ **同 digest 基线**（`holdout_base.log`），且 `tools/s6c_channel_usage.py --ref B756k_s6c_init.pth` 显示两新通道的**权重变化量 ΔL2 分位 ≥ 原始 p10**；
-3. 200k 后双向 5000 sets ladder（`--guard-lambda 0` 隔离模型变量，种子块 260000/270000），判据沿用 block bootstrap CI 下界 >0。
+3. 200k 后双向 5000 sets ladder（`--guard-lambda 0` 隔离模型变量，**新种子块 280000/300000**——260000/270000 已被守卫剂量曲线消费），判据沿用 block bootstrap CI 下界 >0。
 
 **冒烟（2k 步，2026-10-23 12:41）**：2.72~2.79 batch/s（同日 s6b A0 无特征 2.59 → 特征开销不构成回退）；`behavior: agari 0.2277 houjuu 0.1404 fuuro 0.3095 riichi 0.1915`；新通道 ΔL2 **15.5% / 12.2% 分位**（≥ p10，已被学习）；`ladder 1 set + --guard-lambda 10` 跑通。
 

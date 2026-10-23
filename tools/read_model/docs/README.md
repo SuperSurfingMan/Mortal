@@ -2134,7 +2134,7 @@ P(放铳) 估计器，A2c 的 AUC 0.9698 已经够用。
 **实现**：
 - `mortal/s6c_features.py`：libriichi 同款 tomohxx 向听表（`libriichi/src/algo/data/shanten_{suhai,jihai}.bin.gz`，`MORTAL_S6C_DATA_DIR` 可覆盖）的 numpy 向量化，与 Rust 单测 **19/19** 逐位一致；按文件批量计算，**0.148 ms/样本**。
 - 接入：`model.Brain(extra_channels)`、dataloader/engine 在 Python 侧拼行（守卫仍吃原始 1012 行）、train/holdout/ladder/player/one_vs_three/mortal.py 按各自 ckpt 的 `[control].extra_features` 解析（旧 ckpt → 0）。
-- 手术：`tools/expand_ckpt_v6.py`（零初始化，自检 `phi max|diff|=0`）；配置 `config.s6c{,_probe,_smoke,_base}.toml`；编排 `mortal/run_s6c.sh`。
+- 手术：`tools/expand_ckpt_v6.py`（零初始化，自检 `phi max|diff|=0`）；配置 `config.s6c{,_probe,_smoke,_base}.toml`；编排 `mortal/run_s6c.sh`（分阶段）+ `mortal/run_s6c_chain.sh`（等 formal 结束 → 自动 ladder → 写 `logs/s6c/SUMMARY.md`）。
 
 **已验（2026-10-23 12:22）**：`config.s6c_base.toml` vs `config.s6c.toml` 在同一 holdout（202609 / seed 20261009 / 24×512）上 digest 与 `top1=0.8127 / dqn_loss=0.3496 / agari 149/149 / lse +0.522` 逐位相同。
 
@@ -2150,7 +2150,7 @@ P(放铳) 估计器，A2c 的 AUC 0.9698 已经够用。
 
 **工具修正**：`grep -ao 'top1='` 会误中 `agari_top1=`，已改为「空白+top1=」正则；`run_s6c.sh` 运行期间不要编辑（bash 增量读取会报 syntax error）。
 
-**状态**：回归 / 手术 / 透明性 / 2k 冒烟 / ladder+guard 接口 / 20k 探针全部跑通；**200k 正式轮已启动**（`STAGE=formal`，tmux `s6c_formal`，当前 2.8 batch/s ≈ 18 h），结束后自动 holdout + 通道使用度，再跑双向 ladder（280000/300000）。
+**状态**：回归 / 手术 / 透明性 / 2k 冒烟 / ladder+guard 接口 / 20k 探针全部跑通；**200k 正式轮在跑**（`STAGE=formal`，tmux `s6c_formal`，15:48 从 776k 起，2.8→4.2 batch/s，按 4.2 估 ~11.7 h），跑完自动 holdout + 通道使用度；`run_s6c_chain.sh`（tmux `s6c_chain`）已挂着，会自动跑双向 ladder（280000/300000）并写 `logs/s6c/SUMMARY.md`；`s6c_watch` 每 10 min 向 `logs/s6c/monitor.log` 落快照。
 
 ## 14. 读牌坑位总表（编号沿用 MEMORY.md §5.2 的 **42~65**，便于历史回查）
 

@@ -21,6 +21,7 @@ import torch
 
 from model import Brain, DQN
 from engine import MortalEngine
+import s6c_features
 from libriichi.arena import OneVsThree
 from libriichi.stat import Stat
 
@@ -89,7 +90,9 @@ def load_engine(ckpt, name, exec_cfg, guard_lambda=0.0, guard_risk_floor=0.0):
     st = torch.load(ckpt, map_location=torch.device('cpu'), weights_only=True)
     cfg = st['config']
     version = cfg['control'].get('version', 1)
-    mortal = Brain(version=version, **cfg['resnet']).eval()
+    # S6c：额外通道数与特征族从 ckpt 自己的 [control] 推（旧 ckpt = 0/''）
+    extra_features, extra_channels = s6c_features.resolve(cfg['control'])
+    mortal = Brain(version=version, extra_channels=extra_channels, **cfg['resnet']).eval()
     dqn = DQN(version=version).eval()
     mortal.load_state_dict(st['mortal'])
     dqn.load_state_dict(st['current_dqn'])
@@ -108,6 +111,7 @@ def load_engine(ckpt, name, exec_cfg, guard_lambda=0.0, guard_risk_floor=0.0):
         enable_amp = exec_cfg['enable_amp'],
         enable_rule_based_agari_guard = exec_cfg['enable_rule_based_agari_guard'],
         defense_guard = guard,
+        extra_features = extra_features,
         name = name,
     )
 

@@ -7,6 +7,7 @@ import torch
 from datetime import datetime, timezone
 from model import Brain, DQN, GRP
 from engine import MortalEngine
+import s6c_features
 from common import filtered_trimmed_lines
 from libriichi.mjai import Bot
 from libriichi.dataset import Grp
@@ -38,7 +39,10 @@ def main():
         time = datetime.fromtimestamp(state['timestamp'], tz=timezone.utc).strftime('%y%m%d%H')
         tag = f'mortal{version}-b{num_blocks}c{conv_channels}-t{time}'
 
-    mortal = Brain(version=version, num_blocks=num_blocks, conv_channels=conv_channels).eval()
+    # S6c：特征族与额外通道数从 ckpt 自己的 [control] 推（旧 ckpt = 0/''）
+    extra_features, extra_channels = s6c_features.resolve(cfg['control'])
+    mortal = Brain(version=version, num_blocks=num_blocks, conv_channels=conv_channels,
+                   extra_channels=extra_channels).eval()
     dqn = DQN(version=version).eval()
     mortal.load_state_dict(state['mortal'])
     dqn.load_state_dict(state['current_dqn'])
@@ -65,6 +69,7 @@ def main():
         enable_quick_eval = not review_mode,
         enable_rule_based_agari_guard = True,
         defense_guard = guard,
+        extra_features = extra_features,
         name = 'mortal',
     )
     bot = Bot(engine, player_id)

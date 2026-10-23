@@ -7,6 +7,7 @@ import logging
 from os import path
 from model import Brain, DQN
 from engine import MortalEngine
+import s6c_features
 from libriichi.stat import Stat
 from libriichi.arena import OneVsThree
 from config import config
@@ -21,7 +22,10 @@ class TestPlayer:
         version = cfg['control'].get('version', 1)
         conv_channels = cfg['resnet']['conv_channels']
         num_blocks = cfg['resnet']['num_blocks']
-        stable_mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks).eval()
+        # 卫冕者自己的 obs 口径（S6c 之前的 ckpt = 0/''）
+        base_extra_features, base_extra = s6c_features.resolve(cfg['control'])
+        stable_mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks,
+                              extra_channels=base_extra).eval()
         stable_dqn = DQN(version=version).eval()
         stable_mortal.load_state_dict(state['mortal'])
         stable_dqn.load_state_dict(state['current_dqn'])
@@ -37,9 +41,12 @@ class TestPlayer:
             device = device,
             enable_amp = config['test_play'].get('enable_amp', False),
             enable_rule_based_agari_guard = config['test_play'].get('enable_rule_based_agari_guard', True),
+            extra_features = base_extra_features,
             name = 'baseline',
         )
         self.chal_version = config['control']['version']
+        # 挑战者（训练中的模型）用训练配置自己的特征族
+        self.chal_extra_features, _ = s6c_features.resolve(config['control'])
         self.log_dir = path.abspath(config['test_play']['log_dir'])
 
     def test_play(self, seed_count, mortal, dqn, device):
@@ -52,6 +59,7 @@ class TestPlayer:
             device = device,
             enable_amp = config['test_play'].get('enable_amp', False),
             enable_rule_based_agari_guard = config['test_play'].get('enable_rule_based_agari_guard', True),
+            extra_features = self.chal_extra_features,
             name = 'mortal',
         )
 
@@ -83,7 +91,10 @@ class TrainPlayer:
         version = cfg['control'].get('version', 1)
         conv_channels = cfg['resnet']['conv_channels']
         num_blocks = cfg['resnet']['num_blocks']
-        stable_mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks).eval()
+        # 卫冕者自己的 obs 口径（S6c 之前的 ckpt = 0/''）
+        base_extra_features, base_extra = s6c_features.resolve(cfg['control'])
+        stable_mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks,
+                              extra_channels=base_extra).eval()
         stable_dqn = DQN(version=version).eval()
         stable_mortal.load_state_dict(state['mortal'])
         stable_dqn.load_state_dict(state['current_dqn'])
@@ -99,6 +110,7 @@ class TrainPlayer:
             device = device,
             enable_amp = True,
             enable_rule_based_agari_guard = True,
+            extra_features = base_extra_features,
             name = 'baseline',
         )
 
@@ -106,6 +118,8 @@ class TrainPlayer:
         logging.info(f'using profile {profile}')
         cfg = config['train_play'][profile]
         self.chal_version = config['control']['version']
+        # 挑战者（训练中的模型）用训练配置自己的特征族
+        self.chal_extra_features, _ = s6c_features.resolve(config['control'])
         self.log_dir = path.abspath(cfg['log_dir'])
         self.train_key = secrets.randbits(64)
         self.train_seed = 10000
@@ -130,6 +144,7 @@ class TrainPlayer:
             top_p = self.top_p,
             device = device,
             enable_amp = True,
+            extra_features = self.chal_extra_features,
             name = 'trainee',
         )
 

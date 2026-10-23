@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-"""S6b：把 version-4 checkpoint 手术为「+2 行读牌危险度」的注入起手 ckpt。
+"""obs 尾部特征注入的首层手术：把 version-4 checkpoint 扩成「+N 行」的注入起手 ckpt。
+
+用途（两个阶段共用同一套手术）：
+- S6b（已关闭）：+2 行读牌危险度（`tools/read_model/precompute_danger.py` 预计算）；
+- S6c（当前）：+2 行自家速度特征（`mortal/s6c_features.py` 在线计算）。
 
 与 S6a（``s6a_isolated/tools/expand_ckpt_v5.py``）的区别：
 - **不改** ``control.version``（obs_shape 仍 (1012,34)；v4 编码零改动），
-  而是在 ``control.extra_channels`` 里记 2，``Brain`` 用
-  ``obs_shape(version)[0] + extra_channels`` 建首层。
+  而是把外部特征族记在 ``control.extra_features``、行数记在 ``control.extra_channels``，
+  ``Brain`` 用 ``obs_shape(version)[0] + extra_channels`` 建首层。
 - 首层 ``Conv1d(192, 1012, 3)`` → ``Conv1d(192, 1014, 3)``；新增 2 通道
   **零初始化**，新输入为 0 时前向与父代逐位等价（脚本内置数值自检）。
 
-新增 2 行（见 ``tools/read_model/precompute_danger.py``）：
-- row 1012 = 三家 union 危险度 ``Σ_j P(听_j)·P(待牌_j=t)``
-- row 1013 = ``P(至少一家听牌)``（34 列同值）
+S6c 的 2 行（见 ``mortal/s6c_features.py``）：
+- row 1012 = ``clamp(自家向听, 0, 8) / 8``（34 列同值；自摸后为当前手牌真值）
+- row 1013 = ``max_候选(有效牌剩余枚数) / 136``（tiles_seen 实战口径，34 列同值）
 
 用法::
 
     python tools/expand_ckpt_v6.py \
         mortal/checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth \
-        mortal/checkpoints/inject_s6b/B756k_v6_init.pth
+        mortal/checkpoints/s6c/B756k_s6c_init.pth
 """
 import argparse
 import datetime
@@ -46,6 +50,8 @@ def main():
     ap.add_argument('src', help='父代 v4 checkpoint（如 B/756k）')
     ap.add_argument('dst', help='输出注入起手 ckpt')
     ap.add_argument('--extra-channels', type=int, default=2)
+    ap.add_argument('--extra-features', default='s6c',
+                    help="特征族名（写进 control.extra_features；'' = 只扩通道不标特征）")
     ap.add_argument('--old-in', type=int, default=OLD_IN)
     ap.add_argument('--no-verify', action='store_true')
     args = ap.parse_args()
@@ -71,22 +77,25 @@ def main():
     sd[FIRST_CONV] = w_new
 
     cfg.setdefault('control', {})['extra_channels'] = args.extra_channels
+    if args.extra_features:
+        cfg['control']['extra_features'] = args.extra_features
     st['config'] = cfg
     st['timestamp'] = datetime.datetime.now().timestamp()
     Path(args.dst).parent.mkdir(parents=True, exist_ok=True)
     torch.save(st, args.dst)
     print(f'[OK] {args.src} (v{version}, in={args.old_in}) -> {args.dst} '
-          f'(in={new_in}, extra={args.extra_channels})')
+          f'(in={new_in}, extra={args.extra_channels}, features={args.extra_features!r})')
     print(f'     首层 {tuple(w.shape)} -> {tuple(w_new.shape)}；'
           f'steps={st.get("steps")}  params={sum(v.numel() for v in sd.values()):,}')
 
     if args.no_verify:
         return
-    # ---- 数值自检：新通道输入为 0 时与父代逐位一致 ----
+    # ---- 数值自检：新通道权重零初始化 ⇒ 无论新通道输入多少，前向都与父代逐位一致 ----
     torch.manual_seed(0)
     n = 4
     obs0 = torch.randn(n, args.old_in, 34)
-    obs1 = torch.cat([obs0, torch.zeros(n, args.extra_channels, 34)], dim=1)
+    # 故意用非零输入：证明「不依赖新通道输入为 0」，而是首层权重贡献为 0
+    obs1 = torch.cat([obs0, torch.rand(n, args.extra_channels, 34) + 0.5], dim=1)
     sd_old = dict(st['mortal'])
     sd_old[FIRST_CONV] = w_old
     m0 = build(cfg, sd_old, 0)
@@ -94,7 +103,7 @@ def main():
     with torch.no_grad():
         phi0, phi1 = m0(obs0), m1(obs1)
     d = (phi0 - phi1).abs().max().item()
-    print(f'[verify] phi max|diff| = {d:.3e}  (应 == 0，新通道零初始化)')
+    print(f'[verify] phi max|diff| = {d:.3e}  (应 == 0：新通道权重零初始化)')
     if d > 1e-6:
         sys.exit('[FAIL] 手术前后前向不等价')
 

@@ -139,8 +139,11 @@ def train():
     from model import Brain, DQN, AuxNet, VHead
     from libriichi.consts import obs_shape
     from config import config
+    import s6c_features
 
     version = config['control']['version']
+    # S6c：obs 尾部特征族（'' = 关闭，与历史逐位一致）；extra_channels 由 spec 推导
+    extra_features, extra_channels = s6c_features.resolve(config['control'])
 
     online = config['control']['online']
     batch_size = config['control']['batch_size']
@@ -213,7 +216,7 @@ def train():
     weight_decay = config['optim']['weight_decay']
     max_grad_norm = config['optim']['max_grad_norm']
 
-    mortal = Brain(version=version, **config['resnet']).to(device)
+    mortal = Brain(version=version, extra_channels=extra_channels, **config['resnet']).to(device)
     dqn = DQN(version=version).to(device)
     aux_net = AuxNet((4,)).to(device)
     if objective == 'iql':
@@ -227,7 +230,8 @@ def train():
             m.compile()
 
     logging.info(f'version: {version}')
-    logging.info(f'obs shape: {obs_shape(version)}')
+    logging.info(f'obs shape: {obs_shape(version)}' + (
+        f' + extra {extra_channels} ({extra_features})' if extra_channels else ''))
     logging.info(
         f'env: gamma={gamma} reward_mode={reward_mode} reward_scale={reward_scale} '
         f'credit_mode={credit_mode} objective={objective} '
@@ -347,7 +351,8 @@ def train():
     ema_mortal = ema_dqn = None
     v_ema = None
     if objective == 'iql':
-        ema_mortal = Brain(version=version, **config['resnet']).to(device)
+        ema_mortal = Brain(version=version, extra_channels=extra_channels,
+                           **config['resnet']).to(device)
         ema_dqn = DQN(version=version).to(device)
         if iql_v_target_decay > 0:
             v_ema = VHead().to(device)
@@ -515,6 +520,7 @@ def train():
             gamma = gamma,
             objective = objective,
             always_include_kan_select = always_include_kan_select,
+            extra_features = extra_features,
         )
         logging.info(f'reward: {file_data.reward_desc()}')
         data_loader = iter(DataLoader(

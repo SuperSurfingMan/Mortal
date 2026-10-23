@@ -11,6 +11,7 @@ from model import Brain, DQN
 from player import TrainPlayer
 from common import send_msg, recv_msg
 from config import config
+import s6c_features
 
 def main():
     remote = (config['online']['remote']['host'], config['online']['remote']['port'])
@@ -18,8 +19,11 @@ def main():
     version = config['control']['version']
     num_blocks = config['resnet']['num_blocks']
     conv_channels = config['resnet']['conv_channels']
+    # S6c：在线训练客户端与训练配置同口径（离线默认 '' = 0）
+    _, extra_channels = s6c_features.resolve(config['control'])
 
-    mortal = Brain(version=version, num_blocks=num_blocks, conv_channels=conv_channels).to(device).eval()
+    mortal = Brain(version=version, num_blocks=num_blocks, conv_channels=conv_channels,
+                   extra_channels=extra_channels).to(device).eval()
     dqn = DQN(version=version).to(device)
     if config['online']['enable_compile']:
         mortal.compile()

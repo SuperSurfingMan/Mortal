@@ -106,12 +106,20 @@ class ResNet(nn.Module):
         return self.net(x)
 
 class Brain(nn.Module):
-    def __init__(self, *, conv_channels, num_blocks, is_oracle=False, version=1):
+    def __init__(self, *, conv_channels, num_blocks, is_oracle=False, version=1,
+                 extra_channels=0):
+        """``extra_channels``：obs 尾部追加的额外行数（S6c 为 2；默认 0，行为与历史逐位一致）。
+
+        额外行由 ``s6c_features`` 在 Python 侧算好拼在 obs 尾部，故
+        ``in_channels = obs_shape(version)[0] + extra_channels``。暖启时新通道
+        零初始化（``tools/expand_ckpt_v6.py``），未注入时逐位等价。
+        """
         super().__init__()
         self.is_oracle = is_oracle
         self.version = version
+        self.extra_channels = int(extra_channels)
 
-        in_channels = obs_shape(version)[0]
+        in_channels = obs_shape(version)[0] + self.extra_channels
         if is_oracle:
             in_channels += oracle_obs_shape(version)[0]
 

@@ -19,6 +19,7 @@ from config import config
 from model import Brain, DQN
 from dataloader import FileDatasetsIter, worker_init_fn
 from train import env_reward_diff
+import s6c_features
 
 ROOT = '/mnt/data8/mortal/Mortal/dataset/mjai/houou4'
 DEVICE = torch.device(config['control']['device'])
@@ -31,6 +32,7 @@ def collect(month, n_batch, bs, seed, workers):
     credit_mode = config['env'].get('credit_mode', 'kyoku')
     gamma = config['env']['gamma']
     objective = config['control'].get('objective', 'cql_mc')
+    extra_features, _ = s6c_features.resolve(config['control'])
     files = sorted(glob.glob(f'{ROOT}/{month}/*.json.gz'))
     if not files:
         raise SystemExit(f'没有文件: {ROOT}/{month}')
@@ -57,6 +59,8 @@ def collect(month, n_batch, bs, seed, workers):
         gamma = gamma,
         objective = objective,
         always_include_kan_select = bool(config['dataset'].get('always_include_kan_select', True)),
+        # S6c：holdout 必须与训练同口径（否则 obs 行数与首层不匹配）
+        extra_features = extra_features,
     )
     it = iter(DataLoader(ds, batch_size = bs, drop_last = True,
                          num_workers = workers, pin_memory = True,
@@ -82,11 +86,15 @@ def collect(month, n_batch, bs, seed, workers):
 
     # 同一 seed 不仅应选到同一批文件，也应得到同一 worker 迭代顺序；把动作和目标
     # 的多重批次摘要打印出来，跨 checkpoint/进程复用时可直接核对。
+    # obs 只摘要 v4 原生的前 obs_shape 行：S6c 等尾部注入行不应让「同一批数据」的
+    # 摘要变化（否则手术前后无法用摘要对齐）。
+    from libriichi.consts import obs_shape
+    n_obs = obs_shape(config['control']['version'])[0]
     sample_digest = hashlib.sha256()
     target_digest = hashlib.sha256()
     sample_digest.update('\\n'.join(files).encode('utf-8'))
     for obs, actions, masks, q_target in batches:
-        for tensor in (obs, actions, masks):
+        for tensor in (obs[:, :n_obs], actions, masks):
             sample_digest.update(tensor.contiguous().numpy().tobytes())
         if q_target is not None:
             target_digest.update(q_target.contiguous().numpy().tobytes())
@@ -97,7 +105,10 @@ def evaluate(name, ckpt, batches, bs):
     st = torch.load(ckpt, map_location = torch.device('cpu'), weights_only = True)
     cfg = st['config']
     version = cfg['control'].get('version', 1)
-    mortal = Brain(version = version, **cfg['resnet']).to(DEVICE).eval()
+    # S6c：额外通道数从 ckpt 自己的 [control] 推（旧 ckpt = 0）
+    _, extra_channels = s6c_features.resolve(cfg['control'])
+    mortal = Brain(version = version, extra_channels = extra_channels,
+                   **cfg['resnet']).to(DEVICE).eval()
     dqn = DQN(version = version).to(DEVICE).eval()
     mortal.load_state_dict(st['mortal'])
     dqn.load_state_dict(st['current_dqn'])

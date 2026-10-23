@@ -6,6 +6,7 @@ from model import GRP
 from reward_calculator import RewardCalculator
 from libriichi.dataset import GameplayLoader
 from config import config
+import s6c_features
 
 class FileDatasetsIter(IterableDataset):
     def __init__(
@@ -27,6 +28,7 @@ class FileDatasetsIter(IterableDataset):
         gamma = 1.0,
         objective = 'cql_mc',
         always_include_kan_select = True,
+        extra_features = '',
     ):
         """reward_mode（2026-10-12 加，对应 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
 
@@ -55,11 +57,16 @@ class FileDatasetsIter(IterableDataset):
                       最后一条样本 terminal=True（next_obs 用自身占位，训练端丢弃 bootstrap 项）；
                       **r_t 仅局边界样本非零**（= kyoku 口径 r_k，每局只计一次），中间步 r=0，
                       未来价值由 V(s') bootstrap 传递。此模式下 credit_mode 被强制视为 'kyoku'。
+
+        extra_features（2026-10-23 加，S6c）：obs 尾部注入的特征族，目前只有 's6c'
+        （自家向听/8 + 实战有效牌数/136，各 34 列广播；见 s6c_features）。默认 '' 时
+        完全不触碰 obs（基线逐位不变），需与 ``Brain(extra_channels=2)`` 配对。
         """
         super().__init__()
         assert reward_mode in ('rank_pt', 'delta_points'), f'未知 reward_mode: {reward_mode}'
         assert credit_mode in ('kyoku', 'game'), f'未知 credit_mode: {credit_mode}'
         assert objective in ('cql_mc', 'iql'), f'未知 objective: {objective}'
+        assert extra_features in ('', s6c_features.SPEC), f'未知 extra_features: {extra_features}'
         if objective == 'iql' and credit_mode != 'kyoku':
             # iql 的未来回报由 bootstrap 接管，后缀和会双重计入（守卫而非静默改写）
             raise AssertionError("objective='iql' 要求 credit_mode='kyoku'（后缀和会与 bootstrap 双重计入）")
@@ -80,6 +87,7 @@ class FileDatasetsIter(IterableDataset):
         self.gamma = float(gamma)
         self.objective = objective
         self.always_include_kan_select = always_include_kan_select
+        self.extra_features = extra_features
         self.iterator = None
 
     def reward_desc(self):
@@ -139,9 +147,25 @@ class FileDatasetsIter(IterableDataset):
     def populate_buffer(self, file_list):
         data = self.loader.load_gz_log_files(file_list)
         for file in data:
-            for game in file:
-                # per move
-                obs = game.take_obs()
+            # S6c：整文件批量算 obs 尾部特征（numpy 向量化，批越大越便宜；
+            # 按文件而非 file_batch 是为了控峰值内存）
+            obs_by_game = feats_by_game = None
+            if self.extra_features:
+                # libriichi 的 obs 已是 float32；只有类型不符时才拷一份（省一次整文件拷贝）
+                obs_by_game = []
+                for g in file:
+                    arr = np.stack(g.take_obs())
+                    obs_by_game.append(arr if arr.dtype == np.float32 else arr.astype(np.float32))
+                sizes = [o.shape[0] for o in obs_by_game]
+                flat = np.concatenate(obs_by_game, 0) if sizes else np.zeros((0, 1, 1), np.float32)
+                feats = s6c_features.compute(flat) if sizes else np.zeros((0, 2), np.float32)
+                del flat
+                feats_by_game = np.split(feats, np.cumsum(sizes)[:-1])
+            for gi, game in enumerate(file):
+                if obs_by_game is None:
+                    obs = game.take_obs()
+                else:
+                    obs = s6c_features.attach(obs_by_game[gi], feats_by_game[gi])
                 if self.oracle:
                     invisible_obs = game.take_invisible_obs()
                 actions = game.take_actions()

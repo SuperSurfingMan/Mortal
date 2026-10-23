@@ -4,6 +4,7 @@ import torch
 import numpy as np
 from torch.distributions import Normal, Categorical
 from typing import *
+import s6c_features
 
 class MortalEngine:
     def __init__(
@@ -18,14 +19,21 @@ class MortalEngine:
         enable_quick_eval = True,
         enable_rule_based_agari_guard = False,
         defense_guard = None,
+        extra_features = '',
         name = 'NoName',
         boltzmann_epsilon = 0,
         boltzmann_temp = 1,
         top_p = 1,
     ):
+        """extra_features：obs 尾部特征族（'s6c'；默认 '' 行为不变）。
+
+        必须与 ckpt 的 ``[control].extra_features`` 一致（用 ``s6c_features.resolve``
+        解析），否则 brain 的首层通道数与输入不匹配。防守守卫始终吃未拼接的 v4 obs。
+        """
         self.engine_type = 'mortal'
         self.device = device or torch.device('cpu')
         assert isinstance(self.device, torch.device)
+        assert extra_features in ('', s6c_features.SPEC), f'未知 extra_features: {extra_features}'
         self.brain = brain.to(self.device).eval()
         self.dqn = dqn.to(self.device).eval()
         self.is_oracle = is_oracle
@@ -36,6 +44,7 @@ class MortalEngine:
         self.enable_quick_eval = enable_quick_eval
         self.enable_rule_based_agari_guard = enable_rule_based_agari_guard
         self.defense_guard = defense_guard
+        self.extra_features = extra_features
         self.name = name
 
         self.boltzmann_epsilon = boltzmann_epsilon
@@ -53,7 +62,11 @@ class MortalEngine:
             raise Exception(f'{ex}\n{traceback.format_exc()}')
 
     def _react_batch(self, obs, masks, invisible_obs):
-        obs = torch.as_tensor(np.stack(obs, axis=0), device=self.device)
+        obs_np = np.stack(obs, axis=0)
+        obs = torch.as_tensor(obs_np, device=self.device)
+        # S6c：brain 吃 1014 行；守卫仍吃原始 1012 行（其行号常量不受影响）
+        obs_in = (obs if not self.extra_features
+                  else torch.as_tensor(s6c_features.attach(obs_np), device=self.device))
         masks = torch.as_tensor(np.stack(masks, axis=0), device=self.device)
         if invisible_obs is not None:
             invisible_obs = torch.as_tensor(np.stack(invisible_obs, axis=0), device=self.device)
@@ -61,14 +74,14 @@ class MortalEngine:
 
         match self.version:
             case 1:
-                mu, logsig = self.brain(obs, invisible_obs)
+                mu, logsig = self.brain(obs_in, invisible_obs)
                 if self.stochastic_latent:
                     latent = Normal(mu, logsig.exp() + 1e-6).sample()
                 else:
                     latent = mu
                 q_out = self.dqn(latent, masks)
             case 2 | 3 | 4:
-                phi = self.brain(obs)
+                phi = self.brain(obs_in)
                 q_out = self.dqn(phi, masks)
 
         if self.defense_guard is not None:

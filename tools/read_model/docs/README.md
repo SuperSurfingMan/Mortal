@@ -2118,8 +2118,36 @@ P(放铳) 估计器，A2c 的 AUC 0.9698 已经够用。
 **结论：GO（λ=10 线性）**。推荐线上配置 `MORTAL_GUARD_LAMBDA=10`；
 若追求更保守的备选，`7.5` 也在显著区间（+0.712）。
 
-## 14. 读牌坑位总表（编号沿用 MEMORY.md §5.2 的 **42~65**，便于历史回查）
+### 13.16 主模型 S6c：自家速度 2 行注入（2026-10-23，纯 Python，不动 Rust）
 
+**定位**：这一段是**主模型**的特征注入（S6 轴的第三个子项），与读牌模型无关；放在这里只为延续 §13 编号。完整记录（探测数字、口径推导、产物台账）在 **`memory/MEMORY.md` §3.11**。
+
+**为何不是纯重算**（修正 2026-10-18 的初步结论）：v4 obs 的向听 one-hot 在第 `862..868` 行，但 `state/update.rs` 的 `update_shanten` 挂在 `dahai` 上——**自摸后的 3n+2 状态仍是摸牌前的值**（实测 3n+1 507/507 全等、3n+2 只有 74.5% 相等且恒差 1），且该 one-hot 在 6 处 clamp；同时 SP 表只算到 `SHANTEN_THRES=3`，因此「当前向听」和「有效牌数」都有新信息。
+
+| 通道 | 定义 | 归一化 |
+|---|---|---|
+| 1012 `own_shanten` | 最优向听：3n+2 取每个打牌后 13 张手牌的最小值；3n+1 取当前手牌 | `clamp(s,0,8)/8` |
+| 1013 `own_ukeire` | 候选手牌（达到最优向听的打牌/当前手牌）的有效牌剩余枚数取最大；有效 = 摸进后向听前进 1；剩余 = `4 − tiles_seen`（第 835 行） | `/136` |
+
+两行均 34 列广播（与 S6a 同风格），`best ≤ −1`（已和了）置 0。
+
+**实现**：
+- `mortal/s6c_features.py`：libriichi 同款 tomohxx 向听表（`libriichi/src/algo/data/shanten_{suhai,jihai}.bin.gz`，`MORTAL_S6C_DATA_DIR` 可覆盖）的 numpy 向量化，与 Rust 单测 **19/19** 逐位一致；按文件批量计算，**0.148 ms/样本**。
+- 接入：`model.Brain(extra_channels)`、dataloader/engine 在 Python 侧拼行（守卫仍吃原始 1012 行）、train/holdout/ladder/player/one_vs_three/mortal.py 按各自 ckpt 的 `[control].extra_features` 解析（旧 ckpt → 0）。
+- 手术：`tools/expand_ckpt_v6.py`（零初始化，自检 `phi max|diff|=0`）；配置 `config.s6c{,_probe,_smoke,_base}.toml`；编排 `mortal/run_s6c.sh`。
+
+**已验（2026-10-23 12:22）**：`config.s6c_base.toml` vs `config.s6c.toml` 在同一 holdout（202609 / seed 20261009 / 24×512）上 digest 与 `top1=0.8127 / dqn_loss=0.3496 / agari 149/149 / lse +0.522` 逐位相同。
+
+**门禁**：
+1. 回归 `tools/test_s6c_features.py`（Rust 单测 19 例 / obs 口径 / attach 不改原生行）；
+2. 20k 探针：holdout top1 ≥ **同 digest 基线**（`holdout_base.log`），且 `tools/s6c_channel_usage.py --ref B756k_s6c_init.pth` 显示两新通道的**权重变化量 ΔL2 分位 ≥ 原始 p10**；
+3. 200k 后双向 5000 sets ladder（`--guard-lambda 0` 隔离模型变量，种子块 260000/270000），判据沿用 block bootstrap CI 下界 >0。
+
+**冒烟（2k 步，2026-10-23 12:41）**：2.72~2.79 batch/s（同日 s6b A0 无特征 2.59 → 特征开销不构成回退）；`behavior: agari 0.2277 houjuu 0.1404 fuuro 0.3095 riichi 0.1915`；新通道 ΔL2 **15.5% / 12.2% 分位**（≥ p10，已被学习）；`ladder 1 set + --guard-lambda 10` 跑通。
+
+**状态**：回归 / 手术 / 透明性 / 2k 冒烟 / ladder+guard 接口测试全部跑通；**待启动 20k 探针**。
+
+## 14. 读牌坑位总表（编号沿用 MEMORY.md §5.2 的 **42~65**，便于历史回查）
 
 
 | # | 主题 | 坑与处置 |

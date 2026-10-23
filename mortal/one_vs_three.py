@@ -6,6 +6,7 @@ import secrets
 import os
 from model import Brain, DQN
 from engine import MortalEngine
+import s6c_features
 from libriichi.arena import OneVsThree
 from config import config
 
@@ -29,7 +30,9 @@ def main():
         version = cham_cfg['control'].get('version', 1)
         conv_channels = cham_cfg['resnet']['conv_channels']
         num_blocks = cham_cfg['resnet']['num_blocks']
-        mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks).eval()
+        cham_extra = s6c_features.resolve(cham_cfg['control'])[1]
+        mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks,
+                       extra_channels=cham_extra).eval()
         dqn = DQN(version=version).eval()
         mortal.load_state_dict(state['mortal'])
         dqn.load_state_dict(state['current_dqn'])
@@ -44,6 +47,7 @@ def main():
             device = torch.device(cfg['champion']['device']),
             enable_amp = cfg['champion']['enable_amp'],
             enable_rule_based_agari_guard = cfg['champion']['enable_rule_based_agari_guard'],
+            extra_features = s6c_features.resolve(cham_cfg['control'])[0],
             name = cfg['champion']['name'],
         )
 
@@ -52,7 +56,9 @@ def main():
     version = chal_cfg['control'].get('version', 1)
     conv_channels = chal_cfg['resnet']['conv_channels']
     num_blocks = chal_cfg['resnet']['num_blocks']
-    mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks).eval()
+    chal_extra_features, chal_extra = s6c_features.resolve(chal_cfg['control'])
+    mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks,
+                   extra_channels=chal_extra).eval()
     dqn = DQN(version=version).eval()
     mortal.load_state_dict(state['mortal'])
     dqn.load_state_dict(state['current_dqn'])
@@ -67,6 +73,7 @@ def main():
         device = torch.device(cfg['challenger']['device']),
         enable_amp = cfg['challenger']['enable_amp'],
         enable_rule_based_agari_guard = cfg['challenger']['enable_rule_based_agari_guard'],
+        extra_features = chal_extra_features,
         name = cfg['challenger']['name'],
     )
 

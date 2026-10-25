@@ -572,6 +572,33 @@ SP 覆盖 ⊆ 自己手牌/候选行、`sh≥5` 时零覆盖（`sh==4` 的 45 �
 若还要在推理期找增益，只能引入 obs 里**没有**的量（例如按对手手牌价值/立直状态加权的 risk，
 或攻守两套 EV 的显式比较），且必须先有更细的分辨率。
 
+### 3.12d 测量基建（2026-10-25，ladder 扩容已落地 + 绝对锚点受阻）
+
+**为什么先做这个**：数据侧（R3/R4/R5/D1/D2）与表示侧（S6a/S6b/S6c）全部归零后，剩下候选改进的
+先验都在 +0.2~0.5；而 5000 sets 的分辨率只有 ±1.2 ⇒ **不先买分辨率，后续实验都只能得到 null**。
+另有一个更基础的空洞：`test_play` 的对手是 `checkpoints/mortal_step_000200000.pth`（自家老模型），
+ladder 全是内部对照 ⇒ **「我们到底多强」一直没有答案**。
+
+**A. ladder 扩容（已落地）**：`mortal/ladder_arm.sh`
+- 一条命令跑完一个双向臂：`bash ladder_arm.sh <challenger> <champion> <out> --blocks 16 --sets 500 --seed-a S --seed-b T --gpus 0,1,2,4 --guard-lambda 0 [--tag 名]`；
+- 默认 **16 块×500 sets/向 = 16000 sets = 64000 半庄/向** ⇒ 解析 SE≈0.30、可分辨 |δ|≈0.6（脚本会自动打印
+  「该预算能分辨的最小 δ」，预算不足时明确警告）；GPU 轮转 4 并行，块级 `wait`，产物 + `summary.log`；
+- 末尾直接给判定行（正则已用 D2 真实 summary 验证：`δ=-0.283 SE=0.594 t=-0.48 CI=[-1.26,+0.74] → NO-CONCLUSION`）；
+- **空臂自检（B vs B，2×100 sets，λ=0）**：A 向两块 `avg_rank 2.5000 / avg_pt 0.000`（完全对称，符合预期）。
+
+**B. 绝对锚点（受阻，已归档线索）**：`tools/akochan_build_notes.md`
+- akochan（Equim-chan fork）**已在本机构建成功**：关键坑是默认 `NPROCS=核数` 让 `selector.o` 的 `.bss` 到
+  **9.4 GB**、链接报 `R_X86_64_PC32 ... relocation truncated`；解法 = `NPROCS=2`（.bss≈0.34 GB）+ 把
+  `ai_src/obj/*.o` 直接 `-no-pie` 静态链进 `system.exe`（不产 `libai.so`）；
+- `one_vs_three.py` 的 `[1v3.akochan]` 已接好（`config.anchor_ako.toml`），`system.exe pipe` 能被 libriichi
+  正常拉起、比赛能开始；**但 pipe 协议在首个决策处死锁**（双方 0 CPU，8 分钟 0 半庄）⇒ 绝对锚点暂不可用；
+  待查：`pipe` 首个期望消息 / `can_act` 字段 / 改用 TCP `mjai_client <port>` + 自建 mjai server；
+- **人类场标尺（锚点要对齐的刻度）**：`player_ratings_2022_2026H1_v3.csv` 的 `avg_pt` 与 `one_vs_three.py`
+  输出的 uma 口径（90/45/0/−135）**同尺度**：全样本均值 **−5.44** / 中位 **−2.61** / p95 **+9.29**（5356 人）。
+  即：若模型 vs 3 akochan 的 avg_pt 明显高于 +9.3，可判「高于人类 p95」；若落在 −5 附近则「与人类均值同档」。
+- 吞吐预估（死锁解决后）：akochan 每决策完整搜索，约 1–2 min/半庄 ⇒ 400 半庄（SE≈4.1）单流 7–13 h，
+  3 条并行流 2.5–4.5 h。
+
 ### 3.13 项目准备期（2026-10-01~10-09，压缩）
 
 - 10-01：完成 Rust+Python 架构分析；确认作者不公开权重、官方 Training 文档全为空占位；实测天凤 `list.cgi`/scc/`0/log`，年度 zip 404，滚动日归档可用。

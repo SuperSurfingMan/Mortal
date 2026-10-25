@@ -48,8 +48,46 @@ cp setup_mjai.json tactics.json        # libriichi 通过 AKOCHAN_TACTICS 指定
   待查方向：`system.exe pipe` 的首个期望消息（可能需要 `start_game`/`player_id` 行）、
   `EventWithCanAct` 的 `can_act` 字段名、或该 fork 的 `pipe` 模式与 libriichi 的协议版本差异；
   另一条可行路是走 TCP：`system.exe mjai_client <port> setup_mjai.json` + 自建 mjai server。
-- ⏱ 吞吐未标定（死锁解决后再测）。参考：akochan 每个决策是完整搜索，预计 0.3–3 s/决策，
-  一个半庄 ≈ 1–2 min ⇒ **400 半庄的 2σ 锚点需要 ~3–7 h**（多流并行可压到 1–3 h）。
+- ⏱ 吞吐未标定（死锁解决后再测）。参考：akochan 每个决策是完整搜索，0.3–3 s/决策，
+  一个半庄 ≈ 1–2 min ⇒ **400 半庄的 2σ 锚点需要 3–7 h**（多流并行可压到 1–3 h）。
+
+## 2026-10-25 续：三处不匹配已定位（含复现）
+
+**#1 字段缺失（已修，靠垫片）**
+`share/types.cpp:624 get_kyoku_first()` / `get_aka_flag()` 要求 **start_game** 里有
+`kyoku_first`（0=半荘、4=東風）与 `aka_flag`；libriichi 的 `Event::StartGame` 只序列化
+`names`/`seed` ⇒ `assert_with_out` 打印一行错误后 `assert(false)` 直接 abort。
+垫片里对 `start_game` 补 `kyoku_first=0`、`aka_flag=true` 后，单点测试即得到合法回复：
+`[{"actor": 0, "pai": "N", "tsumogiri": true, "type": "dahai"}]`。
+
+**#2 OpenMP 线程越界 → SIGSEGV（已修，靠垫片强制 env）**
+本构建 `NPROCS=2` 时 `selector` 的 per-thread 表按 2 份分配；若 `OMP_NUM_THREADS` 未设
+（默认 = 56 核）则越界 → 子进程 **exit code −11**、无任何输出。垫片强制
+`OMP_NUM_THREADS=2` 后崩溃消失（`OMP_NUM_THREADS=1/2` 都能正常回复）。
+
+**#3 回复时机不同 → 死锁（垫片只能部分绕过，仍需改 Rust 侧）**
+- akochan 只在「自己的 `tsumo`」或「别人 `dahai`/`kakan`」时回话；
+- 但 libriichi 的 `AkochanAgent::react` **每批事件写完必读一行**，而 `ako_vs_py` 会
+  **同时**问 3 个 akochan ⇒ 其中两三个的最后事件不是触发点 ⇒ 永不回话 ⇒ 死锁
+  （实测 debug 日志末尾：`tsumo actor=0 can_act=False → dahai actor=0 can_act=False →
+  tsumo actor=1 can_act=True`，其余两个 seat 就卡在这里）。
+- 垫片当前做法：对「`can_act=true` 且不是自己触发点」的批次直接合成 `[{"type":"none"}]`。
+  这能让流程继续，但 **libriichi 会把这条 `none` 当成该 agent 的真实动作**消费，
+  导致后续状态错位。实测新失败：`RuntimeError: invalid action: Dahai { actor: 0, pai: W,
+  tsumogiri: true }`（一个 akochan 的回复被当成了 0 号位的动作），以及
+  `system.bin: tehai_ana.cpp:194: Assertion 'num <= 15' failed`（手牌数 15+，状态已乱）。
+
+**下一步（明确、工作量小）**：改 `libriichi/src/agent/akochan.rs` 的 `react`——
+在发完事件后先判断「最后一条是否本 seat 的触发点」，不是就直接
+`return Ok(EventExt::no_meta(Event::None))`（**不读子进程**），是才读；
+同时确认 `ako_vs_py` 传给 `AkochanAgent::new_batched` 的 `player_ids` 只含 1..3、
+且引擎占 0 号位（当前现象提示 0 号位也可能起了一个 akochan 实例）。
+改完需重编 Rust 扩展（cargo/maturin），再跑 1 set 冒烟。垫片只保留 #1/#2 两个职责，
+**不再合成 none**。
+
+⚠️ 结论：绝对锚点仍不可用；本次把「黑盒卡死」拆成了「1 个字段 + 1 个线程数 + 1 个回复时机」
+三个确定性缺陷，其中前两个已在垫片里修好并单点验证，第三个需要动 Rust 侧。
+
 
 ## 建议的使用方式
 

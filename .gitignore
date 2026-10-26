@@ -91,3 +91,6 @@ MortalSimulator_*.zip.sha256
 
 # akochan 外部锚点源码/构建产物（本地构建，不入库；见 tools/akochan_build_notes.md）
 tools/akochan_src/
+
+# 锚点跑批生成的临时配置
+mortal/config.anchor*_p*.toml

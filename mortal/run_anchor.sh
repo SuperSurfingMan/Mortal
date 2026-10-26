@@ -48,7 +48,7 @@ import re
 for i in range(procs):
     s = src
     s = re.sub(r"\[1v3\]\nseed_key = -?\d+\ngames_per_iter = \d+\niters = \d+\nlog_dir = '[^']*'",
-               f"[1v3]\nseed_key = {key + i}\ngames_per_iter = {gpp}\niters = 1\n"
+               f"[1v3]\nseed_key = {key + i}\ngames_per_iter = 4\niters = {gpp // 4}\n"
                f"log_dir = 'runs/{tag}/p{i}'\nmortal_vs_ako = true", s, count=1)
     s = re.sub(r"^num_workers = 8$", "num_workers = 2", s, count=1, flags=re.M)
     assert 'mortal_vs_ako = true' in s, 'patch 失败'

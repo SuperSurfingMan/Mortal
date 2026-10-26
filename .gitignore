@@ -87,7 +87,9 @@ s6a_isolated/logs/
 MortalSimulator_*.zip
 MortalSimulator_*.zip.sha256
 
+# 模拟器源码/构建产物（本地构建，不入库）
 /simulator
+/dist
 
 # akochan 外部锚点源码/构建产物（本地构建，不入库；见 tools/akochan_build_notes.md）
 tools/akochan_src/

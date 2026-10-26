@@ -599,6 +599,27 @@ ladder 全是内部对照 ⇒ **「我们到底多强」一直没有答案**。
 - 吞吐预估（死锁解决后）：akochan 每决策完整搜索，约 1–2 min/半庄 ⇒ 400 半庄（SE≈4.1）单流 7–13 h，
   3 条并行流 2.5–4.5 h。
 
+## 3.12e akochan 绝对锚点：通路已打通（2026-10-26 01:38），规模化仍卡在进程数
+
+**四个确定性缺陷（全部修完，`libriichi/src/agent/akochan.rs` + 垫片）**：
+
+| # | 缺陷 | 修法 |
+|---|---|---|
+| 1 | `start_game` 缺 `kyoku_first`/`aka_flag` → `assert_with_out` abort | 垫片补字段（`tools/akochan_pipe_shim.py`，实际生效位 `tools/akochan_src/ako/system.exe`） |
+| 2 | OpenMP 线程数 > 编译期 `NPROCS=2` → SIGSEGV（无任何输出、exit code −11） | 垫片强制 `OMP_NUM_THREADS=2` |
+| 3 | 非触发点也读子进程（3 个 akochan 只 1 个回话）→ 死锁 | Rust：非触发点直接返回 `Event::None`、不读 |
+| 4 | `set_scene` 用同一份 log 重复调用（`event_idx == len`）仍去读 → 再次卡死 | Rust：`sent_new` 判定 |
+
+**构建**：`NPROCS=2` + `ai_src/obj/*.o` 用 `-no-pie` 静态链进 `system.exe`（默认 `NPROCS=核数` 会让 `.bss` 到 9.4 GB、链接报 `R_X86_64_PC32` 溢出）。只编库：`cargo build --release --lib`（整包会在 `validate_logs` bin 上因 pyo3 符号失败）。
+
+**第一次成功对局（`ako_vs_py`，1 akochan vs 3 Mortal）**：573 次决策 0 卡死 0 illegal action，`challenger rankings [0 1 2 1] (3.0, -22.5pt)`，1 set（4 局并行）耗时 **14.7 min**。
+
+⚠️ **方向修正**：`ako_vs_py` 是「1 akochan vs 3 Mortal」，要测「Mortal vs 3 akochan」必须用 **`py_vs_ako`**。已在 `one_vs_three.py` 加开关 `[1v3] mortal_vs_ako = true`，指标（`challenger rankings` → Mortal 自己的名次/uma pt）才与人类场同尺度。
+
+**规模化阻塞（2026-10-26 01:47）**：`run_anchor.sh` 起 6 进程 × 68 局（seed_key 20261026..31）后，**akochan 进程数暴涨到 1224**（≈ 17 sets × 12 席 × 6 进程）→ 负载 20+，已全部 kill。推断：`py_vs_ako` 的 champion 分组有 12 个 player_id，且每个 set 都重建 agent（`Drop` 未及时回收）。**下一步**：改用 `iters=N, games_per_iter=4`（每个 iter 重建并 drop，验证进程数稳定）或改 Rust 让 `run_batch` 复用 agent；成功后再跑 400 局（单进程 16 局/h，6~8 进程 ≈ 3~4 h）。
+
+**产物**：`mortal/run_anchor.sh`（多进程起跑）、`mortal/agg_anchor.py`（累加 rankings 出 avg_rank/avg_pt + 人类场对照）、`mortal/config.anchor_ako.toml`、`tools/akochan_build_notes.md`、`backups/libriichi_20261025/`（改前源码+.so+回滚说明）。
+
 ### 3.13 项目准备期（2026-10-01~10-09，压缩）
 
 - 10-01：完成 Rust+Python 架构分析；确认作者不公开权重、官方 Training 文档全为空占位；实测天凤 `list.cgi`/scc/`0/log`，年度 zip 404，滚动日归档可用。

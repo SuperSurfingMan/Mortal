@@ -86,11 +86,20 @@ def main():
             log_dir = log_dir,
         )
         if use_akochan:
-            rankings = env.ako_vs_py(
-                engine = engine_chal,
-                seed_start = (seed, key),
-                seed_count = seeds_per_iter,
-            )
+            # `ako_vs_py` = 1 akochan vs 3 Mortal；`py_vs_ako` = 1 Mortal vs 3 akochan。
+            # 绝对锚点必须用后者（avg_rank/avg_pt 才代表 Mortal 自己，且与人类场同尺度）。
+            if cfg.get('mortal_vs_ako', False):
+                rankings = env.py_vs_ako(
+                    engine = engine_chal,
+                    seed_start = (seed, key),
+                    seed_count = seeds_per_iter,
+                )
+            else:
+                rankings = env.ako_vs_py(
+                    engine = engine_chal,
+                    seed_start = (seed, key),
+                    seed_count = seeds_per_iter,
+                )
         else:
             rankings = env.py_vs_py(
                 challenger = engine_chal,

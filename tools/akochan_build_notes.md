@@ -85,8 +85,28 @@ cp setup_mjai.json tactics.json        # libriichi 通过 AKOCHAN_TACTICS 指定
 改完需重编 Rust 扩展（cargo/maturin），再跑 1 set 冒烟。垫片只保留 #1/#2 两个职责，
 **不再合成 none**。
 
-⚠️ 结论：绝对锚点仍不可用；本次把「黑盒卡死」拆成了「1 个字段 + 1 个线程数 + 1 个回复时机」
-三个确定性缺陷，其中前两个已在垫片里修好并单点验证，第三个需要动 Rust 侧。
+## 2026-10-26 01:38：✅ 跑通（RC=0）
+
+根因补充：`sent_new` —— `set_scene` 会**用同一份 log 重复调用**，此时没有新事件发给 akochan，
+若还去读就必卡。补上「无新事件 → 直接返回 `Event::None`」后整条链路通：
+
+```
+[arena] seeds=4 challenger_ids=[0,1,2,3] champion_ids=[1,2,3, 0,2,3, 0,1,3, 0,1,2]
+[arena] agents built: challenger=akochan champion=mortal
+[ako p0] ENTER n=2 idx=0 ...（573 次决策无一次卡死、无一次 illegal action）
+challenger rankings: [0 1 2 1] (3.0, -22.5pt)   RC=0
+```
+
+- **1 set = 4 个并行对局（4 个 split），耗时 14.7 min**（GPU/CPU 都有其他用户争用）
+  ⇒ 单进程吞吐 ≈ **16 局/h**。
+- 这 4 局的含义：挑战者=akochan 一次都没拿第 1，即 **Mortal 在 4/4 局里都是第 1**，
+  akochan 侧 avg_rank 3.0 / −22.5pt（Mortal 侧 +22.5pt）。样本量 n=4，只能算「通路正确」，
+  不构成强度结论。
+- 锚点规模的现实估算：uma 口径 SD≈82，要 SE≈4 需 **~400 局**；单进程 25 h，
+  **6~8 个进程并行 ≈ 3~4 h**（每个进程 3 个 akochan 进程，OMP=2，约 1 核/进程）。
+
+⚠️ 途中发现的另一层卡点：修完 akochan 应答时机后曾出现「akochan 的 react 一次都没被调用」，
+那是因为 `set_scene` 的重复调用会让 `event_idx == len`；加上 `sent_new` 判定即解。
 
 
 ## 建议的使用方式

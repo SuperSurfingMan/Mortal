@@ -155,10 +155,18 @@ impl OneVsThree {
             .take(seed_count as usize * champion_player_ids_per_seed.len())
             .collect();
 
+        if std::env::var_os("AKO_TRACE").is_some() {
+            eprintln!("[arena] seeds={} challenger_ids={:?} champion_ids={:?}",
+                seeds.len(), challenger_player_ids, champion_player_ids);
+        }
         let mut agents = [
             new_challenger_agent(&challenger_player_ids)?,
             new_champion_agent(&champion_player_ids)?,
         ];
+        if std::env::var_os("AKO_TRACE").is_some() {
+            eprintln!("[arena] agents built: challenger={} champion={}",
+                agents[0].name(), agents[1].name());
+        }
         let batch_game = BatchGame::tenhou_hanchan(self.disable_progress_bar);
 
         let mut challenger_idx = 0;

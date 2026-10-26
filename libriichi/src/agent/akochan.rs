@@ -93,6 +93,9 @@ impl Agent for AkochanAgent {
         state: &PlayerState,
         _: Option<InvisibleState>,
     ) -> Result<EventExt> {
+        if std::env::var_os("AKO_TRACE").is_some() {
+            eprintln!("[ako p{}] ENTER n={} idx={}", self.player_id, events.len(), self.event_idx);
+        }
         // handle two-phase actions like Chi, Pon and Riichi
         if let Some(dahai) = self.naki_tx.take() {
             let last = events.last().context("events is empty")?;

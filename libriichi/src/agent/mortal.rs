@@ -142,6 +142,9 @@ impl MortalBatchAgent {
                     .collect()
             });
 
+            if std::env::var_os("AKO_TRACE").is_some() {
+                eprintln!("[py] react_batch batch={}", states.len());
+            }
             let args = (states, masks, invisible_states);
             self.engine
                 .bind_borrowed(py)

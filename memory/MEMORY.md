@@ -587,7 +587,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 - **第一次成功对局**（`ako_vs_py`，1 akochan vs 3 Mortal）：573 次决策 0 卡死 0 illegal action，`challenger rankings [0 1 2 1] (3.0, −22.5pt)`，1 set（4 局并行）**14.7 min**。
 - **方向修正**：`ako_vs_py` 测的是 akochan，要测「Mortal vs 3 akochan」必须用 **`py_vs_ako`**；已在 `one_vs_three.py` 加 `[1v3] mortal_vs_ako = true`，此时 `challenger rankings` 才是 Mortal 自己的名次/uma pt。
 - **进程数暴涨 → 已修**：`run_anchor.sh` 起初 6 进程 × 68 局时 akochan 进程涨到 **1224**（≈17 sets × 12 席 × 6 进程）、负载 20+，全部 kill；根因是 `py_vs_ako` 的 champion 分组有 12 个 player_id 且每个 set 都重建 agent（`Drop` 不及时）。commit `e557a87` 改用 `iters=N, games_per_iter=4`（每 iter 重建并 drop）→ **1224→72**（6 进程 × 12）。
-- **进行中的 anchor1**：6 进程 × 68 局 = **408 局**，10-26 01:49 起；截至 **06:45 完成 32/102 sets**。实测每进程 4 局约 **55–60 min**（单进程首测 14.7 min），聚合约 **25 局/h**（6 进程并行只提速 ~1.6×，疑与 72×2=144 个 OMP 线程争 56 核有关，未拆开验证）⇒ 408 局 ETA ≈ **17 h**（10-26 18:00–19:00 完成）。汇总：`python agg_anchor.py --dir logs/anchor1`。
+- **✅ anchor1 已完成（2026-10-27 01:32 UTC，历时 23.7 h）**：6 进程 × 68 局 = **408 局**（102 sets，各进程 RC=0）。结果：名次分布(1..4) **[85, 117, 119, 87]**（均匀期望 102）、**avg_rank 2.510**、**avg_pt +2.87**（uma 90/45/0/−135，3×akochan 人均 −0.96）；朴素 SE 4.06 / CI **[−5.1, +10.8]**，按 ICC≈0.19 修正后 SE≈5.1 / CI≈**[−7.1, +12.9]**。⇒ 点估计略强于 3×akochan，但 **CI 跨 0（不显著）**；与人类标尺（均值 −5.44 / 中位 −2.61 / p95 +9.29）的关系不唯一。要分辨「+3 vs 0」需 ~1600 局（SE≈2，约 4 天）。汇总：`python agg_anchor.py --dir logs/anchor1`。
 - **人类场标尺**：`player_ratings_2022_2026H1_v3.csv` 的 `avg_pt` 与 `one_vs_three.py` 的 uma 口径（90/45/0/−135）同尺度：全样本均值 **−5.44** / 中位 **−2.61** / p95 **+9.29**（5,356 人）。⇒ 若 Mortal vs 3 akochan 的 avg_pt 明显高于 +9.3，可判「高于人类 p95」；落在 −5 附近则「与人类均值同档」。
 - **产物**：`mortal/run_anchor.sh`、`mortal/agg_anchor.py`、`mortal/config.anchor_ako.toml`、`tools/akochan_build_notes.md`、`backups/libriichi_20261025/`（改前源码 + `.so` + 回滚说明）。
 
@@ -615,7 +615,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 
 | 优先级 | 事项 | 要点/判据 |
 |---|---|---|
-| **P0** 🔄 | akochan 绝对锚点跑完 408 局 | anchor1 进行中（§3.16-B，**未带守卫**）；完成后 `agg_anchor.py --dir logs/anchor1`；人类 −5.44/+9.29 只是 uma 单位参照，**对手场不同，不能读成人类百分位**；只做外部标尺 |
+| **P0** ✅ | akochan 绝对锚点 408 局（**已完成**） | anchor1：**+2.87 pt/半庄**（CI[−7.1,+12.9]，含组内相关修正），名次 [85,117,119,87]、avg_rank 2.510； 人类标尺 −5.44/+9.29 **只是 uma 单位参照，对手场不同，不能读成人类百分位**；作为外部标尺使用，需 ~1600 局才能判 +3 级差异 |
 | **P0** | 下一轮改进的判定预算 | 用 `ladder_arm.sh --blocks 16`（双向共 16000 sets，SE≈0.33）；**新种子块取 §2.4 的「下一块」**；候选排序见 `memory/NEXT_STEPS_ANALYSIS_20261012.md` §4；δ 的 bootstrap CI 下界 >0 才采纳 |
 | **P1** | 推理期价值加权守卫 | risk 从 `P(deal)` 升级为 `P(deal)×E[loss]`（对手手牌价值/打点）；先规则近似 + 20k 离线 frontier，再 16k 臂；详见 `memory/NEXT_STEPS_ANALYSIS_20261012.md` §4.1 |
 | **P1** | S6c 高分辨率复判 | 现有 956k ckpt + 77k sets（~10~19 h）复判 +0.27；CI 下界 >0 转正；跨 0 且点估计仍 +0.2~0.3 记“仍 underpowered”；详见 `memory/NEXT_STEPS_ANALYSIS_20261012.md` §4.2 |

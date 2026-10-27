@@ -96,3 +96,9 @@ tools/akochan_src/
 
 # 锚点跑批生成的临时配置
 mortal/config.anchor*_p*.toml
+
+# ---- 本项目追加（2026-10-27）：mleague 相关一律不入库 ----
+# 工具脚本（tools/fetch_mleague.py、tools/mleague/）与任何 mleague 数据/产物目录；
+# *mleague* 通配同时覆盖目录与文件名含 mleague 的散落文件。
+tools/mleague/
+*mleague*

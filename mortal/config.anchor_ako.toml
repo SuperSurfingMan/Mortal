@@ -138,7 +138,8 @@ log_dir = 'runs/anchor_ako_smoke'
 [1v3.challenger]
 device = 'cuda:0'
 name = 'mortal'
-state_file = 'checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth'
+state_file = 'checkpoints/s6c/mortal.pth'
+guard_lambda = 10
 stochastic_latent = false
 enable_compile = false
 enable_amp = true

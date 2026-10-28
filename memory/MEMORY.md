@@ -818,11 +818,13 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 
 ### 6.1 工具表（一条命令干一件事）
 
+> **2026-10-28 源码层清理**：已关闭实验的驱动脚本与配置变体（IQL A/B/probe/β 扫、D1/D2、HP 消融、R2/R3 长跑入口、anchor p0~p5 扫描副本）共 **53 个文件**已归档删除（另有 3 个配置因仍被仓库内工具当输入引用而还原）；下面标“（已归档 10-28）”的行仅存于归档包，还原见 `backups/cleanup_20261028/MANIFEST.md`。保留口径：当前主线 s6c（含 `run_s6c.sh`、`run_s6c_chain.sh`、`run_guard_s6c_wave2.sh`）、上一代主链 round4/5、活跃 anchor 工具、基建 `ladder_arm.sh`，以及被本文/工具引用的历史配方（round2/3、offline、grp_h128）。
+
 | 工具 | 用途 |
 |---|---|
 | `mortal/env_check.py` | 开跑前自检：目录遮蔽/环境变量/选卡/config/globs |
 | `mortal/holdout_metrics.py` | 未见月 top1、Q 校准、R²、和了 top1 |
-| `mortal/ladder.py` + `mortal/run_ladder_r3.sh` | 单对/批量双向同牌山对抗；并发必传 log_dir |
+| `mortal/ladder.py` + `mortal/run_ladder_r3.sh` | 单对/批量双向同牌山对抗；并发必传 log_dir（`run_ladder_r3.sh` 已归档 10-28） |
 | `mortal/ladder_arm.sh` | **标准双向臂**：16 块×500 sets/向（可换种子/守卫 λ），自动打印分辨率与判定行 |
 | `tools/training/agg_ladder.py` | 分块 δ/SE/t/95%CI/所需 sets；`--logs-root` 做 block bootstrap |
 | `tools/mjai_score.py` | 计分口径唯一权威（与 `stat.rs`/`rankings.rs` 对齐） |
@@ -832,32 +834,32 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 | `mortal/ev_rerank.py` + `tools/test_ev_rerank.py` + `tools/read_model/eval_ev_rerank.py` | EV 重排实现 + 单测 + 20k 离线诊断 |
 | `mortal/s6c_features.py` + `tools/test_s6c_features.py` + `mortal/run_s6c{,_chain}.sh` | S6c 特征/口径回归/端到端链（默认关闭） |
 | `tools/data_audit/year_style_audit.py` / `build_mix_index.py` | 年代牌风审计 / D1 混入索引 |
-| `mortal/run_mix{,_chain}.sh` / `run_d2{,_chain}.sh` | D1 / D2 端到端链（训练→holdout→ladder→SUMMARY） |
+| `mortal/run_mix{,_chain}.sh` / `run_d2{,_chain}.sh` | D1 / D2 端到端链（训练→holdout→ladder→SUMMARY）**（脚本已归档 10-28，配置留存）** |
 | `tools/akochan_pipe_shim.py` + `tools/akochan_build_notes.md` | akochan pipe 垫片与构建/缺陷记录 |
 | `tools/player_stats/build_whitelist.sh` | 重建强度榜与 topN（813k 文件约 77 s） |
 | `tools/player_stats/whitelist_coverage.py` | 选 topN 前算席位/样本/步数覆盖 |
 | `tools/training/grp_quality_probe.py` | GRP 分位置 hit@1/3/6/9/末、mae、nll |
-| `mortal/run_grp_capacity.sh` | GRP 容量实验（注意 `grp_best.pth` 会被不同尺寸互盖） |
+| `mortal/run_grp_capacity.sh` | GRP 容量实验（注意 `grp_best.pth` 会被不同尺寸互盖）**（已归档 10-28）** |
 | `tools/training/dump_curves.py` / `check_selection_stats.py` / `paired_selection_diff.py` | 曲线/解析交叉校验/同牌山配对差 |
 | `tools/training/make_round{3,4,5}_cfg.sh` | 从上一轮配置派生下一轮 |
 | `mortal/run_round4.sh` / `run_round5.sh` | 端到端链：env_check→暖启→训练→双向判定→汇总 |
 | `tools/training/smoke_round4_augmentation.py` | 启前验白名单+增强样本守恒 |
-| `mortal/launch_round3.sh` / `run_r2_ladder.sh` / `run_ladder_r3.sh` | tmux 长跑入口（内建 env 重置） |
+| `mortal/launch_round3.sh` / `run_r2_ladder.sh` / `run_ladder_r3.sh` | tmux 长跑入口（内建 env 重置）**（均已归档 10-28）** |
 | `tools/tenhou_data/repair_names.py` | 从 mjlog 恢复 2026 names（unquote）写补丁树 |
 | `tools/tenhou_data/verify_names.py` | names 覆盖/席位/白名单命中率验收 |
 | `tools/training/test_file_index_manifest.{py,sh}` | manifest 单测 + E1~E6 回归 |
 | `tools/training/test_reward_modes.py` | 奖励口径/缩放/守卫验证 |
 | `tools/training/inspect_gamma_semantics.py` | 折扣/dones/局边界实测 |
 | `tools/training/test_credit_modes.py` | Stage A 口径五层验证 |
-| `mortal/config.iql_a.toml` + `run_iql_a.sh` | Stage A 端到端链（种子 160000/170000） |
+| `mortal/config.iql_a.toml` + `run_iql_a.sh` | Stage A 端到端链（种子 160000/170000）**（均已归档 10-28）** |
 | `tools/training/test_iql_data.py` | IQL 数据八层验证（next_obs/r_t/terminal/幅度） |
 | `tools/training/diag_iql_reward_double_count.py` | r_t 重复计入诊断（报放大倍数） |
-| `mortal/config.iql_b{,_smoke}.toml` + `run_iql_b{,_smoke}.sh` | Stage B 链 + 行为门禁 |
-| `mortal/config.iql_b_v2.toml` + `run_iql_b_v2.sh` | Stage B v2（漂移轮，已封存） |
-| `mortal/config.iql_b_v3.toml` + `run_iql_b_v3.sh` | Stage B v3（τ=0.5，干净轮） |
-| `tools/training/prepare_iql_probe.py` + `run_iql_probe.sh` | 5 臂×30k 步单旋钮探针 |
-| `tools/training/prepare_iql_b_v3.py` | `--fix tau05` 一键生成 v3 配置 |
-| `tools/training/prepare_hp_ablation.py` / `run_hp_ablation.sh` / `resume_and_judge_hp.sh` | 超参消融/挪卡续训 |
+| `mortal/config.iql_b{,_smoke}.toml` + `run_iql_b{,_smoke}.sh` | Stage B 链 + 行为门禁**（均已归档 10-28）** |
+| `mortal/config.iql_b_v2.toml` + `run_iql_b_v2.sh` | Stage B v2（漂移轮，已封存）；**配置留存（3 个 prepare/diag 工具当输入），脚本已归档 10-28** |
+| `mortal/config.iql_b_v3.toml` + `run_iql_b_v3.sh` | Stage B v3（τ=0.5，干净轮）；**配置留存（TECHNICAL_REPORT 与 prepare_iql_beta_probe 引用），脚本已归档 10-28** |
+| `tools/training/prepare_iql_probe.py` + `run_iql_probe.sh` | 5 臂×30k 步单旋钮探针（脚本已归档 10-28） |
+| `tools/training/prepare_iql_b_v3.py` | `--fix tau05` 一键生成 v3 配置（生成物已归档，工具保留） |
+| `tools/training/prepare_hp_ablation.py` / `run_hp_ablation.sh` / `resume_and_judge_hp.sh` | 超参消融/挪卡续训**（两个 run 脚本已归档 10-28）** |
 | `tools/read_model/` | **读牌模型全部工具**：v1/v2/v2s/v2x/A2b/**A2c(200k 结项 + 官方验收全通过)**/**A2d 20k 探针（RM12 v1 / RM14 aux，均 FAIL）**/A3 + 86 项回归 + ONNX 导出 + A3 规则法（`rule_baseline`/`a3_eval`/`compare_a3`/`calibrate_a3`）+ Bayes 上界（`bayes_bound`/`shanten_fast`）+ 注入探针（`inject_p0`/`precompute_danger`/`eval_s6b_arms`）+ 验收链 `run_a2c_acceptance.sh`（四任务并行）+ 诊断脚本 `diagnostics/`。逐条清单与用法见 `tools/read_model/docs/README.md` §15 与 `diagnostics/README.md` |
 | `s6a_isolated/`（`tools/expand_ckpt_v5.py`、`tools/test_urgency_features.py`、`run_s6a{,_smoke}.sh`、`patches/v5_obs_features.patch`） | S6a 隔离工作区：v4→v5 手术、回归、冒烟、正式链 |
 
@@ -869,8 +871,8 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 | 推理/实验钩子 | `mortal/mortal.py`（推理入口 + 守卫默认 λ=10）、`defense_guard.py`、`ev_rerank.py`、`s6c_features.py`、`one_vs_three.py`（含 `py_vs_ako`）、`agg_anchor.py` |
 | Python 入口 | `mortal/server.py`/`client.py`（在线，暂未用）、`train_grp.py` |
 | Rust 核心 | `libriichi/src/{lib.rs,consts.rs,state/,dataset/,arena/,algo/,mjai/,agent/,bin/}`（`agent/akochan.rs` 为锚点客户端） |
-| 配置 | `mortal/config.example.toml`、`config.round{2,3,4,5}.toml`、`config.iql_a*.toml`、`config.iql_b*.toml`、`config.s6c{,_base,_probe,_smoke}.toml`、`config.mix_v1.toml`、`config.d2_2026.toml`、`config.anchor_ako.toml` |
-| 脚本 | `mortal/run_round{4,5}.sh`、`run_iql_a*.sh`、`run_iql_b*.sh`、`run_hp_ablation.sh`、`run_s6c.sh`、`run_mix.sh`、`run_d2.sh`、`ladder_arm.sh`、`run_anchor.sh` |
+| 配置（现存 15） | `mortal/config.example.toml`、`config.round{2,3,4,5}.toml`、`config.offline.toml`、`config.grp_h128.toml`、`config.s6c{,_base,_probe,_smoke}.toml`、`config.anchor_ako.toml`、`config.iql_b_v2.toml`、`config.iql_b_v3.toml`、`config.mix_v1.toml`（留存原因：仍被仓库内工具/文档当输入引用；+ 生成物 `config.style_*.toml` 5 个） |
+| 脚本（现存 7） | `mortal/run_round{4,5}.sh`、`run_s6c.sh`、`run_s6c_chain.sh`、`run_guard_s6c_wave2.sh`、`ladder_arm.sh`、`run_anchor.sh` |
 | 文档 | `memory/MEMORY.md`（本文）、`memory/NEXT_STEPS_ANALYSIS_20261012.md`、`tools/training/TRAINING_MANUAL.md`、`tools/training/ENV_SETUP_P100.md`、`tools/tenhou_data/TASKLIST.md`、`tools/read_model/docs/README.md`、`tools/akochan_build_notes.md` |
 | 数据索引 | `dataset/index/{player_ratings_*.csv,top_players_*.txt,repair_names_report.json}`；`mortal/indexes/*.pth` |
 

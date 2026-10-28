@@ -169,3 +169,43 @@ V(s,a) = E_draw[ V_off(s') ]  −  Σ_j P(听_j|s')·P(待牌_j = a|s')·E[loss_
 - **B′ 用结果拟合 teacher**：把 `V(a)` 的权重（EV 与 risk 的系数）用「本局最终 rank-pt」回归出来
   （而不是用 κ 猜），本质是「档 A 的价值拟合」；
 - **C 短 rollout**：用真实对局结果做终值，绕开手写价值函数。
+
+---
+
+## 9. 档 C 的可行性结论（2026-10-28）：**可行，路径已找到**
+
+原本担心「没有可用的中局模拟器」。实测 Python 侧暴露了所需 API：
+
+```python
+from libriichi.state import PlayerState
+PlayerState(player_id)        # 空状态
+st.update(event)              # 逐事件推进（mjai 事件字典）
+st.encode_obs()               # 直接产出 v4 obs（1012 行）—— 可用于假想状态的策略推理
+st.tehai / shanten / last_cans ...   # 状态查询
+```
+
+⇒ **一次 k 步 rollout 的完整链路可以全部在 Python 侧跑通**：
+
+```
+用日志前缀事件 → st.update(...) 还原到决策点 s
+  for a in 候选打牌:
+      st' = copy(st)（用「重放前缀 + 替换这一步」实现，见下）
+      st'.update({type:'dahai', actor:me, pai:a, tsumogiri:...})
+      之后 k 步：
+        我方：从未见牌里采样摸牌 → update(tsumo) → encode_obs → 模型选打牌 → update(dahai)
+        对手：用「日志里的后续真实动作」（shadow rollout，不做反事实）或模型近似
+      到 k 步后：V = 折扣 rank-pt 增量 + Q(s_k, best) 的 bootstrap
+  T(s) = argmax_a mean_rollout V
+```
+
+**关键实现细节（已知坑）**
+1. **状态复制**：没有 `clone`，需用「同一批前缀事件重放到 s」来物化每个候选分支；
+   为省时间可把前缀事件缓存，按需重放（一次重放 ~几十个事件，微秒级）。
+2. **对手策略**：先用 **shadow**（照抄日志后续动作）——它无偏采样「对手的真实行为」但不对我方改变做出反应，
+   会低估 risk；若要走强搜索，再换成「模型近似对手」。
+3. **摸牌采样**：从 `st` 的未见牌（obs 的 tiles_seen）里均匀抽，**不要**用日志的真实牌山（那是上帝视角）。
+4. **代价**：单候选单 rollout ≈ k×(encode_obs + 1 次前向) ≈ 8×(0.5ms+2ms) ≈ 20ms；
+   4 候选 × 16 rollout ≈ 1.3 s/状态。20k 状态 ≈ 7 卡时 ⇒ 8 卡并行约 1 h。
+
+**结论**：档 C 不再是「要改 Rust」的工程，而是 **1~2 天的 Python 工作**：
+`tools/ei_rollout.py`（状态物化 + 采样 + 打分）+ teacher 落盘格式 + `train.py` 的 `target_mode='teacher'`。

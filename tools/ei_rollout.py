@@ -47,12 +47,127 @@ def pai_idx(p):
     return TILE_IDX.get(p, -1)
 
 
+SKIP_SELF = ('dahai', 'reach', 'reach_accepted')
+SHADOW_OK = ('tsumo', 'dahai', 'dora')
+
+
+def _load_model(dev):
+    import torch
+    import model as MM
+    import s6c_features as S6
+    st = torch.load('checkpoints/s6c/mortal.pth', map_location='cpu', weights_only=False)
+    ver = st['config']['control'].get('version', 4)
+    _, extra = S6.resolve(st['config']['control'])
+    net = MM.Brain(version=ver, extra_channels=extra, **st['config']['resnet']).eval().to(dev)
+    net.load_state_dict(st['mortal'])
+    dqn = MM.DQN(version=ver).eval().to(dev)
+    dqn.load_state_dict(st['current_dqn'])
+    return net, dqn, ver, extra, S6
+
+
+def rollout_branch(evs, start_i, seat, cand, k, net, dqn, ver, extra, S6, dev):
+    """从我方第 start_i 个事件之后的分支起点出发，打 cand，然后 k 个我方回合。"""
+    import torch
+    st = PlayerState(seat)
+    for e in evs[:start_i + 1]:      # 含我方这次 tsumo（候选牌来自 14 张手牌）
+        st.update(json.dumps(e))
+    _last = st.last_self_tsumo()
+    _tsumo = bool(_last is not None and TILE[cand] == _last)
+    st.update(json.dumps({'type': 'dahai', 'actor': seat, 'pai': TILE[cand],
+                          'tsumogiri': _tsumo}))
+    n_own, trunc = 0, None
+    for e in evs[start_i + 1:]:
+        t = e.get('type'); act = e.get('actor')
+        if t in ('end_kyoku', 'end_game'):
+            break
+        if act == seat and t in SKIP_SELF:
+            continue                      # 我方后续动作由模型重新决定
+        if act == seat and t == 'tsumo':
+            o, _m = st.encode_obs(ver, False)
+            x = S6.attach(o[None], S6.compute(o[None])) if extra else o[None]
+            own = (np.rint(o[:4].sum(0)) > 0) if o.ndim == 2 else (np.rint(o[:4]) > 0)
+            with torch.inference_mode():
+                phi = net(torch.as_tensor(x, dtype=torch.float32).to(dev))
+                mask = torch.zeros(1, 46, dtype=torch.bool, device=dev)
+                mask[0, :34] = torch.as_tensor(own.ravel()).to(dev)
+                q = dqn(phi, mask)[0, :34].float().cpu().numpy()
+            pick = int(np.argmax(np.where(own.ravel(), q, -1e9)))
+            last = st.last_self_tsumo()
+            tsumo_flag = bool(last is not None and TILE[pick] == last)
+            st.update(json.dumps({'type': 'dahai', 'actor': seat, 'pai': TILE[pick],
+                                  'tsumogiri': tsumo_flag}))
+            n_own += 1
+            if n_own >= k:
+                break
+        elif t in SHADOW_OK:
+            st.update(json.dumps(e))
+        else:
+            trunc = t
+            break
+    return dict(shanten=int(st.shanten), n_own=n_own, trunc=trunc, mahai=len(st.tehai))
+
+
+def mode_rollout(a):
+    import time, torch
+    dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    net, dqn, ver, extra, S6 = _load_model(dev)
+    files = sorted(glob.glob('../dataset/mjai/houou4/202609/**/*.json.gz', recursive=True))
+    random.Random(a.seed).shuffle(files)
+    states, branches, trunc_cnt, per_state = 0, 0, {}, []
+    t0 = time.time()
+    for path in files:
+        if states >= a.max_states:
+            break
+        try:
+            evs = load_events(path)
+        except Exception:
+            continue
+        st = PlayerState(0)
+        for i, e in enumerate(evs):
+            try:
+                st.update(json.dumps(e))
+            except Exception:
+                break
+            if e.get('type') != 'tsumo' or e.get('actor') != 0:
+                continue
+            cands = [k for k, c in enumerate(st.tehai) if c > 0][:a.max_cands]
+            if not cands:
+                continue
+            res = []
+            for c in cands:
+                r = rollout_branch(evs, i, 0, c, a.k, net, dqn, ver, extra, S6, dev)
+                branches += 1
+                if r['trunc']:
+                    trunc_cnt[r['trunc']] = trunc_cnt.get(r['trunc'], 0) + 1
+                res.append(r)
+            per_state.append((cands[0], res))
+            states += 1
+            if states % 10 == 0:
+                print(f'  {states} 状态 / {branches} 分支 / {time.time()-t0:.0f}s', flush=True)
+            if states >= a.max_states:
+                break
+    dt = time.time() - t0
+    done = sum(1 for _c, rs in per_state for r in rs if not r['trunc'])
+    print(f'\n[rollout] 状态 {states}、分支 {branches}、完整 {done}'
+          f'（{done/max(branches,1):.3f}）、耗时 {dt:.1f}s（{dt/max(branches,1)*1000:.1f} ms/分支）')
+    print(f'[rollout] 截断原因 {trunc_cnt}')
+    sh = [r['shanten'] for _c, rs in per_state for r in rs if not r['trunc']]
+    if sh:
+        print(f'[rollout] 完整分支的终态向听：均值 {np.mean(sh):.2f}、听牌率 {np.mean([x<=0 for x in sh]):.3f}')
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--games', type=int, default=200)
     ap.add_argument('--max-states', type=int, default=1000)
     ap.add_argument('--seed', type=int, default=20261028)
+    ap.add_argument('--mode', choices=['check', 'rollout'], default='check')
+    ap.add_argument('--k', type=int, default=6, help='rollout 步数（我方回合数）')
+    ap.add_argument('--max-cands', type=int, default=6)
     a = ap.parse_args()
+    if a.mode == 'rollout':
+        return mode_rollout(a)
     files = sorted(glob.glob('../dataset/mjai/houou4/202609/**/*.json.gz', recursive=True))
     random.Random(a.seed).shuffle(files)
 

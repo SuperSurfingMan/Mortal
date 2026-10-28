@@ -209,3 +209,23 @@ st.tehai / shanten / last_cans ...   # 状态查询
 
 **结论**：档 C 不再是「要改 Rust」的工程，而是 **1~2 天的 Python 工作**：
 `tools/ei_rollout.py`（状态物化 + 采样 + 打分）+ teacher 落盘格式 + `train.py` 的 `target_mode='teacher'`。
+
+---
+
+## 10. 档 C 机制自检结果（2026-10-28，**通过**）
+
+`tools/ei_rollout.py`（只验机制，不产 target）：
+
+```
+[check] 游戏 8（成功重放 8、重放异常 0）
+[check] 我方打牌决策 1052；obs 形状 [(1012, 34)]；obs 异常 0
+[check] 分支物化：尝试 1052、成功 1052（1.000）
+```
+
+三个坑（都已修，写下来免得重犯）：
+1. `PlayerState.update()` 收 **JSON 字符串**（不是 dict）：`st.update(json.dumps(ev))`；
+2. `encode_obs` 需要两个参数且返回 **(obs, mask) 元组**：`o, m = st.encode_obs(4, False)`；
+3. 空状态下不要调 `last_cans()`（会抛异常）。
+
+⇒ **状态物化 + 分支可推进**已被证明可行（1052/1052）。下一步才是价值：
+k 步 rollout（我方模型决策、对手 shadow、摸牌从未见牌采样）+ 终值 bootstrap。

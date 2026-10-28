@@ -182,6 +182,21 @@ class DefenseGuard:
         self.n_skip = 0
 
     @torch.inference_mode()
+    def risk(self, obs: torch.Tensor):
+        """单独返回 (B,34) 的放铳危险度（EI teacher 用；不碰 Q）。"""
+        o = obs if obs.device == self.device else obs.to(self.device)
+        o = o.float()
+        own, unseen, river, _riichi = obs_aux_torch(o)
+        w = wait_bias_torch(unseen, river, own)
+        B = o.shape[0]
+        tl = torch.zeros(B, 3, 26, 43, device=self.device)
+        tlm = torch.zeros(B, 3, 26, dtype=torch.bool, device=self.device)
+        out = self.net(o, unseen, w, tl, tlm)
+        wp = out['wait_probs']                                   # (B,3,35)
+        p_tenpai = (1.0 - wp[..., NUM_TILES]).clamp(0.0, 1.0)     # (B,3)
+        r = (p_tenpai[..., None] * wp[..., :NUM_TILES]).sum(1)     # (B,34)
+        return torch.nan_to_num(r, nan=0.0).clamp(0.0, 1.0)
+
     def __call__(self, q_out: torch.Tensor, obs: torch.Tensor,
                  masks: torch.Tensor) -> torch.Tensor:
         if q_out.shape[-1] <= N_DISCARD:

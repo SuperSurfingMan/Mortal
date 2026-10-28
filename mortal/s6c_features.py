@@ -65,7 +65,15 @@ def _data_dir() -> Path:
     env = os.environ.get('MORTAL_S6C_DATA_DIR')
     if env:
         return Path(env)
-    return Path(__file__).resolve().parents[1] / 'libriichi' / 'src' / 'algo' / 'data'
+    # 依次尝试：仓库布局（mortal/../libriichi/...）、发布包布局（app/libriichi_src/...）、
+    # 以及把两个表平铺在包根下的 `libriichi/src/algo/data` 布局。
+    here = Path(__file__).resolve().parent
+    for cand in (here.parent / 'libriichi' / 'src' / 'algo' / 'data',
+                 here / 'libriichi_src' / 'src' / 'algo' / 'data',
+                 here / 'libriichi' / 'src' / 'algo' / 'data'):
+        if (cand / 'shanten_suhai.bin.gz').exists() and (cand / 'shanten_jihai.bin.gz').exists():
+            return cand
+    return here.parent / 'libriichi' / 'src' / 'algo' / 'data'
 
 
 def _load_table(path: Path, size: int) -> np.ndarray:

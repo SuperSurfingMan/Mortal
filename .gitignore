@@ -102,6 +102,13 @@ mortal/config.anchor*_p*.toml
 # *mleague* 通配同时覆盖目录与文件名含 mleague 的散落文件。
 tools/mleague/
 *mleague*
+# ---- 本项目追加（2026-10-27）：风格模仿微调（tools/style_ft/）----
+# 工具与驱动脚本入库；生成的 style 配置是产物（同 anchor 惯例）；
+# checkpoints/style/、indexes/style/、runs/style/ 已被 mortal/checkpoints|indexes|runs/ 覆盖。
+mortal/config.style_*.toml
 # ---- 本项目追加（2026-10-27）：.qoder 规划目录（本地 Agent 产物）不入库 ----
 # 仅锚定仓库根目录，避免误伤未来别处的同名目录。
 /.qoder/
+
+/tools/style_ft/
+/runs/style/

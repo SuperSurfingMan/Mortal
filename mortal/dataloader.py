@@ -1,3 +1,4 @@
+import logging
 import random
 import torch
 import numpy as np
@@ -29,6 +30,7 @@ class FileDatasetsIter(IterableDataset):
         objective = 'cql_mc',
         always_include_kan_select = True,
         extra_features = '',
+        filter_invalid_actions = False,
     ):
         """reward_mode（2026-10-12 加，对应 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
 
@@ -88,6 +90,8 @@ class FileDatasetsIter(IterableDataset):
         self.objective = objective
         self.always_include_kan_select = always_include_kan_select
         self.extra_features = extra_features
+        self.filter_invalid_actions = filter_invalid_actions
+        self.n_filtered = 0
         self.iterator = None
 
     def reward_desc(self):
@@ -173,6 +177,34 @@ class FileDatasetsIter(IterableDataset):
                 at_kyoku = game.take_at_kyoku()
                 dones = game.take_dones()
                 apply_gamma = game.take_apply_gamma()
+
+                # filter_invalid_actions（2026-10-27 加，M-League 风格微调）：丢弃
+                # 「玩家动作不在合法 mask 内」的坏决策点（转换器缺陷，如鸣牌后仍标记
+                # 立直宣言 action=37 而 mask 无 37 位）。M-League 数据实测 18/33602
+                # = 0.054%（diag_mleague.py 定位，坏点 100% 是 riichi）；天凤 houou4
+                # 数据从未触发，默认 False 主线零影响。样本级剔除保留整局其余样本，
+                # per-kyoku 的 kyoku_rewards/player_ranks/grp 不受影响（at_kyoku 的
+                # kyoku 编号值不变，仅删行）。
+                if self.filter_invalid_actions and len(actions) > 0:
+                    actions_np = np.asarray(actions, dtype=np.int64)
+                    masks_np = np.stack(masks)
+                    bad = ~masks_np[np.arange(len(actions_np)), actions_np]
+                    if bad.any():
+                        keep = ~bad
+                        self.n_filtered += int(bad.sum())
+                        logging.warning(
+                            'filter_invalid_actions: 丢弃 %d/%d 坏样本（动作不在合法 mask）',
+                            int(bad.sum()), len(actions_np),
+                        )
+                        obs = obs[keep] if isinstance(obs, np.ndarray) \
+                            else [o for o, k in zip(obs, keep) if k]
+                        if self.oracle:
+                            invisible_obs = [o for o, k in zip(invisible_obs, keep) if k]
+                        actions = [a for a, k in zip(actions, keep) if k]
+                        masks = [m for m, k in zip(masks, keep) if k]
+                        at_kyoku = bytes(b for b, k in zip(at_kyoku, keep) if k)
+                        dones = [d for d, k in zip(dones, keep) if k]
+                        apply_gamma = [g for g, k in zip(apply_gamma, keep) if k]
 
                 # per game
                 grp = game.take_grp()

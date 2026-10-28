@@ -111,6 +111,32 @@ def optimizer_reset_required(saved_token, current_token):
     return current_token is not False and current_token != saved_token
 
 
+def load_frozen_policy(ckpt, device):
+    """加载 KL 锚定的冻结父代策略（bc_style 专属，2026-10-27 风格模仿微调）。
+
+    仿 TestPlayer.__init__：从 ckpt 自带的 config 解析 version/resnet/extra_features，
+    保证锚模型与父代 obs 口径一致（S6c 通道等）；eval() + requires_grad_(False)。
+    返回 (mortal, dqn)，不进 all_models / optimizer / state 保存。
+    """
+    import torch
+    from model import Brain, DQN
+    import s6c_features
+
+    state = torch.load(ckpt, map_location=torch.device('cpu'), weights_only=True)
+    cfg = state['config']
+    version = cfg['control'].get('version', 1)
+    extra_features, extra_channels = s6c_features.resolve(cfg['control'])
+    mortal = Brain(version=version, extra_channels=extra_channels, **cfg['resnet']).to(device)
+    dqn = DQN(version=version).to(device)
+    mortal.load_state_dict(state['mortal'])
+    dqn.load_state_dict(state['current_dqn'])
+    mortal.eval()
+    dqn.eval()
+    mortal.requires_grad_(False)
+    dqn.requires_grad_(False)
+    return mortal, dqn
+
+
 def train():
     import prelude
 
@@ -158,7 +184,23 @@ def train():
     # 搭配）；'iql' = 真 IQL（next_obs bootstrap + expectile V + AWR 政策提取，CQL 关闭）。
     # 两键解耦：iql 模式下忽略 credit_mode（未来回报由 V(s') bootstrap 接管）。
     objective = config['control'].get('objective', 'cql_mc')
-    assert objective in ('cql_mc', 'iql'), f'未知 objective: {objective}'
+    assert objective in ('cql_mc', 'iql', 'bc_style'), f'未知 objective: {objective}'
+    # bc_style（2026-10-27 风格模仿微调）：Q 值当 logits 的行为克隆 + KL 锚定。
+    # 全部新键可选（.get 默认值），老配置路径逐位不变。
+    enable_test_play = bool(config['control'].get('enable_test_play', True))
+    style_cfg = config.get('style', {}) if objective == 'bc_style' else {}
+    kl_weight = float(style_cfg.get('kl_weight', 0.0)) if style_cfg else 0.0
+    kl_state_file = style_cfg.get('kl_state_file', '') if style_cfg else ''
+    trainable = style_cfg.get('trainable', 'full') if style_cfg else 'full'
+    unfreeze_last_blocks = int(style_cfg.get('unfreeze_last_blocks', 4)) if style_cfg else 4
+    logit_temp = float(style_cfg.get('logit_temp', 1.0)) if style_cfg else 1.0
+    if objective == 'bc_style':
+        assert kl_weight >= 0, f'style.kl_weight 应 ≥0：{kl_weight}'
+        if kl_weight > 0:
+            assert kl_state_file, 'style.kl_weight > 0 要求提供 style.kl_state_file（父代 ckpt）'
+        assert trainable in ('head', 'last_blocks', 'full'), f'未知 style.trainable: {trainable}'
+        assert unfreeze_last_blocks >= 0
+        assert logit_temp > 0, f'style.logit_temp 应 >0：{logit_temp}'
     iql_tau = float(config['control'].get('iql_tau', 0.7))      # expectile 分位
     iql_beta = float(config['control'].get('iql_beta', 3.0))    # AWR 优势温度
     ema_decay = float(config['control'].get('ema_decay', 0.995))
@@ -211,6 +253,9 @@ def train():
     augmented_first = config['dataset']['augmented_first']
     # 与部署侧 quick-eval 的 kan-select 口径对照用（默认 True = GameplayLoader 默认，等价历史行为）
     always_include_kan_select = bool(config['dataset'].get('always_include_kan_select', True))
+    # M-League 风格微调（2026-10-27）：丢弃「动作不在合法 mask」的坏决策点
+    # （转换器缺陷，默认 False 天凤数据零影响；见 dataloader.populate_buffer）
+    filter_invalid_actions = bool(config['dataset'].get('filter_invalid_actions', False))
     eps = config['optim']['eps']
     betas = config['optim']['betas']
     weight_decay = config['optim']['weight_decay']
@@ -244,6 +289,13 @@ def train():
             f'v_target_decay={iql_v_target_decay} value_clip={iql_value_clip} '
             '(Q̄ 用 EMA 网络；CQL 关闭；未来回报由 V(s\') bootstrap 接管)'
         )
+    if objective == 'bc_style':
+        trainable_desc = trainable if trainable != 'last_blocks' else f'last_blocks(+{unfreeze_last_blocks})'
+        logging.info(
+            f'bc_style: kl_weight={kl_weight} trainable={trainable_desc} '
+            f'logit_temp={logit_temp}'
+            + (f' kl_anchor={kl_state_file}' if kl_weight > 0 else '（无 KL 锚）')
+        )
     logging.info(f'mortal params: {parameter_count(mortal):,}')
     logging.info(f'dqn params: {parameter_count(dqn):,}')
     logging.info(f'aux params: {parameter_count(aux_net):,}')
@@ -251,6 +303,36 @@ def train():
         logging.info(f'v_net params: {parameter_count(v_net):,}')
 
     mortal.freeze_bn(config['freeze_bn']['mortal'])
+
+    # ---- bc_style 专属：KL 锚模型与可训参数分级（2026-10-27 风格模仿微调）----
+    # frozen_policy 不进 all_models（不参与 optimizer / enable_compile / state 保存 / NaN 守卫）。
+    # trainable 分级必须在 param_groups 构建之前生效：
+    #   'head'        —— 冻结 mortal 全部，只训 dqn/aux 头（<400 局小数据兜底）
+    #   'last_blocks' —— 冻结 encoder 主体，解冻尾部 K 个 ResBlock + 尾部 Conv1d/Linear
+    #   'full'        —— 全解冻（仅 ≥1500 局考虑）
+    # v4 pre_actv 布局（model.py ResNet）：net = [Conv1d, Block×N, BN, actv, Conv1d(192→32), actv, Flatten, Linear]
+    frozen_policy = None
+    if objective == 'bc_style':
+        if kl_weight > 0:
+            frozen_policy = load_frozen_policy(kl_state_file, device)
+            logging.info(f'loaded KL anchor from {kl_state_file}')
+        if trainable in ('head', 'last_blocks'):
+            mortal.requires_grad_(False)
+            if trainable == 'last_blocks':
+                net_children = list(mortal.encoder.net)
+                n_blocks = config['resnet']['num_blocks']
+                assert len(net_children) == n_blocks + 7, \
+                    f'unexpected encoder layout: {len(net_children)} children vs {n_blocks}+7'
+                unfreeze_idx = (
+                    list(range(1 + n_blocks - unfreeze_last_blocks, 1 + n_blocks))   # 最后 K 个 ResBlock
+                    + list(range(3 + n_blocks, len(net_children)))                   # 尾部 Conv1d..Linear
+                )
+                for i in unfreeze_idx:
+                    for p in net_children[i].parameters():
+                        p.requires_grad_(True)
+                n_trainable = sum(p.numel() for p in mortal.parameters() if p.requires_grad)
+                logging.info(f'bc_style: unfroze last {unfreeze_last_blocks} blocks + tail '
+                             f'({n_trainable:,} trainable params in mortal)')
 
     decay_params = []
     no_decay_params = []
@@ -262,8 +344,12 @@ def train():
                 params_dict[name] = param
                 if isinstance(mod, (nn.Linear, nn.Conv1d)) and name.endswith('weight'):
                     to_decay.add(name)
-        decay_params.extend(params_dict[name] for name in sorted(to_decay))
-        no_decay_params.extend(params_dict[name] for name in sorted(params_dict.keys() - to_decay))
+        # requires_grad 过滤：现役路径（cql_mc/iql）所有参数均可训，过滤是恒等操作；
+        # bc_style 的 head/last_blocks 档依赖此过滤避免冻结参数进 AdamW。
+        decay_params.extend(params_dict[name] for name in sorted(to_decay)
+                            if params_dict[name].requires_grad)
+        no_decay_params.extend(params_dict[name] for name in sorted(params_dict.keys() - to_decay)
+                               if params_dict[name].requires_grad)
     param_groups = [
         {'params': decay_params, 'weight_decay': weight_decay},
         {'params': no_decay_params},
@@ -271,7 +357,9 @@ def train():
     optimizer = optim.AdamW(param_groups, lr=1, weight_decay=0, betas=betas, eps=eps)
     scheduler = LinearWarmUpCosineAnnealingLR(optimizer, **config['optim']['scheduler'])
     scaler = GradScaler(device.type, enabled=enable_amp)
-    test_player = TestPlayer()
+    test_player = TestPlayer() if enable_test_play else None
+    if not enable_test_play:
+        logging.info('test play disabled (control.enable_test_play=false)')
     # 哨兵值取最差档（4 人局 avg_rank 4 / avg_pt −135），保证首次评测必定为新纪录
     init_best_perf = {
         'avg_rank': 4.,
@@ -321,6 +409,14 @@ def train():
             scaler.load_state_dict(state['scaler'])
         best_perf = state['best_perf']
         steps = state['steps']
+        # 短程微调（2026-10-27，bc_style/风格微调）：暖启父代 ckpt 携带主线 steps
+        # （如 s6c 的 940k），会立刻命中下方 max_train_steps 预算检查而零步退出。
+        # 可选键 control.reset_steps=true 把计数器归零（scheduler 已由
+        # reset_optimizer 令牌重建、从 0 重新 warmup，不依赖 steps）。老配置不写
+        # 此键 → 行为逐位不变。
+        if bool(config['control'].get('reset_steps', False)):
+            logging.info(f'resetting steps {steps:,} → 0 (control.reset_steps=true)')
+            steps = 0
 
         if reset_token is not False and reset_token != saved_token:
             reason = (f'config 里 control.reset_best_perf={reset_token!r} 与上次记录 '
@@ -406,6 +502,15 @@ def train():
             'awr_w_ess': 0,
             'awr_w_p99': 0,
             'awr_w_max': 0,
+            'next_rank_loss': 0,
+        }
+    elif objective == 'bc_style':
+        # agreement_batch 仅供训练侧过拟合监控（持续高位而 holdout 回落 = 记忆训练集），
+        # 交付指标一律用 holdout 的 eval_agreement。
+        stats = {
+            'ce_loss': 0,
+            'kl_loss': 0,
+            'agreement_batch': 0,
             'next_rank_loss': 0,
         }
     else:
@@ -518,9 +623,11 @@ def train():
             reward_scale = reward_scale,
             credit_mode = credit_mode,
             gamma = gamma,
-            objective = objective,
+            # bc_style 复用 cql_mc 条目格式（reward 字段在训练端忽略）
+            objective = 'cql_mc' if objective == 'bc_style' else objective,
             always_include_kan_select = always_include_kan_select,
             extra_features = extra_features,
+            filter_invalid_actions = filter_invalid_actions,
         )
         logging.info(f'reward: {file_data.reward_desc()}')
         data_loader = iter(DataLoader(
@@ -607,6 +714,38 @@ def train():
                         awr_loss,
                         next_rank_loss * next_rank_weight,
                     ))
+            elif objective == 'bc_style':
+                # 风格模仿（2026-10-27）：Q 值当 logits 的行为克隆 + KL 锚定。
+                # 非法动作位在 DQN 输出已是 -inf（model.py masked_fill），log_softmax
+                # 天然只在合法动作上归一。KL 必须「先做差再掩码」：非法位两侧 -inf
+                # 相减为 NaN，且 0×NaN=NaN 会污染整个 sum（P2 有合成 batch 单测）。
+                with torch.autocast(device.type, enabled=enable_amp):
+                    phi = mortal(obs)
+                    q_out = dqn(phi, masks)
+                    if logit_temp != 1.0:
+                        q_out = q_out / logit_temp
+                    logp = q_out.log_softmax(dim=-1)
+                    ce_loss = -logp[range(batch_size), actions].mean()
+
+                    kl_loss = q_out.new_zeros(())
+                    if kl_weight > 0:
+                        with torch.no_grad():
+                            q_base = frozen_policy[1](frozen_policy[0](obs), masks)
+                            if logit_temp != 1.0:
+                                q_base = q_base / logit_temp
+                            logp_base = q_base.log_softmax(dim=-1)
+                        diff = (logp - logp_base).masked_fill(~masks, 0.)
+                        kl_loss = (diff * logp.exp()).sum(dim=-1).mean() * kl_weight
+
+                    next_rank_logits, = aux_net(phi)
+                    next_rank_loss = ce(next_rank_logits, player_ranks)
+
+                    loss = ce_loss + kl_loss + next_rank_loss * next_rank_weight
+
+                # 监控用：批内 top-1 命中率与 Q 尺度（all_q_target 占位 = q，bc 无回归目标）
+                with torch.inference_mode():
+                    q = q_out[range(batch_size), actions]
+                q_target_mc = q
             else:
                 steps_to_done = steps_to_done.to(dtype=torch.int64, device=device)
                 kyoku_rewards = kyoku_rewards.to(dtype=torch.float64, device=device)
@@ -647,6 +786,10 @@ def train():
                     stats['awr_w_ess'] += 1.0 / w.pow(2).mean().clamp_min(1e-12)
                     stats['awr_w_p99'] += w.quantile(0.99)
                     stats['awr_w_max'] += w.max()
+                elif objective == 'bc_style':
+                    stats['ce_loss'] += ce_loss
+                    stats['kl_loss'] += kl_loss
+                    stats['agreement_batch'] += (q_out.argmax(dim=-1) == actions).float().mean()
                 else:
                     stats['dqn_loss'] += dqn_loss
                     if not online:
@@ -709,6 +852,11 @@ def train():
                             f' | awr_w ess={stats["awr_w_ess"] / save_every:.3f} p99={stats["awr_w_p99"] / save_every:.2f} max={stats["awr_w_max"] / save_every:.1f}'
                             f' | v_ema={"on" if v_ema is not None else "off"}'
                         )
+                elif objective == 'bc_style':
+                    writer.add_scalar('loss/ce_loss', stats['ce_loss'] / save_every, steps)
+                    writer.add_scalar('loss/kl_loss', stats['kl_loss'] / save_every, steps)
+                    writer.add_scalar('style/agreement_batch',
+                                      stats['agreement_batch'] / save_every, steps)
                 else:
                     writer.add_scalar('loss/dqn_loss', stats['dqn_loss'] / save_every, steps)
                     if not online:
@@ -795,7 +943,7 @@ def train():
                     submit_param(mortal, dqn, is_idle=False)
                     logging.info('param has been submitted')
 
-                if steps % test_every == 0:
+                if steps % test_every == 0 and enable_test_play:
                     stat = test_player.test_play(test_games // 4, mortal, dqn, device)
                     mortal.train()
                     dqn.train()

@@ -110,5 +110,8 @@ mortal/config.style_*.toml
 # 仅锚定仓库根目录，避免误伤未来别处的同名目录。
 /.qoder/
 
-/tools/style_ft/
+# 工具与文档入库（2026-10-28 修正：原先误把 tools/style_ft/ 整目录忽略，
+# 与本段注释「工具与驱动脚本入库」自相矛盾；跑批产物 runs/style/ 仍忽略）
+# diag_mleague.py 是工具，文件名含 mleague 被上面 *mleague* 误伤，此处例外
+!tools/style_ft/diag_mleague.py
 /runs/style/

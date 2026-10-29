@@ -53,10 +53,30 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--games', type=int, default=120)
     ap.add_argument('--seed', type=int, default=20261029)
+    ap.add_argument('--model', action='store_true', help='同时评估现役模型的选择')
     a = ap.parse_args()
     files = sorted(glob.glob('../dataset/mjai/houou4/202609/**/*.json.gz', recursive=True))
     random.Random(a.seed).shuffle(files)
 
+    MDL = None
+    if a.model:
+        import torch
+        import model as MM
+        import s6c_features as S6
+        global NET, DQN, DEV, VER, EXTRA, S6G
+        DEV = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        stk = torch.load('checkpoints/s6c/mortal.pth', map_location='cpu', weights_only=False)
+        VER = stk['config']['control'].get('version', 4)
+        _, EXTRA = S6.resolve(stk['config']['control'])
+        NET = MM.Brain(version=VER, extra_channels=EXTRA, **stk['config']['resnet']).eval().to(DEV)
+        NET.load_state_dict(stk['mortal'])
+        DQN = MM.DQN(version=VER).eval().to(DEV)
+        DQN.load_state_dict(stk['current_dqn'])
+        S6G = S6
+        MDL = True
+        print(f'[oracle] 模型已加载 steps={stk.get("steps")} extra={EXTRA}', flush=True)
+    m_push = m_fold = m_bad = 0
+    m_loss = []
     n_state = n_tenpai = 0
     lh, ls = [], []
     fold = push = safe_avail = 0
@@ -83,7 +103,25 @@ def main():
                 w, tehai = snap
                 snap = None
                 n_state += 1
-                loss = w.sum(0).astype(np.float64) * 3000.0
+                # 对手逐个定权：立直 5200 / 默听 3500 / 副露 3000
+                pt = np.zeros(3, np.float64)
+                for k, j in enumerate((1, 2, 3)):
+                    try:
+                        ri = bool(sts[j].self_riichi_accepted)
+                    except Exception:
+                        ri = False
+                    meld = False
+                    for attr in ('pons', 'chis', 'minkans', 'ankans', 'kakan_candidates'):
+                        try:
+                            v = getattr(sts[j], attr)
+                            v = v() if callable(v) else v
+                            if v:
+                                meld = True
+                                break
+                        except Exception:
+                            pass
+                    pt[k] = 5200.0 if ri else (3000.0 if meld else 3500.0)
+                loss = (w * pt[:, None]).sum(0).astype(np.float64)
                 if loss.max() <= 0:
                     continue
                 n_tenpai += 1
@@ -102,6 +140,27 @@ def main():
                     push += 1
                     if l_min == 0:
                         safe_avail += 1
+                if MDL is not None:
+                    try:
+                        o, _m = sts[0].encode_obs(VER, False)
+                        own_m = (np.rint(o[:4].sum(0)) > 0) if o.ndim == 2 else (np.rint(o[:4]) > 0)
+                        xx = S6.attach(o[None], S6.compute(o[None])) if EXTRA else o[None]
+                        with torch.inference_mode():
+                            phi = NET(torch.as_tensor(xx, dtype=torch.float32).to(DEV))
+                            mk = torch.zeros(1, 46, dtype=torch.bool, device=DEV)
+                            mk[0, :34] = torch.as_tensor(own_m).to(DEV)
+                            qq = DQN(phi, mk)[0, :34].float().cpu().numpy()
+                        pick = int(np.argmax(np.where(own_m, qq, -1e9)))
+                        l_m = float(loss[pick])
+                        m_loss.append(l_m)
+                        if l_m > 0:
+                            m_push += 1
+                            if l_min == 0:
+                                m_bad += 1
+                        else:
+                            m_fold += 1
+                    except Exception:
+                        pass
         if not ok:
             continue
 
@@ -114,6 +173,11 @@ def main():
     print(f'[oracle] 期望失点：人类 {lh.mean():.0f} / 最安全 {ls.mean():.0f} / 可省 {lh.mean()-ls.mean():+.0f}')
     print(f'[oracle] 打危险牌时其实有安全牌可取的比例 {safe_avail/max(push,1):.3f}')
     print(f'[oracle] 零失误下可避免的失点占比 {1 - ls.mean()/max(lh.mean(),1e-9):.3f}')
+    if MDL is not None and m_loss:
+        ml = np.asarray(m_loss)
+        print(f'[模型] 打安全牌 {m_fold/max(m_fold+m_push,1):.3f} / 打危险牌 {m_push/max(m_fold+m_push,1):.3f}')
+        print(f'[模型] 期望失点 {ml.mean():.0f}（人类 {lh.mean():.0f}）')
+        print(f'[模型] 打危险牌时**有安牌可取**的比例 {m_bad/max(m_push,1):.3f}')
     return 0
 
 

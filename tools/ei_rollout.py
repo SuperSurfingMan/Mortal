@@ -66,45 +66,61 @@ def _load_model(dev):
 
 
 def rollout_branch(evs, start_i, seat, cand, k, net, dqn, ver, extra, S6, dev):
-    """从我方第 start_i 个事件之后的分支起点出发，打 cand，然后 k 个我方回合。"""
+    """从我方第 start_i 个事件（tsumo）之后出发，打 cand，再走 k 个我方回合。
+
+    返回真实终值：本局**我方累计点数变化**（`hora`/`ryukyoku` 的 deltas），
+    并记录 `deal_in`（放铳）与是否走到本局结束（`ended`）。
+    """
     import torch
     st = PlayerState(seat)
-    for e in evs[:start_i + 1]:      # 含我方这次 tsumo（候选牌来自 14 张手牌）
+    for e in evs[:start_i + 1]:
         st.update(json.dumps(e))
     _last = st.last_self_tsumo()
     _tsumo = bool(_last is not None and TILE[cand] == _last)
     st.update(json.dumps({'type': 'dahai', 'actor': seat, 'pai': TILE[cand],
                           'tsumogiri': _tsumo}))
-    n_own, trunc = 0, None
+    n_own, val, deal_in, ended, skipped = 0, 0.0, 0, False, 0
     for e in evs[start_i + 1:]:
         t = e.get('type'); act = e.get('actor')
+        if t == 'hora':
+            if e.get('target') == seat:
+                deal_in = 1
+            dl = e.get('deltas') or [0, 0, 0, 0]
+            val += float(dl[seat]); ended = True
+            break
+        if t == 'ryukyoku':
+            dl = e.get('deltas') or [0, 0, 0, 0]
+            val += float(dl[seat]); ended = True
+            break
         if t in ('end_kyoku', 'end_game'):
+            ended = True
             break
         if act == seat and t in SKIP_SELF:
-            continue                      # 我方后续动作由模型重新决定
+            continue
         if act == seat and t == 'tsumo':
             o, _m = st.encode_obs(ver, False)
-            x = S6.attach(o[None], S6.compute(o[None])) if extra else o[None]
             own = (np.rint(o[:4].sum(0)) > 0) if o.ndim == 2 else (np.rint(o[:4]) > 0)
+            x = S6.attach(o[None], S6.compute(o[None])) if extra else o[None]
             with torch.inference_mode():
                 phi = net(torch.as_tensor(x, dtype=torch.float32).to(dev))
                 mask = torch.zeros(1, 46, dtype=torch.bool, device=dev)
                 mask[0, :34] = torch.as_tensor(own.ravel()).to(dev)
                 q = dqn(phi, mask)[0, :34].float().cpu().numpy()
-            pick = int(np.argmax(np.where(own.ravel(), q, -1e9)))
+            pick = int(np.argmax(np.where(own, q, -1e9)))
             last = st.last_self_tsumo()
-            tsumo_flag = bool(last is not None and TILE[pick] == last)
             st.update(json.dumps({'type': 'dahai', 'actor': seat, 'pai': TILE[pick],
-                                  'tsumogiri': tsumo_flag}))
+                                  'tsumogiri': bool(last is not None and TILE[pick] == last)}))
             n_own += 1
             if n_own >= k:
                 break
-        elif t in SHADOW_OK:
+            continue
+        # 其余事件：优先「照抄」，失败则**跳过**（B：不因鸣牌/立直直接截断）
+        try:
             st.update(json.dumps(e))
-        else:
-            trunc = t
-            break
-    return dict(shanten=int(st.shanten), n_own=n_own, trunc=trunc, mahai=len(st.tehai))
+        except Exception:
+            skipped += 1
+    return dict(shanten=int(st.shanten), n_own=n_own, ended=ended, val=val,
+                deal_in=deal_in, skip=skipped)
 
 
 def mode_rollout(a):
@@ -113,7 +129,9 @@ def mode_rollout(a):
     net, dqn, ver, extra, S6 = _load_model(dev)
     files = sorted(glob.glob('../dataset/mjai/houou4/202609/**/*.json.gz', recursive=True))
     random.Random(a.seed).shuffle(files)
-    states, branches, trunc_cnt, per_state = 0, 0, {}, []
+    states, branches, skipped = 0, 0, 0
+    ended_n, deal_n, win_n, lose_n, tie_n = 0, 0, 0, 0, 0
+    per_state = []
     t0 = time.time()
     for path in files:
         if states >= a.max_states:
@@ -130,30 +148,56 @@ def mode_rollout(a):
                 break
             if e.get('type') != 'tsumo' or e.get('actor') != 0:
                 continue
-            cands = [k for k, c in enumerate(st.tehai) if c > 0][:a.max_cands]
-            if not cands:
+            human = None
+            for e2 in evs[i + 1:]:
+                if e2.get('type') == 'dahai' and e2.get('actor') == 0:
+                    human = pai_idx(e2.get('pai')); break
+                if e2.get('type') in ('hora', 'ryukyoku', 'end_kyoku'):
+                    break
+            cands = [k for k, c in enumerate(st.tehai) if c > 0]
+            if not cands or human is None or human < 0 or int(st.tehai[human]) <= 0:
                 continue
-            res = []
+            cands = cands[:a.max_cands]
+            if human not in cands:
+                cands = [human] + cands[:a.max_cands - 1]
+            res = {}
             for c in cands:
                 r = rollout_branch(evs, i, 0, c, a.k, net, dqn, ver, extra, S6, dev)
                 branches += 1
-                if r['trunc']:
-                    trunc_cnt[r['trunc']] = trunc_cnt.get(r['trunc'], 0) + 1
-                res.append(r)
-            per_state.append((cands[0], res))
+                skipped += r['skip']
+                if r['ended']:
+                    ended_n += 1
+                    if r['deal_in']:
+                        deal_n += 1
+                res[c] = r
+            per_state.append((human, res))
             states += 1
-            if states % 10 == 0:
+            if states % 20 == 0:
                 print(f'  {states} 状态 / {branches} 分支 / {time.time()-t0:.0f}s', flush=True)
-            if states >= a.max_states:
-                break
     dt = time.time() - t0
-    done = sum(1 for _c, rs in per_state for r in rs if not r['trunc'])
-    print(f'\n[rollout] 状态 {states}、分支 {branches}、完整 {done}'
-          f'（{done/max(branches,1):.3f}）、耗时 {dt:.1f}s（{dt/max(branches,1)*1000:.1f} ms/分支）')
-    print(f'[rollout] 截断原因 {trunc_cnt}')
-    sh = [r['shanten'] for _c, rs in per_state for r in rs if not r['trunc']]
-    if sh:
-        print(f'[rollout] 完整分支的终态向听：均值 {np.mean(sh):.2f}、听牌率 {np.mean([x<=0 for x in sh]):.3f}')
+    print(f'\n[rollout] 状态 {states}、分支 {branches}、走到本局结束 {ended_n}'
+          f'（{ended_n/max(branches,1):.3f}）、其中放铳 {deal_n}、跳过事件 {skipped}')
+    print(f'[rollout] 耗时 {dt:.1f}s（{dt/max(branches,1)*1000:.1f} ms/分支）')
+
+    # 自洽性：人类动作的终值是否优于其它候选（同状态配对比较）
+    for human, res in per_state:
+        hv = res[human]
+        if not hv['ended']:
+            continue
+        for c, r in res.items():
+            if c == human or not r['ended']:
+                continue
+            if hv['val'] > r['val']:
+                win_n += 1
+            elif hv['val'] < r['val']:
+                lose_n += 1
+            else:
+                tie_n += 1
+    tot = win_n + lose_n + tie_n
+    if tot:
+        print(f'[自洽] 人类动作 vs 其它候选（同状态配对，真实点数终值）：'
+              f'胜 {win_n/tot:.3f} / 负 {lose_n/tot:.3f} / 平 {tie_n/tot:.3f}（n={tot}）')
+        print(f'[判读] 胜率应 >0.55 才算 rollout 终值可信；≈0.5 说明 k 步信号不足')
     return 0
 
 
@@ -163,7 +207,7 @@ def main():
     ap.add_argument('--max-states', type=int, default=1000)
     ap.add_argument('--seed', type=int, default=20261028)
     ap.add_argument('--mode', choices=['check', 'rollout'], default='check')
-    ap.add_argument('--k', type=int, default=6, help='rollout 步数（我方回合数）')
+    ap.add_argument('--k', type=int, default=2, help='rollout 步数（我方回合数）')
     ap.add_argument('--max-cands', type=int, default=6)
     a = ap.parse_args()
     if a.mode == 'rollout':

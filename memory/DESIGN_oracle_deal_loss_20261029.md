@@ -109,3 +109,30 @@ loss[a]   = danger[a] × 3000 点     （先按每家 3000 粗算，立直应改
 ### 已产出的资产
 - `tools/oracle_deal_loss.py`（`--model` 可对比人类与模型；4 席 `PlayerState` 同步重放；
   损失权重按立直/默听/副露区分）。
+
+---
+
+## 8. EV_push − EV_fold 首跑（2026-10-29）：**口径未接通（Δ 全 0）**
+
+`tools/oracle_push_fold.py --games 100 --model`：
+
+```
+[push] 我方决策 12,629；有人听牌 4,369
+[全部有人听牌]: n=4369  中位 Δ=+0  Δ>0 0.000  Δ<0 0.000
+[人类推了对攻]: n=144    —— 该推 0 / 该弃 0
+[模型推了对攻]: n=134    —— 该推 0 / 该弃 0
+```
+
+**Δ 恒等于 0 ⇒ `atk(a)`（SP 项）全为 0**，不是「人类恰好都对」。
+
+可能原因（按概率排序）：
+1. `ev_rerank.sp_features()` 对 `encode_obs` 产出的 obs **不认为被覆盖**（`covered=False`），
+   于是 `ev_norm` 返回全 0；档 B 的 `ei_teacher.py` 用的是 read-model harness 的 obs，那里是有效的；
+2. `max_ev` 在该状态下为 0（未听牌/无有效进张时的默认值），乘出来也是 0；
+3. 行号假设（SP 表在 961..1011）与 `encode_obs` 的实际布局不一致。
+
+**排查方法**：对同一局同一步，分别用
+(a) `sts[0].encode_obs(4, False)` 与 (b) `GameplayLoader` 的 obs，比较 `sp_features` 的
+`covered / max_ev / ev_norm.sum()`，即可定位是布局问题还是覆盖问题。
+
+在修好之前，**Δ 的分布没有结论**；人类的 3.2% 对攻是否值得，仍未知。

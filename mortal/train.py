@@ -602,6 +602,32 @@ def train():
                     f'file index 已写入 {file_index}（n_files={len(file_list):,}'
                     + (f', names_coverage={names_coverage}' if names_coverage else '') + '）'
                 )
+        # ---- 档 A：自博弈日志注入（2026-10-29）----
+        # `dataset.extra_logs`：目录或 glob 列表；`dataset.extra_repeat`：重复次数
+        # （>1 等价于给自博弈样本加权，无需改损失代码）。
+        # 注意：**不写入 file_index 的 manifest**，避免既有索引失效重建。
+        extra_logs = config['dataset'].get('extra_logs') or []
+        extra_repeat = int(config['dataset'].get('extra_repeat', 1) or 1)
+        if extra_logs:
+            extra_files = []
+            for pat in extra_logs:
+                pat = str(pat)
+                if path.isdir(pat):
+                    extra_files.extend(glob(path.join(pat, '**', '*.json.gz'), recursive=True))
+                else:
+                    extra_files.extend(glob(pat, recursive=True))
+            extra_files = sorted(set(extra_files))
+            if extra_repeat > 1:
+                extra_files = extra_files * extra_repeat
+                random.shuffle(extra_files)
+            file_list = list(file_list) + extra_files
+            logging.info(
+                f'extra_logs: {len(extra_logs)} 个来源 → {len(set(extra_files)):,} 个文件'
+                f'（repeat={extra_repeat}，注入后 {len(file_list):,}）'
+            )
+        else:
+            logging.info('extra_logs: 未配置（仅用人类数据）')
+
         logging.info(f'file list size: {len(file_list):,}')
 
         before_next_test_play = (test_every - steps % test_every) % test_every

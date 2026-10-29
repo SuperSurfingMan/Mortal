@@ -65,7 +65,7 @@ def _load_model(dev):
     return net, dqn, ver, extra, S6
 
 
-def rollout_branch(evs, start_i, seat, cand, k, net, dqn, ver, extra, S6, dev):
+def rollout_branch(evs, start_i, seat, cand, k, net, dqn, ver, extra, S6, dev, rng=None):
     """从我方第 start_i 个事件（tsumo）之后出发，打 cand，再走 k 个我方回合。
 
     返回真实终值：本局**我方累计点数变化**（`hora`/`ryukyoku` 的 deltas），
@@ -98,6 +98,19 @@ def rollout_branch(evs, start_i, seat, cand, k, net, dqn, ver, extra, S6, dev):
         if act == seat and t in SKIP_SELF:
             continue
         if act == seat and t == 'tsumo':
+            # ★ 先应用摸牌（修复：原实现漏了这一步，手牌永远 13 张）；
+            #   rng 不为空时，从「未见牌」里随机抽一张代替日志的牌（M 采样）
+            if rng is None:
+                st.update(json.dumps(e))
+            else:
+                o0, _m0 = st.encode_obs(ver, False)
+                seen = o0[835:835 + 34].max(0) > 0 if o0.ndim == 2 else o0[835:835 + 34] > 0
+                pool = np.flatnonzero(~seen)
+                if len(pool) == 0:
+                    st.update(json.dumps(e))
+                else:
+                    st.update(json.dumps({'type': 'tsumo', 'actor': seat,
+                                          'pai': TILE[int(rng.choice(pool))]}))
             o, _m = st.encode_obs(ver, False)
             own = (np.rint(o[:4].sum(0)) > 0) if o.ndim == 2 else (np.rint(o[:4]) > 0)
             x = S6.attach(o[None], S6.compute(o[None])) if extra else o[None]
@@ -168,7 +181,17 @@ def mode_rollout(a):
                 cands = [human] + cands[:a.max_cands - 1]
             res = {}
             for c in cands:
-                r = rollout_branch(evs, i, 0, c, a.k, net, dqn, ver, extra, S6, dev)
+                runs = []
+                for m in range(a.m):
+                    rng = None if a.m == 1 else random.Random(a.seed * 7919 + i * 31 + c * 7 + m)
+                    r = rollout_branch(evs, i, 0, c, a.k, net, dqn, ver, extra, S6, dev, rng)
+                    runs.append(r)
+                r = runs[0]
+                if a.m > 1:      # 多采样：真实终点取均值；否则 bootstrap 后面统一处理
+                    reals = [x['val'] * a.pt2rank for x in runs if x['ended']]
+                    r = dict(r)
+                    r['val'] = float(np.mean(reals)) / a.pt2rank if reals else 0.0
+                    r['ended'] = bool(reals)
                 branches += 1
                 skipped += r['skip']
                 if r['ended']:
@@ -247,6 +270,7 @@ def main():
     ap.add_argument('--mode', choices=['check', 'rollout'], default='check')
     ap.add_argument('--k', type=int, default=2, help='rollout 步数（我方回合数）')
     ap.add_argument('--max-cands', type=int, default=6)
+    ap.add_argument('--m', type=int, default=1, help='每候选采样次数（墙牌随机）')
     ap.add_argument('--pt2rank', type=float, default=5e-5,
                     help='点数→rank-pt 的汇率（默认 5e-5：±8000 点 ≈ ±0.4 rank-pt）')
     a = ap.parse_args()

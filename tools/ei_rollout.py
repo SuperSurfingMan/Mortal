@@ -114,13 +114,19 @@ def rollout_branch(evs, start_i, seat, cand, k, net, dqn, ver, extra, S6, dev):
             if n_own >= k:
                 break
             continue
-        # 其余事件：优先「照抄」，失败则**跳过**（B：不因鸣牌/立直直接截断）
+        if t in ('chi', 'pon', 'daiminkan', 'ankan', 'kakan', 'reach'):
+            skipped += 1
+            break                      # B 回退：鸣牌/立直一律截断（跳过会污染状态）
         try:
             st.update(json.dumps(e))
         except Exception:
             skipped += 1
+    try:
+        cut_obs = st.encode_obs(ver, False)[0]
+    except Exception:
+        cut_obs = None
     return dict(shanten=int(st.shanten), n_own=n_own, ended=ended, val=val,
-                deal_in=deal_in, skip=skipped)
+                deal_in=deal_in, skip=skipped, cut_obs=cut_obs)
 
 
 def mode_rollout(a):
@@ -179,17 +185,49 @@ def mode_rollout(a):
           f'（{ended_n/max(branches,1):.3f}）、其中放铳 {deal_n}、跳过事件 {skipped}')
     print(f'[rollout] 耗时 {dt:.1f}s（{dt/max(branches,1)*1000:.1f} ms/分支）')
 
+    # ---- 混合终值：结束分支用真实点数×PT2RANK；截断分支用 Q bootstrap ----
+    import torch as _t
+    pend = [(si, c, r) for si, (_h, rs) in enumerate(per_state) for c, r in rs.items()
+            if (not r['ended']) and r.get('cut_obs') is not None]
+    boot = {}
+    if pend:
+        obsv = np.stack([r['cut_obs'] for _si, _c, r in pend]).astype(np.float32)
+        if extra:
+            obsv = S6.attach(obsv, S6.compute(obsv))
+        ownv = np.rint(obsv[:, :4].sum(1)) > 0
+        with _t.inference_mode():
+            phis = []
+            for i0 in range(0, len(obsv), 512):
+                phis.append(net(_t.as_tensor(obsv[i0:i0 + 512]).to(dev)))
+            phi = _t.cat(phis)
+            mk = _t.zeros(phi.shape[0], 46, dtype=_t.bool, device=dev)
+            mk[:, :34] = _t.as_tensor(ownv).to(dev)
+            qq = _t.as_tensor(dqn(phi, mk)[:, :34].float().cpu().numpy())
+        qq = np.where(ownv, qq, -1e9)
+        for (si, c, _r), v in zip(pend, qq.max(1)):
+            boot[(si, c)] = float(v)
+    n_real = n_boot = n_none = 0
+    for si, (_h, rs) in enumerate(per_state):
+        for c, r in rs.items():
+            if r['ended']:
+                r['V'] = r['val'] * a.pt2rank; n_real += 1
+            elif (si, c) in boot:
+                r['V'] = boot[(si, c)]; n_boot += 1
+            else:
+                r['V'] = np.nan; n_none += 1
+    print(f'[终值] 真实点数 {n_real} / bootstrap {n_boot} / 无值 {n_none}（PT2RANK={a.pt2rank}）')
+
     # 自洽性：人类动作的终值是否优于其它候选（同状态配对比较）
     for human, res in per_state:
         hv = res[human]
-        if not hv['ended']:
+        if not np.isfinite(hv['V']):
             continue
         for c, r in res.items():
-            if c == human or not r['ended']:
+            if c == human or not np.isfinite(r['V']):
                 continue
-            if hv['val'] > r['val']:
+            if hv['V'] > r['V']:
                 win_n += 1
-            elif hv['val'] < r['val']:
+            elif hv['V'] < r['V']:
                 lose_n += 1
             else:
                 tie_n += 1
@@ -209,6 +247,8 @@ def main():
     ap.add_argument('--mode', choices=['check', 'rollout'], default='check')
     ap.add_argument('--k', type=int, default=2, help='rollout 步数（我方回合数）')
     ap.add_argument('--max-cands', type=int, default=6)
+    ap.add_argument('--pt2rank', type=float, default=5e-5,
+                    help='点数→rank-pt 的汇率（默认 5e-5：±8000 点 ≈ ±0.4 rank-pt）')
     a = ap.parse_args()
     if a.mode == 'rollout':
         return mode_rollout(a)

@@ -83,7 +83,7 @@ def main():
         DQN.load_state_dict(stk['current_dqn'])
         print(f'[push] 模型已加载 steps={stk.get("steps")}', flush=True)
 
-    n_state = n_tp = 0
+    n_state = n_tp = n_unknown = n_nofold = 0
     deltas, deltas_hpush, deltas_mpush = [], [], []
     h_correct = h_wrong = m_correct = m_wrong = 0
     for path in files[:a.games]:
@@ -103,10 +103,14 @@ def main():
                 ok = False
                 break
             if t == 'tsumo' and e.get('actor') == 0:
+                try:
+                    _o = sts[0].encode_obs(VER, False)[0]
+                except Exception:
+                    _o = None
                 snap = (np.stack([as34(sts[j].waits) for j in (1, 2, 3)]),
-                        as34(sts[0].tehai))
+                        as34(sts[0].tehai), _o)
             elif t == 'dahai' and e.get('actor') == 0 and snap is not None:
-                w, tehai = snap
+                w, tehai, o_snap = snap
                 snap = None
                 n_state += 1
                 if w.sum() == 0:
@@ -133,20 +137,29 @@ def main():
                 own = np.flatnonzero(om34)
                 if own.size == 0:
                     continue
-                try:
-                    o, _m = sts[0].encode_obs(VER, False)
-                except Exception:
+                if o_snap is None:
                     continue
-                sp = E.sp_features(o[None] if o.ndim == 2 else o)
-                atk = (sp['ev_norm'][0] * sp['max_ev'][0]).astype(np.float64)
-                if not np.isfinite(atk).all():
+                o = o_snap
+                # 直接读 SP 三张表（绕开 ev_rerank 里用 874 行做的候选掩码：
+                #  874 是 discard_candidates_aka，只标赤牌，会把非赤牌全判成未覆盖）
+                oo = o[None] if o.ndim == 2 else o
+                T0 = E.SP_TABLE; NT = E.SP_N_TURNS
+                tenr = oo[0, T0:T0 + NT].max(0)
+                winr = oo[0, T0 + NT:T0 + 2 * NT].max(0)
+                evr = oo[0, T0 + 2 * NT:T0 + 3 * NT].max(0)
+                maxev = float(oo[0, E.SP_MAXEV_3E4].max()) * 30000.0
+                cov = (evr > 0) | (winr > 0) | (tenr > 0)
+                atk = (evr.astype(np.float64) * maxev)
+                avail = om34 & cov                     # 只有 covered 的自家牌才有 atk
+                if avail.sum() == 0:
+                    n_unknown += 1
                     continue
-                score = np.where(om34, atk - defv, -1e18)
-                ev_push = float(score[om34].max())
-                safe = own[defv[own] <= 0] if own.size else own
-                if safe.size == 0:
+                safe_avail = avail & (defv <= 0)       # 既安全又有 atk
+                if safe_avail.sum() == 0:
+                    n_nofold += 1                      # 无安牌可打，只能推
                     continue
-                ev_fold = float(atk[safe].max())
+                ev_push = float((atk - defv)[avail].max())
+                ev_fold = float(atk[safe_avail].max())
                 d = ev_push - ev_fold
                 deltas.append(d)
                 c = pai_idx(e.get('pai'))
@@ -182,7 +195,8 @@ def main():
         if corr is not None:
             print(f'     —— 其中「该推(Δ>0)」{corr} / 「该弃(Δ<0)」{wrong}')
 
-    print(f'[push] 我方决策 {n_state:,}；有人听牌 {n_tp:,}')
+    print(f'[push] 我方决策 {n_state:,}；有人听牌 {n_tp:,}；'
+          f'无 SP 覆盖 {n_unknown}；无安牌可弃 {n_nofold}')
     show('[全部有人听牌]', deltas)
     show('[人类推了对攻]', deltas_hpush, h_correct, h_wrong)
     if a.model:

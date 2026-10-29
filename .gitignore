@@ -115,3 +115,8 @@ mortal/config.style_*.toml
 # diag_mleague.py 是工具，文件名含 mleague 被上面 *mleague* 误伤，此处例外
 !tools/style_ft/diag_mleague.py
 /runs/style/
+
+# ---- 本项目追加（2026-10-29）：自博弈数据生成产物（仓库根 logs/）----
+# 根目录 logs/selfplay/ 是 selfplay_gen.py 产出的牌谱（json.gz）与跑批日志，属运行期产物；
+# 驱动脚本 mortal/run_selfplay_8k.sh 入库。只锚定仓库根，避免误伤别处的同名目录。
+/logs/

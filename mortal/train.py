@@ -137,6 +137,20 @@ def load_frozen_policy(ckpt, device):
     return mortal, dqn
 
 
+def _oracle_alpha(cfg: dict, step: int) -> float:
+    """Oracle Guiding 的输入缩放系数：先保持 alpha_start，再线性退到 alpha_end。"""
+    a0 = float(cfg.get('alpha_start', 1.0))
+    a1 = float(cfg.get('alpha_end', 0.0))
+    warm = int(cfg.get('warmup_steps', 0))
+    anneal = int(cfg.get('anneal_steps', 0))
+    if step < warm:
+        return a0
+    if anneal <= 0:
+        return a1
+    t = min(1.0, (step - warm) / anneal)
+    return a0 + (a1 - a0) * t
+
+
 def train():
     import prelude
 
@@ -260,6 +274,18 @@ def train():
     betas = config['optim']['betas']
     weight_decay = config['optim']['weight_decay']
     max_grad_norm = config['optim']['max_grad_norm']
+
+    # ---- Oracle Guiding + 退火（2026-11-03）---------------------------------
+    # 训练期把 invisible_obs（三家暗牌，217 行）按 α 缩放后拼进输入；α 从
+    # alpha_start 线性退到 alpha_end，推理时 α=0（engine 喂全零通道）。
+    # 只支持 cql_mc：IQL 需要 next_invisible_obs，dataloader 未提供。
+    og_cfg = config.get('oracle_guiding') or {}
+    og_enabled = bool(og_cfg.get('enabled', False))
+    if og_enabled:
+        assert objective == 'cql_mc', \
+            'oracle_guiding 目前只支持 objective=cql_mc（iql 需 next_invisible_obs）'
+        config['resnet']['is_oracle'] = True
+        logging.info(f'oracle guiding: {og_cfg}')
 
     mortal = Brain(version=version, extra_channels=extra_channels, **config['resnet']).to(device)
     dqn = DQN(version=version).to(device)
@@ -442,6 +468,16 @@ def train():
                     f'env 奖励口径与 checkpoint 记录不同（续训会把两种目标混进同一条损失）: {env_diff}'
                     '；若要做净对照，请另建 state_file 或从同一父代重新暖启'
                 )
+
+    # Oracle Guiding 的 α 调度以「本次暖启后的步数」为 0 点
+    # （父代 steps 可能是 956k，直接用绝对 steps 会把 α 永远钉在 alpha_end）。
+    # 续训时从 checkpoint 恢复 0 点，否则中断重启会把 α 重新拉回 1.0。
+    if og_enabled:
+        _saved_start = (loaded_state.get('oracle_start_step')
+                        if isinstance(loaded_state, dict) else None)
+        og_start_step = int(_saved_start) if _saved_start is not None else steps
+    else:
+        og_start_step = 0
 
     # EMA target 网络与 VHead 恢复（iql 专属；放在 online 权重加载之后，保证 EMA 初始=online）
     ema_mortal = ema_dqn = None
@@ -674,6 +710,7 @@ def train():
             version = version,
             file_list = file_list,
             pts = pts,
+            oracle = og_enabled,
             file_batch_size = file_batch_size,
             reserve_ratio = reserve_ratio,
             player_names = player_names,
@@ -709,6 +746,14 @@ def train():
             nonlocal steps
             nonlocal idx
             nonlocal pb
+
+            invisible_obs = None
+            og_alpha = 0.0
+            if og_enabled:
+                # _reorder 把 invisible_obs 放在 rest 首位
+                invisible_obs = rest[0].to(dtype=torch.float32, device=device)
+                rest = rest[1:]
+                og_alpha = _oracle_alpha(og_cfg, steps - og_start_step)
 
             if objective == 'iql':
                 next_obs, terminal, r_t, player_ranks = rest
@@ -820,7 +865,8 @@ def train():
                     q_target_mc = q_target_mc.to(torch.float32)
 
                 with torch.autocast(device.type, enabled=enable_amp):
-                    phi = mortal(obs)
+                    phi = mortal(obs, None if invisible_obs is None
+                                 else invisible_obs * og_alpha)
                     q_out = dqn(phi, masks)
                     q = q_out[range(batch_size), actions]
                     dqn_loss = 0.5 * mse(q, q_target_mc)
@@ -890,6 +936,11 @@ def train():
 
             if steps % save_every == 0:
                 pb.close()
+
+                if og_enabled:
+                    _a = _oracle_alpha(og_cfg, steps - og_start_step)
+                    writer.add_scalar('oracle/alpha', _a, steps)
+                    logging.info(f'oracle alpha @ {steps}: {_a:.4f}')
 
                 # downsample to reduce tensorboard event size
                 all_q_1d = all_q.cpu().numpy().flatten()[::128]
@@ -982,6 +1033,7 @@ def train():
                     'scheduler': scheduler.state_dict(),
                     'scaler': scaler.state_dict(),
                     'steps': steps,
+                    'oracle_start_step': og_start_step if og_enabled else 0,
                     'timestamp': datetime.now().timestamp(),
                     'best_perf': best_perf,
                     # 与 best_perf 配套的换代标识：下一次用不同卫冕者重启训练时可自动重置
@@ -1089,13 +1141,23 @@ def train():
                     logging.info('training budget reached')
                     raise SystemExit(0)
 
+        def _reorder(fields):
+            """Oracle Guiding：dataloader 把 invisible_obs 插在 idx 1。
+
+            (obs, inv, actions, masks, ...) → (obs, actions, masks, inv, ...)
+            非 oracle 时原样返回。
+            """
+            if not og_enabled:
+                return fields
+            return (fields[0], fields[2], fields[3], fields[1], *fields[4:])
+
         for fields in data_loader:
             bs = fields[0].shape[0]
             if bs != batch_size:
                 remaining.append(fields)
                 remaining_bs += bs
                 continue
-            train_batch(*fields)
+            train_batch(*_reorder(fields))
 
         remaining_batches = remaining_bs // batch_size
         if remaining_batches > 0:
@@ -1103,7 +1165,7 @@ def train():
             start = 0
             end = batch_size
             while end <= remaining_bs:
-                train_batch(*(p[start:end] for p in stacked))
+                train_batch(*_reorder(tuple(p[start:end] for p in stacked)))
                 start = end
                 end += batch_size
         pb.close()

@@ -4,6 +4,7 @@ import torch
 import numpy as np
 from torch.distributions import Normal, Categorical
 from typing import *
+from libriichi.consts import oracle_obs_shape
 import s6c_features
 
 class MortalEngine:
@@ -68,9 +69,14 @@ class MortalEngine:
         obs_in = (obs if not self.extra_features
                   else torch.as_tensor(s6c_features.attach(obs_np), device=self.device))
         masks = torch.as_tensor(np.stack(masks, axis=0), device=self.device)
+        batch_size = obs.shape[0]
         if invisible_obs is not None:
             invisible_obs = torch.as_tensor(np.stack(invisible_obs, axis=0), device=self.device)
-        batch_size = obs.shape[0]
+        elif self.is_oracle:
+            # Oracle Guiding 推理口径：α=0，隐藏信息通道全零（不喂任何暗牌）
+            invisible_obs = torch.zeros(
+                (batch_size, *oracle_obs_shape(self.version)),
+                device=self.device, dtype=obs_in.dtype)
 
         match self.version:
             case 1:
@@ -81,7 +87,7 @@ class MortalEngine:
                     latent = mu
                 q_out = self.dqn(latent, masks)
             case 2 | 3 | 4:
-                phi = self.brain(obs_in)
+                phi = self.brain(obs_in, invisible_obs) if self.is_oracle else self.brain(obs_in)
                 q_out = self.dqn(phi, masks)
 
         if self.defense_guard is not None:

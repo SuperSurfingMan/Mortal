@@ -107,7 +107,7 @@ def load_engine(ckpt, name, exec_cfg, guard_lambda=0.0, guard_risk_floor=0.0,
                              risk_mode=guard_risk_mode)
     return MortalEngine(
         mortal, dqn,
-        is_oracle = False,
+        is_oracle = bool(getattr(mortal, 'is_oracle', False)),
         version = version,
         device = torch.device(exec_cfg['device']),
         enable_amp = exec_cfg['enable_amp'],

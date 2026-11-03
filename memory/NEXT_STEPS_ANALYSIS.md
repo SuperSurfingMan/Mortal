@@ -207,10 +207,14 @@ S6c/956k（未带守卫，test_play vs 200k 基线）：和了 **21.67%**、放�
 
 ### 6.1 P1 首选：Oracle Guiding + 退火（成本最低、文献证据最强）
 
-- **做法**：`invisible_obs` 拼进网络输入；α 调度（如前 30% 步 α=1、中间 50% 线性→0、最后 20% α=0）；推理不喂。
-- **实现缺口（已核对源码）**：`dataloader.py` 有 `oracle` 开关与 `take_invisible_obs()`，但没有 α 参数、没有调度、没有"α=0 后的 holdout 复查"。
+- **做法**：`invisible_obs` 拼进网络输入；α 调度（10k 步保持 1 → 50k 步线性→ 0 → 后 40k 步 α=0）；推理不喂（engine 自动全零）。
+- **状态（2026-11-03）**：✅ **已实现并冒烟通过**——见
+  [`DESIGN_oracle_guiding_20261103.md`](DESIGN_oracle_guiding_20261103.md)。
+  手术透明性逐位一致（top1 0.8167 / dqn_loss 0.3613 两侧相同）；1k 步冒烟中
+  oracle 通道拿到梯度（mean|w|=7.1e-4），α=0 的 holdout top1 0.8166（−0.01pp）；
+  `test_play` 已适配零填充。**100k 探针尚未启动**（约 14 h @ 2 batch/s）。
 - **判据（预注册）**：α=0 的 holdout top1 不退（−0.3pp 内）+ dqn_loss ≤ +2%；再上 16k 标准臂（δ_min≈0.66）。若只有 +0.3 级，按 §5 规则写"未决"而不是"转正"。
-- **成本**：100k 步 ≈7 h + 16k 臂 ≈3 h。
+- **成本（实测）**：GPU2 上 2 batch/s（batch 512）⇒ 100k 步 ≈14 h；16k 臂 ≈3 h。
 - **风险**：模型把 oracle 当捷径，退火后崩塌；监控 α=0 后的 holdout 曲线。
 - **先验**：中低。本项目"全知铳损"探针显示信息上限不高，Oracle Guiding 更可能改善学习效率而非天花板。
 
@@ -249,7 +253,7 @@ S6c/956k（未带守卫，test_play vs 200k 基线）：和了 **21.67%**、放�
 | **P0** ✅ | anchor1/anchor2 | 已完成 | 均跨 0，绝对强度未知 |
 | **P0** ✅ | ladder 标准臂（16k/76k） | 已完成 | 空臂 δ=0.000；76k 判 +0.3 |
 | **P0** 🔜 | **anchor3：S6c+λ=10 vs 3×akochan ~1600 局**（同协议补 800 局 S6c 无守卫） | 2~4 天 CPU | SE≈2，回答"+3 vs 0"；**不验证守卫 +0.78** |
-| **P1** | **Oracle Guiding + 退火**：100k 探针 → 16k 臂 | ≈10 h + 3 h | α=0 holdout 不退 + δ_min 0.66 |
+| **P1** | **Oracle Guiding + 退火**：✅ 实现+冒烟（2026-11-03）→ 100k 探针 → 16k 臂 | ≈14 h + 3 h | α=0 holdout 不退（−0.3pp）+ dqn_loss ≤ +2%；过则 16k 臂 δ_min 0.66 |
 | **P2** | 课程式顺位 head（冻结 encoder 换 head） | 1~2 天 | 顺位 NLL + 16k 臂 |
 | **P2** | 玩家风格（names → embedding，泄漏检查） | 1~2 天 | 读牌/主模型任一有正信号再推进 |
 | **P2** | 工程债：同分布 holdout、agari-guard holdout、kan-select 回放、optimizer 暖启消融、AMP 复验 | 小~中 | 每项独立验收 |

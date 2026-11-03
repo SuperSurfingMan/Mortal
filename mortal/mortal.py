@@ -41,8 +41,11 @@ def main():
 
     # S6c：特征族与额外通道数从 ckpt 自己的 [control] 推（旧 ckpt = 0/''）
     extra_features, extra_channels = s6c_features.resolve(cfg['control'])
+    # Oracle Guiding：ckpt 的 [resnet].is_oracle 决定是否有 217 行隐藏信息输入；
+    # 推理时 engine 会喂全零（α=0），不读取任何暗牌。
+    is_oracle = bool(cfg['resnet'].get('is_oracle', False))
     mortal = Brain(version=version, num_blocks=num_blocks, conv_channels=conv_channels,
-                   extra_channels=extra_channels).eval()
+                   extra_channels=extra_channels, is_oracle=is_oracle).eval()
     dqn = DQN(version=version).eval()
     mortal.load_state_dict(state['mortal'])
     dqn.load_state_dict(state['current_dqn'])
@@ -65,7 +68,7 @@ def main():
         mortal,
         dqn,
         version = version,
-        is_oracle = False,
+        is_oracle = is_oracle,
         device = device,
         enable_amp = False,
         enable_quick_eval = not review_mode,

@@ -19,6 +19,7 @@ from config import config
 from model import Brain, DQN
 from dataloader import FileDatasetsIter, worker_init_fn
 from train import env_reward_diff
+from libriichi.consts import oracle_obs_shape
 import s6c_features
 
 ROOT = '/mnt/data8/mortal/Mortal/dataset/mjai/houou4'
@@ -109,6 +110,8 @@ def evaluate(name, ckpt, batches, bs):
     _, extra_channels = s6c_features.resolve(cfg['control'])
     mortal = Brain(version = version, extra_channels = extra_channels,
                    **cfg['resnet']).to(DEVICE).eval()
+    # Oracle Guiding ckpt 多 217 行输入；holdout 与推理同口径，喂全零（α=0）
+    is_oracle = bool(cfg['resnet'].get('is_oracle', False))
     dqn = DQN(version = version).to(DEVICE).eval()
     mortal.load_state_dict(st['mortal'])
     dqn.load_state_dict(st['current_dqn'])
@@ -124,7 +127,9 @@ def evaluate(name, ckpt, batches, bs):
             obs = obs.to(dtype = torch.float32, device = DEVICE)
             actions = actions.to(dtype = torch.int64, device = DEVICE)
             masks = masks.to(dtype = torch.bool, device = DEVICE)
-            q_out = dqn(mortal(obs), masks)
+            q_out = dqn(mortal(obs, torch.zeros(
+                (n, *oracle_obs_shape(version)), device = DEVICE)) if is_oracle
+                else mortal(obs), masks)
             q = q_out[torch.arange(n, device = DEVICE), actions]
             if q_target is not None:
                 pq.append(q.float().cpu())

@@ -32,7 +32,8 @@ def main():
         num_blocks = cham_cfg['resnet']['num_blocks']
         cham_extra = s6c_features.resolve(cham_cfg['control'])[1]
         mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks,
-                       extra_channels=cham_extra).eval()
+                       extra_channels=cham_extra,
+                       is_oracle=bool(cham_cfg['resnet'].get('is_oracle', False))).eval()
         dqn = DQN(version=version).eval()
         mortal.load_state_dict(state['mortal'])
         dqn.load_state_dict(state['current_dqn'])
@@ -42,7 +43,7 @@ def main():
         engine_cham = MortalEngine(
             mortal,
             dqn,
-            is_oracle = False,
+            is_oracle = bool(getattr(mortal, 'is_oracle', False)),
             version = version,
             device = torch.device(cfg['champion']['device']),
             enable_amp = cfg['champion']['enable_amp'],
@@ -58,7 +59,8 @@ def main():
     num_blocks = chal_cfg['resnet']['num_blocks']
     chal_extra_features, chal_extra = s6c_features.resolve(chal_cfg['control'])
     mortal = Brain(version=version, conv_channels=conv_channels, num_blocks=num_blocks,
-                   extra_channels=chal_extra).eval()
+                   extra_channels=chal_extra,
+                   is_oracle=bool(chal_cfg['resnet'].get('is_oracle', False))).eval()
     dqn = DQN(version=version).eval()
     mortal.load_state_dict(state['mortal'])
     dqn.load_state_dict(state['current_dqn'])
@@ -79,7 +81,7 @@ def main():
     engine_chal = MortalEngine(
         mortal,
         dqn,
-        is_oracle = False,
+        is_oracle = bool(getattr(mortal, 'is_oracle', False)),
         version = version,
         device = torch.device(cfg['challenger']['device']),
         enable_amp = cfg['challenger']['enable_amp'],

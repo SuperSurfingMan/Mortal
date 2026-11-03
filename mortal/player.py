@@ -36,7 +36,7 @@ class TestPlayer:
         self.baseline_engine = MortalEngine(
             stable_mortal,
             stable_dqn,
-            is_oracle = False,
+            is_oracle = bool(getattr(stable_mortal, 'is_oracle', False)),
             version = version,
             device = device,
             enable_amp = config['test_play'].get('enable_amp', False),
@@ -54,7 +54,7 @@ class TestPlayer:
         engine_chal = MortalEngine(
             mortal,
             dqn,
-            is_oracle = False,
+            is_oracle = bool(getattr(mortal, 'is_oracle', False)),
             version = self.chal_version,
             device = device,
             enable_amp = config['test_play'].get('enable_amp', False),
@@ -105,7 +105,7 @@ class TrainPlayer:
         self.baseline_engine = MortalEngine(
             stable_mortal,
             stable_dqn,
-            is_oracle = False,
+            is_oracle = bool(getattr(stable_mortal, 'is_oracle', False)),
             version = version,
             device = device,
             enable_amp = True,
@@ -137,7 +137,7 @@ class TrainPlayer:
         engine_chal = MortalEngine(
             mortal,
             dqn,
-            is_oracle = False,
+            is_oracle = bool(getattr(mortal, 'is_oracle', False)),
             version = self.chal_version,
             boltzmann_epsilon = self.boltzmann_epsilon,
             boltzmann_temp = self.boltzmann_temp,

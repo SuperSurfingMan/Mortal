@@ -48,9 +48,11 @@ def main():
     dqn.load_state_dict(state['current_dqn'])
 
     guard = None
-    # 推理期防守守卫：λ=10 是双向 64000 半庄的 ladder 峰值（+0.778 pt/半庄，
-    # 95%CI[+0.13,+1.42]，两方向同号；README §13.15.5）。设 0 可关闭。
-    guard_lambda = float(os.environ.get('MORTAL_GUARD_LAMBDA', '10') or 0)
+    # 2026-11-03 终局：修正 risk 双乘 P(听) 后，在全新种子 1000000/1020000 上
+    # 重扫 λ=4.5/6/7.5（每臂 64k 半庄）全部 NO-CONCLUSION；legacy λ=10 的历史
+    # +0.778 也未复现（本轮 −0.184，CI[-0.61,+0.27]）。按预注册规则默认关闭守卫，
+    # 不保留 legacy 默认路径。详见 tools/read_model/docs/GUARD_RISK_FIX_20261102.md。
+    guard_lambda = float(os.environ.get('MORTAL_GUARD_LAMBDA', '0') or 0)
     if guard_lambda > 0:
         from defense_guard import DefenseGuard
         guard = DefenseGuard(

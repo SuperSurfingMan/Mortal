@@ -53,6 +53,8 @@ REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO / 'mortal'))    # libriichi.so 所在
 sys.path.insert(0, str(HERE))               # 读牌工具优先（防同名 model.py，坑 69）
 
+from guard_risk import risk_from_wait_probs  # noqa: E402  2026-11-02 单一真源
+
 # 同名 model.py 冲突（坑 69）：显式占住读牌版本
 import importlib.util as _ilu  # noqa: E402
 
@@ -143,8 +145,9 @@ def a2c_danger(net, obs, device, bs=2048):
         with torch.no_grad():
             wp = T.forward_batch(net, sub, device)['wait_probs']   # (B,3,35)
         p_tenpai = (1.0 - wp[..., NUM_TILES]).clamp(0, 1)          # (B,3)
-        cond = wp[..., :NUM_TILES]                                 # (B,3,34)
-        risk = (p_tenpai[..., None] * cond).sum(1)                 # (B,34)
+        # 2026-11-02：修正旧版 p_tenpai * wp[:34] 的双乘 bug。历史 S6b
+        # cache 是旧口径；若要复用/重算，必须与 s6b 归档产物区分开。
+        risk = risk_from_wait_probs(wp)                            # (B,34)
         p_any = 1.0 - torch.prod(1.0 - p_tenpai, dim=1)            # (B,)
         out[sl, 0, :] = risk.float().cpu().numpy()
         out[sl, 1, :] = p_any.float().cpu().numpy()[:, None]

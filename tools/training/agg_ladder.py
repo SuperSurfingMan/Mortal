@@ -186,4 +186,5 @@ def main():
                          args.bootstrap, args.bseed, args.workers)
 
 
-main()
+if __name__ == '__main__':
+    main()

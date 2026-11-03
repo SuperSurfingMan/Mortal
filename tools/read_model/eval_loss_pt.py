@@ -28,6 +28,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / 'mortal'))
 
 import _common as C  # noqa: E402
+from guard_risk import risk_from_wait_probs  # noqa: E402
 import ev_rerank as E  # noqa: E402
 import guard_state as G  # noqa: E402
 
@@ -93,8 +94,9 @@ def main():
             buf = buf[:take]
             b = T.collate(buf)
             _AP, WP = P0.a2c_forward(a2c, b, a.chunk, zero_tl=True)
-            p_t = (1.0 - WP[..., NUM_TILES]).clamp(0, 1)
-            risk_j = (p_t[..., None] * WP[..., :NUM_TILES]).float().cpu().numpy()
+            # 2026-11-02：逐对手风险 = wp[j,:34]；不再双乘 p_ten。
+            risk_j = WP[..., :NUM_TILES].float().cpu().numpy()
+            risk = risk_from_wait_probs(WP).float().cpu().numpy()
             danger = (b['wait'][..., :NUM_TILES] > 0).any(1).cpu().numpy()
             with torch.no_grad():
                 phi = mortal(b['obs'].to(P0.DEV))
@@ -108,7 +110,6 @@ def main():
             feat = G.features(obs)
             late = np.maximum(feat['progress'] - 10.0, 0.0)
             loss = BASE_PT + RIICHI_PT * rr + TURN_PT * late[:, None]
-            risk = risk_j.sum(1)
             riskp = (risk_j * loss[:, :, None]).sum(1)
             tot += q.shape[0]
             yield q, own, obs, risk, riskp, danger, rr, tot

@@ -37,6 +37,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / 'mortal'))
 
 import _common as C  # noqa: E402
+from guard_risk import risk_from_wait_probs  # noqa: E402
 import ev_rerank as E  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('inject_p0_mod', HERE / 'inject_p0.py')
@@ -113,8 +114,7 @@ def main():
         buf = buf[:take]
         b = T.collate(buf)
         _AP, WP = P0.a2c_forward(a2c, b, args.chunk, zero_tl=True)
-        p_t = (1.0 - WP[..., NUM_TILES]).clamp(0, 1)
-        risk = (p_t[..., None] * WP[..., :NUM_TILES]).sum(1).float().cpu().numpy()
+        risk = risk_from_wait_probs(WP).float().cpu().numpy()
         danger = (b['wait'][..., :NUM_TILES] > 0).any(1).cpu().numpy()
         with torch.no_grad():
             phi = mortal(b['obs'].to(P0.DEV))

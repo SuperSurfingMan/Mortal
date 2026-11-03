@@ -86,7 +86,8 @@ def warn_mismatched_sections(exec_cfg):
                       f'ladder 只认 [1v3.ladder] 或 {flag}（如需对齐请显式设置）', flush=True)
 
 
-def load_engine(ckpt, name, exec_cfg, guard_lambda=0.0, guard_risk_floor=0.0):
+def load_engine(ckpt, name, exec_cfg, guard_lambda=0.0, guard_risk_floor=0.0,
+                guard_risk_mode='fixed'):
     st = torch.load(ckpt, map_location=torch.device('cpu'), weights_only=True)
     cfg = st['config']
     version = cfg['control'].get('version', 1)
@@ -102,7 +103,8 @@ def load_engine(ckpt, name, exec_cfg, guard_lambda=0.0, guard_risk_floor=0.0):
         # A2c 随 engine 同设备，obs 零拷贝（obs_aux_torch）。
         from defense_guard import DefenseGuard
         guard = DefenseGuard(lambda_=guard_lambda, risk_floor=guard_risk_floor,
-                             device=torch.device(exec_cfg['device']))
+                             device=torch.device(exec_cfg['device']),
+                             risk_mode=guard_risk_mode)
     return MortalEngine(
         mortal, dqn,
         is_oracle = False,
@@ -133,6 +135,8 @@ def main():
                     help='推理期防守守卫 λ（只作用于挑战者侧；0=关闭）')
     ap.add_argument('--guard-risk-floor', type=float, default=0.0,
                     help='守卫 risk 门限 τ（只惩罚 risk>τ 的牌；0=线性）')
+    ap.add_argument('--guard-risk-mode', choices=('fixed', 'legacy'), default='fixed',
+                    help='fixed=Σ_j wp[j,t]（正确口径）；legacy=旧版双乘 P(听)（仅对照）')
     args = ap.parse_args()
 
     exec_cfg = resolve_exec_cfg(args)
@@ -146,7 +150,8 @@ def main():
     chal_meta = ckpt_meta(args.challenger)
     cham_meta = ckpt_meta(args.champion)
     chal = load_engine(args.challenger, 'challenger', exec_cfg,
-                       args.guard_lambda, args.guard_risk_floor)
+                       args.guard_lambda, args.guard_risk_floor,
+                       args.guard_risk_mode)
     cham = load_engine(args.champion, 'champion', exec_cfg)
 
     env = OneVsThree(disable_progress_bar = False, log_dir = log_dir)
@@ -164,7 +169,7 @@ def main():
     print(f'log_dir = {log_dir}')
     print(f'exec_cfg = {json.dumps(exec_cfg, sort_keys=True)}')
     print(f'guard_lambda = {args.guard_lambda} (challenger only)  '
-          f'risk_floor = {args.guard_risk_floor}')
+          f'risk_floor = {args.guard_risk_floor}  risk_mode = {args.guard_risk_mode}')
     print(f'challenger_ckpt = {json.dumps(chal_meta, sort_keys=True)}')
     print(f'champion_ckpt = {json.dumps(cham_meta, sort_keys=True)}')
     print(f'raw rankings = {rankings}')
@@ -180,6 +185,7 @@ def main():
         'exec_cfg': exec_cfg,
         'guard_lambda': args.guard_lambda,
         'guard_risk_floor': args.guard_risk_floor,
+        'guard_risk_mode': args.guard_risk_mode,
         'seed_start': args.seed_start,
         'seed_key': key,
         'sets': args.n_sets,

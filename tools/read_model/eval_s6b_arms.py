@@ -34,6 +34,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / 'diagnostics'))
 sys.path.insert(0, str(HERE))
 import _common as C  # noqa: E402
+from guard_risk import risk_from_wait_probs  # noqa: E402
 
 # 复用 P0 的数据/推理工具（inject_p0 会显式加载读牌 model 与 mortal_model）
 _spec = importlib.util.spec_from_file_location('inject_p0_mod', str(HERE / 'inject_p0.py'))
@@ -107,7 +108,9 @@ def main():
         b = T.collate(buf)
         AP, WP = P0.a2c_forward(a2c, b, args.chunk, zero_tl=True)
         p_t = (1.0 - WP[..., NUM_TILES]).clamp(0, 1)
-        risk = (p_t[..., None] * WP[..., :NUM_TILES]).sum(1)          # (n,34)
+        # 2026-11-02：修正双乘；历史 s6b_arms_20k.json 是旧口径，
+        # 重跑数值会变，不能与旧 JSON 直接横比。
+        risk = risk_from_wait_probs(WP)                               # (n,34)
         p_any = 1.0 - torch.prod(1.0 - p_t, dim=1)                   # (n,)
         feats.append(torch.stack([risk, p_any[:, None].expand(-1, NUM_TILES)],
                                  dim=1).numpy().astype(np.float32))

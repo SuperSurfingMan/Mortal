@@ -4,7 +4,7 @@
 # 用法：
 #   bash ladder_arm.sh <challenger.pth> <champion.pth> <out_dir> \
 #        [--blocks 16] [--sets 500] [--seed-a 400000] [--seed-b 420000] \
-#        [--guard-lambda 0] [--gpus 0,1,2,4] [--tag name]
+#        [--guard-lambda 0] [--guard-risk-mode fixed|legacy] [--gpus 0,1,2,4] [--tag name]
 #
 # 约定（与 §4.2 判定纪律一致）：
 #   * 1 块 = 1 个种子 × 500 sets = 500 半庄；A 向 = 挑战者当庄家位，B 向 = 轮换，
@@ -25,6 +25,7 @@ SETS=${SETS:-500}
 SEED_A=${SEED_A:-400000}
 SEED_B=${SEED_B:-420000}
 GUARD=${GUARD:-0}
+RISK_MODE=${RISK_MODE:-fixed}
 GPUS_CSV=${GPUS_CSV:-0,1,2,4}
 TAG=${TAG:-arm}
 
@@ -35,6 +36,7 @@ while [ $# -gt 0 ]; do
         --seed-a) SEED_A=$2; shift 2;;
         --seed-b) SEED_B=$2; shift 2;;
         --guard-lambda) GUARD=$2; shift 2;;
+        --guard-risk-mode) RISK_MODE=$2; shift 2;;
         --gpus) GPUS_CSV=$2; shift 2;;
         --tag) TAG=$2; shift 2;;
         *) echo "未知参数: $1" >&2; exit 2;;
@@ -67,11 +69,11 @@ say () { echo "[$(date '+%F %T')] $*"; }
 # $1=gpu $2=tag $3=challenger $4=champion $5=seed $6=out_dir
 ladder_job () {
     ( CUDA_VISIBLE_DEVICES=$1 MORTAL_CFG=$CFG "$PY" -u ladder.py "$3" "$4" "$5" "$SETS" \
-          "$6/$2" --guard-lambda "$GUARD" > "$6/$2.log" 2>&1
+          "$6/$2" --guard-lambda "$GUARD" --guard-risk-mode "$RISK_MODE" > "$6/$2.log" 2>&1
       echo "[$2] $(grep -a 'avg_pt' "$6/$2.log" | tail -1)" ) &
 }
 
-say "==== ladder 臂 $TAG：$(basename "$STATE") vs $(basename "$BASE")（λ=$GUARD，双向 ${BLOCKS}×${SETS} sets）===="
+say "==== ladder 臂 $TAG：$(basename "$STATE") vs $(basename "$BASE")（λ=$GUARD, risk=$RISK_MODE，双向 ${BLOCKS}×${SETS} sets）===="
 i=0
 for dir in A B; do
     say "-- $dir 方向（seed 起 $([ "$dir" = A ] && echo "$SEED_A" || echo "$SEED_B")）--"

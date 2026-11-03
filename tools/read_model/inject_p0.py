@@ -373,6 +373,8 @@ def human_discard(events, ev_idx: int, observer: int):
 def run_divergence(wait_p, q, danger, own, riichi_any, turn, meta, srcs):
     """P0-B：同一批样本上比 主模型 top-1 / A2c 最安全 / 人类实际。"""
     n = wait_p.shape[0]
+    # 2026-11-02：wp[:34] 已是 P(听)·P(待|听)，直接求和即为三家 union 危险度；
+    # 与 mortal/guard_risk.risk_from_wait_probs 同口径（禁止再乘 p_ten）。
     risk = wait_p[..., :NUM_TILES].sum(1)                    # A2c 三家 union 危险度
     a2c_tile = np.where(own, risk, INF).argmin(-1)
     qq = q[:, :NUM_TILES].copy()

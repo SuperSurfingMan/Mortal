@@ -1,0 +1,102 @@
+{
+ "meta": {
+  "n": 20000,
+  "seed": 20261016,
+  "base_ckpt": "/mnt/data8/mortal/Mortal/mortal/checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth",
+  "base_steps": 756000,
+  "a2c_ckpt": "/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2c/best.pth",
+  "protocol": "A2c tl=0 实时危险度；单步诊断",
+  "risk_mode": "legacy",
+  "formula": "Q - lambda * max(risk - tau, 0); risk=Σ_j p_ten_j·wp[j,t]（旧口径双乘）"
+ },
+ "base": {
+  "deal_top1": 0.0132,
+  "a2c_safest_deal": 0.0033,
+  "q_gap_mean": 1.6347594738310203,
+  "q_gap_median": 0.9349751472473145,
+  "risk_mean": 0.01983933541612834,
+  "risk_max": 0.8146403431892395
+ },
+ "sweep": [
+  {
+   "lambda": 0.0,
+   "risk_floor": 0.0,
+   "change": 0.0,
+   "change_n": 0,
+   "deal_top1": 0.0132,
+   "risk_top1": 0.015220951879242259,
+   "a2c_agree": 0.27135,
+   "safer_ratio": 0.0
+  },
+  {
+   "lambda": 2.0,
+   "risk_floor": 0.0,
+   "change": 0.02745,
+   "change_n": 549,
+   "deal_top1": 0.0116,
+   "risk_top1": 0.013121860340096365,
+   "a2c_agree": 0.2812,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 5.0,
+   "risk_floor": 0.0,
+   "change": 0.0544,
+   "change_n": 1088,
+   "deal_top1": 0.0106,
+   "risk_top1": 0.011561166312989254,
+   "a2c_agree": 0.2939,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 7.5,
+   "risk_floor": 0.0,
+   "change": 0.069,
+   "change_n": 1380,
+   "deal_top1": 0.0099,
+   "risk_top1": 0.010803308732180402,
+   "a2c_agree": 0.30225,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 10.0,
+   "risk_floor": 0.0,
+   "change": 0.0798,
+   "change_n": 1596,
+   "deal_top1": 0.0094,
+   "risk_top1": 0.010346930781668203,
+   "a2c_agree": 0.30975,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 12.5,
+   "risk_floor": 0.0,
+   "change": 0.0897,
+   "change_n": 1794,
+   "deal_top1": 0.00895,
+   "risk_top1": 0.009912678567924174,
+   "a2c_agree": 0.31735,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 15.0,
+   "risk_floor": 0.0,
+   "change": 0.1003,
+   "change_n": 2006,
+   "deal_top1": 0.00885,
+   "risk_top1": 0.009471862066948757,
+   "a2c_agree": 0.32545,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 20.0,
+   "risk_floor": 0.0,
+   "change": 0.11485,
+   "change_n": 2297,
+   "deal_top1": 0.0081,
+   "risk_top1": 0.008938158769052693,
+   "a2c_agree": 0.33685,
+   "safer_ratio": 1.0
+  }
+ ]
+}

@@ -16,6 +16,15 @@
     Q'(t) = Q(t) - λ · max(risk(t) - τ, 0),  t ∈ [0, 34) 打牌动作
     risk(t) = Σ_j P(听_j) · P(待牌_j = t)          （A2c 后验，三家 union）
 
+⚠️ 2026-11-02 口径修正：``factorized_wait_probs`` 的 ``wp[..., :34]`` 已经是
+``P(听)·P(待牌|听)``，旧代码又乘了一次 ``P(听)``，实际算的是
+``P(听)^2·P(待牌|听)``。现在统一走 ``guard_risk.risk_from_wait_probs``；
+``risk_mode='legacy'`` 仅保留给 2026-11-02 的对照实验，生产默认 ``fixed``。
+
+2026-11-03 终局：修正后在全新种子 1000000/1020000 上重扫 λ=4.5/6/7.5
+（每臂 64k 半庄）全部 NO-CONCLUSION；线上默认 λ=0（关闭守卫）。
+详见 ``tools/read_model/docs/GUARD_RISK_FIX_20261102.md``。
+
 ``τ``（risk_floor）是 2026-10-22 λ=20 双向 ladder 后的修正：线性版把低 risk
 区（0.001~0.01，噪声大、无区分度）也按比例扣分，导致「houjuu −21%、agari
 −7.4%、avg_pt −0.40（CI[−1.69,+0.89]）」——用和了换放铳，净不划算。τ 把
@@ -33,6 +42,13 @@ from typing import Optional
 
 import numpy as np
 import torch
+
+try:                       # 常规路径：mortal/ 在 sys.path（ladder.py / mortal.py）
+    from guard_risk import (legacy_risk_from_wait_probs,
+                            risk_from_wait_probs, apply_risk_penalty)
+except ImportError:        # 包导入路径（from mortal.defense_guard import ...）
+    from .guard_risk import (legacy_risk_from_wait_probs,
+                             risk_from_wait_probs, apply_risk_penalty)
 
 NUM_TILES = 34
 N_DISCARD = 34
@@ -156,11 +172,14 @@ class DefenseGuard:
 
     def __init__(self, lambda_: float = 1.0, risk_floor: float = 0.0,
                  ckpt: Optional[str] = None,
-                 device: Optional[torch.device] = None):
+                 device: Optional[torch.device] = None,
+                 risk_mode: str = 'fixed'):
+        assert risk_mode in ('fixed', 'legacy'), f'未知 risk_mode: {risk_mode}'
         M2, cons = _load_read_stack()
         self._cons = cons
         self.lam = float(lambda_)
         self.risk_floor = float(risk_floor)
+        self.risk_mode = risk_mode
         self.device = torch.device(device or 'cpu')
 
         path = Path(ckpt) if ckpt else DEFAULT_CKPT
@@ -193,9 +212,9 @@ class DefenseGuard:
         tlm = torch.zeros(B, 3, 26, dtype=torch.bool, device=self.device)
         out = self.net(o, unseen, w, tl, tlm)
         wp = out['wait_probs']                                   # (B,3,35)
-        p_tenpai = (1.0 - wp[..., NUM_TILES]).clamp(0.0, 1.0)     # (B,3)
-        r = (p_tenpai[..., None] * wp[..., :NUM_TILES]).sum(1)     # (B,34)
-        return torch.nan_to_num(r, nan=0.0).clamp(0.0, 1.0)
+        if self.risk_mode == 'legacy':
+            return legacy_risk_from_wait_probs(wp)
+        return risk_from_wait_probs(wp)
 
     def __call__(self, q_out: torch.Tensor, obs: torch.Tensor,
                  masks: torch.Tensor) -> torch.Tensor:
@@ -217,12 +236,10 @@ class DefenseGuard:
         out = self.net(o, unseen, w, tl, tlm)
 
         wp = out['wait_probs']                                   # (B,3,35)
-        p_tenpai = (1.0 - wp[..., NUM_TILES]).clamp(0.0, 1.0)     # (B,3)
-        risk = (p_tenpai[..., None] * wp[..., :NUM_TILES]).sum(1)  # (B,34)
-        risk = torch.nan_to_num(risk, nan=0.0).clamp(0.0, 1.0)
+        if self.risk_mode == 'legacy':
+            risk = legacy_risk_from_wait_probs(wp)
+        else:
+            risk = risk_from_wait_probs(wp)
 
         self.n_calls += 1
-        q = q_out.clone()
-        pen = (risk - self.risk_floor).clamp_min(0.0) * self.lam
-        q[:, :N_DISCARD] -= pen.to(q.device).to(q.dtype) * live
-        return q
+        return apply_risk_penalty(q_out, risk, self.lam, self.risk_floor, masks)

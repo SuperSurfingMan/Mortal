@@ -1,0 +1,152 @@
+{
+ "meta": {
+  "n": 20000,
+  "seed": 20261016,
+  "base_ckpt": "/mnt/data8/mortal/Mortal/mortal/checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth",
+  "base_steps": 756000,
+  "a2c_ckpt": "/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2c/best.pth",
+  "protocol": "A2c tl=0 实时危险度；单步诊断",
+  "risk_mode": "fixed",
+  "formula": "Q - lambda * max(risk - tau, 0); risk=Σ_j wp[j,t]"
+ },
+ "base": {
+  "deal_top1": 0.0132,
+  "a2c_safest_deal": 0.0034,
+  "q_gap_mean": 1.6347594738310203,
+  "q_gap_median": 0.9349751472473145,
+  "risk_mean": 0.030717778037772692,
+  "risk_max": 0.8870689868927002
+ },
+ "sweep": [
+  {
+   "lambda": 0.0,
+   "risk_floor": 0.0,
+   "change": 0.0,
+   "change_n": 0,
+   "deal_top1": 0.0132,
+   "risk_top1": 0.025186320296513166,
+   "a2c_agree": 0.2723,
+   "safer_ratio": 0.0
+  },
+  {
+   "lambda": 2.5,
+   "risk_floor": 0.0,
+   "change": 0.04515,
+   "change_n": 903,
+   "deal_top1": 0.01135,
+   "risk_top1": 0.021187175464745592,
+   "a2c_agree": 0.2893,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 4.0,
+   "risk_floor": 0.0,
+   "change": 0.06375,
+   "change_n": 1275,
+   "deal_top1": 0.01075,
+   "risk_top1": 0.019833649310771317,
+   "a2c_agree": 0.2997,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 5.0,
+   "risk_floor": 0.0,
+   "change": 0.07385,
+   "change_n": 1477,
+   "deal_top1": 0.01025,
+   "risk_top1": 0.019181296045748742,
+   "a2c_agree": 0.30595,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 6.0,
+   "risk_floor": 0.0,
+   "change": 0.08335,
+   "change_n": 1667,
+   "deal_top1": 0.00965,
+   "risk_top1": 0.01860833994796304,
+   "a2c_agree": 0.31175,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 7.0,
+   "risk_floor": 0.0,
+   "change": 0.091,
+   "change_n": 1820,
+   "deal_top1": 0.0095,
+   "risk_top1": 0.01814722694056178,
+   "a2c_agree": 0.317,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 7.5,
+   "risk_floor": 0.0,
+   "change": 0.0933,
+   "change_n": 1866,
+   "deal_top1": 0.00945,
+   "risk_top1": 0.018014452858729744,
+   "a2c_agree": 0.31905,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 8.0,
+   "risk_floor": 0.0,
+   "change": 0.09675,
+   "change_n": 1935,
+   "deal_top1": 0.0094,
+   "risk_top1": 0.0178165500872708,
+   "a2c_agree": 0.32175,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 9.0,
+   "risk_floor": 0.0,
+   "change": 0.1035,
+   "change_n": 2070,
+   "deal_top1": 0.00905,
+   "risk_top1": 0.017436671489718128,
+   "a2c_agree": 0.32635,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 10.0,
+   "risk_floor": 0.0,
+   "change": 0.10995,
+   "change_n": 2199,
+   "deal_top1": 0.00885,
+   "risk_top1": 0.017049274437634848,
+   "a2c_agree": 0.3312,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 12.0,
+   "risk_floor": 0.0,
+   "change": 0.12095,
+   "change_n": 2419,
+   "deal_top1": 0.00855,
+   "risk_top1": 0.016466867389605677,
+   "a2c_agree": 0.33985,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 15.0,
+   "risk_floor": 0.0,
+   "change": 0.13685,
+   "change_n": 2737,
+   "deal_top1": 0.0081,
+   "risk_top1": 0.01572571677137542,
+   "a2c_agree": 0.3525,
+   "safer_ratio": 1.0
+  },
+  {
+   "lambda": 20.0,
+   "risk_floor": 0.0,
+   "change": 0.15815,
+   "change_n": 3163,
+   "deal_top1": 0.00755,
+   "risk_top1": 0.014700201931758892,
+   "a2c_agree": 0.3705,
+   "safer_ratio": 1.0
+  }
+ ]
+}

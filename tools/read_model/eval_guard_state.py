@@ -28,6 +28,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / 'mortal'))
 
 import _common as C  # noqa: E402
+from guard_risk import risk_from_wait_probs  # noqa: E402
 import ev_rerank as E  # noqa: E402
 import guard_state as G  # noqa: E402
 
@@ -101,8 +102,10 @@ def main():
         buf = buf[:take]
         b = T.collate(buf)
         _AP, WP = P0.a2c_forward(a2c, b, a.chunk, zero_tl=True)
-        p_t = (1.0 - WP[..., NUM_TILES]).clamp(0, 1)
-        risk_j = (p_t[..., None] * WP[..., :NUM_TILES]).float().cpu().numpy()   # (n,3,34)
+        # 2026-11-02：wp[:34] 已是 P(听)·P(待|听)，逐对手风险直接取通道，
+        # 不再乘 p_ten（旧口径双乘）。
+        risk_j = WP[..., :NUM_TILES].float().cpu().numpy()                 # (n,3,34)
+        risk = risk_from_wait_probs(WP).float().cpu().numpy()              # (n,34)
         danger = (b['wait'][..., :NUM_TILES] > 0).any(1).cpu().numpy()
         with torch.no_grad():
             phi = mortal(b['obs'].to(P0.DEV))
@@ -115,7 +118,6 @@ def main():
         n = q.shape[0]; ar = np.arange(n)
         rr = opp_riichi(obs)
         v = np.where(rr > 0.5, a.v_riichi, 1.0)                                  # (n,3)
-        risk = risk_j.sum(1)
         risk_w = (risk_j * v[:, :, None]).sum(1)
         feats = G.features(obs)
         a2c_safest = np.where(own, risk, np.inf).argmin(-1)

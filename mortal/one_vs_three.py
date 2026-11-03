@@ -68,12 +68,14 @@ def main():
     # 守卫（Guard-P2 之前的形式）：`[1v3.challenger] guard_lambda > 0` 时给挑战者挂
     # DefenseGuard（λ 在 B/756k 上标定为 10；复验 S6c 时沿用同值）。
     guard_lambda = float(cfg['challenger'].get('guard_lambda', 0) or 0)
+    guard_risk_mode = str(cfg['challenger'].get('guard_risk_mode', 'fixed') or 'fixed')
     guard = None
     if guard_lambda > 0:
         from defense_guard import DefenseGuard
         guard = DefenseGuard(lambda_=guard_lambda,
                              risk_floor=float(cfg['challenger'].get('guard_risk_floor', 0) or 0),
-                             device=torch.device(cfg['challenger']['device']))
+                             device=torch.device(cfg['challenger']['device']),
+                             risk_mode=guard_risk_mode)
     engine_chal = MortalEngine(
         mortal,
         dqn,

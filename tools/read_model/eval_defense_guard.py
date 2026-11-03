@@ -37,6 +37,8 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / 'mortal'))
 
 import _common as C  # noqa: E402
+from guard_risk import (legacy_risk_from_wait_probs,
+                        risk_from_wait_probs)  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('inject_p0_mod', HERE / 'inject_p0.py')
 P0 = importlib.util.module_from_spec(_spec)
@@ -84,6 +86,8 @@ def main():
     ap.add_argument('--lambdas', default='0,2,5,10,20')
     ap.add_argument('--risk-floors', default='0',
                     help='τ 列表；τ>0 = 只惩罚 risk>τ 的牌（gating）')
+    ap.add_argument('--risk-mode', choices=('fixed', 'legacy'), default='fixed',
+                    help='fixed=Σ_j wp[j,t]（正确口径）；legacy=旧版双乘 P(听)')
     ap.add_argument('--ckpt', default=str(BASE_CKPT))
     ap.add_argument('--out', default=str(C.OUT_DIR / 'defense_guard_sweep_20k.json'))
     args = ap.parse_args()
@@ -105,8 +109,10 @@ def main():
         buf = buf[:take]
         b = T.collate(buf)
         _AP, WP = P0.a2c_forward(a2c, b, args.chunk, zero_tl=True)
-        p_t = (1.0 - WP[..., NUM_TILES]).clamp(0, 1)
-        risk = (p_t[..., None] * WP[..., :NUM_TILES]).sum(1).float().cpu().numpy()  # (n,34)
+        if args.risk_mode == 'legacy':
+            risk = legacy_risk_from_wait_probs(WP).float().cpu().numpy()
+        else:
+            risk = risk_from_wait_probs(WP).float().cpu().numpy()          # (n,34)
         danger = (b['wait'][..., :NUM_TILES] > 0).any(1).cpu().numpy()               # (n,34)
         with torch.no_grad():
             phi = net(b['obs'].to(P0.DEV))
@@ -173,7 +179,10 @@ def main():
         'meta': {
             'n': n, 'seed': args.seed, 'base_ckpt': args.ckpt, 'base_steps': steps,
             'a2c_ckpt': str(A2C_CKPT), 'protocol': 'A2c tl=0 实时危险度；单步诊断',
-            'formula': 'Q - lambda * max(risk - tau, 0)',
+            'risk_mode': args.risk_mode,
+            'formula': ('Q - lambda * max(risk - tau, 0); risk=Σ_j wp[j,t]'
+                        if args.risk_mode == 'fixed'
+                        else 'Q - lambda * max(risk - tau, 0); risk=Σ_j p_ten_j·wp[j,t]（旧口径双乘）'),
         },
         'base': {
             'deal_top1': float(d0.mean()),

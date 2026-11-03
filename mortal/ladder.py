@@ -2,7 +2,7 @@
 # 用法: python ladder.py <challenger.pth> <champion.pth> [seed_start] [n_sets] [log_dir] [选项]
 #   并发跑多组时第 5 个参数必传（各自独立的日志目录，否则会互相 rmtree 覆盖）
 #
-# 2026-10-12（对应 NEXT_STEPS_ANALYSIS_20261012.md §3.5）：执行参数不再"隐式写死"——
+# 2026-10-12（对应 NEXT_STEPS_ANALYSIS.md §3.5）：执行参数不再"隐式写死"——
 #   ① 优先级 **CLI 选项 > 配置 [1v3.ladder] > 历史默认（cuda:0 / amp=False / guard=True）**；
 #      默认值刻意等于 R2~R4 判定时的口径，避免升级脚本后旧结论不可比（要换必须显式写出来）；
 #      注：roundN 配置里的 [1v3.challenger]/[1v3.champion].enable_amp 是 one_vs_three.py 用的，

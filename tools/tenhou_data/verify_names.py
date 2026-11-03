@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """校验 mjai 树的 start_game.names 是否真的可用（P0 修复的验收工具，2026-10-12）。
 
-回答四个问题（对应 NEXT_STEPS_ANALYSIS_20261012.md §2.1 的验收项）：
+回答四个问题（对应 NEXT_STEPS_ANALYSIS.md §2.1 的验收项）：
 
   1. **覆盖率**：多少文件带 / 不带 names（缺 names 的文件在白名单模式下产不出样本）；
   2. **席位量**：座位数、去重玩家数（决定数据量的是「白名单席位」而不是文件数）；

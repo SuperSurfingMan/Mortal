@@ -35,7 +35,7 @@
     # 审计全树（慢，用来确认 HF 部分是否真的都有 names）
     python tools/tenhou_data/repair_names.py --months all --jobs 28
 
-**修好之后**（训练侧接入，见 NEXT_STEPS_ANALYSIS_20261012.md §2.1）
+**修好之后**（训练侧接入，见 NEXT_STEPS_ANALYSIS.md §2.1）
     dataset.globs = [
         '.../dataset/mjai/houou4/202[2-5]??/**/*.json.gz',   # HF 历史（本就有 names）
         '.../dataset/mjai/houou4_names/2026*/**/*.json.gz',  # 本工具补丁树

@@ -237,7 +237,7 @@ def train():
 
     pts = config['env']['pts']
     gamma = config['env']['gamma']
-    # 奖励口径（2026-10-12，对应 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
+    # 奖励口径（2026-10-12，对应 NEXT_STEPS_ANALYSIS.md §3.1）：
     # 默认 'rank_pt' 保持历史行为；'delta_points' 用每局真实分数差（点），配 reward_scale 归一化。
     reward_mode = config['env'].get('reward_mode', 'rank_pt')
     reward_scale = float(config['env'].get('reward_scale', 1.0))

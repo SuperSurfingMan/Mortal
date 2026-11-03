@@ -56,7 +56,7 @@ augmented_first = false
 [env]
 gamma = 1
 pts = [6.0, 4.0, 2.0, 0.0]
-# 奖励口径（2026-10-12 加，见 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
+# 奖励口径（2026-10-12 加，见 NEXT_STEPS_ANALYSIS.md §3.1）：
 #   'rank_pt'      GRP 预测顺位概率 × pts 的每局期望点差（默认，等价于历史行为）
 #   'delta_points' 每局**真实分数差**（点，来自 grp.feature 各家分数 + 终局分），与顺位无关，
 #                  量级约 ±1e4 → 通常要配 reward_scale 归一到与 rank_pt 相近的尺度

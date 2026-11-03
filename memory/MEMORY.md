@@ -762,7 +762,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 |---|---|---|
 | **P0** ✅ | akochan 绝对锚点 408 局（**已完成**） | anchor1：**+2.87 pt/半庄**（CI[−7.1,+12.9]，含组内相关修正），名次 [85,117,119,87]、avg_rank 2.510； 人类标尺 −5.44/+9.29 **只是 uma 单位参照，对手场不同，不能读成人类百分位**；作为外部标尺使用，需 ~1600 局才能判 +3 级差异 |
 | **P0** 🔜 | **anchor3：部署组合 S6c+λ=10 vs 3×akochan ~1600 局**（同协议补 800 局 S6c 无守卫） | 2~4 天（CPU）；SE≈2，回答“+3 vs 0”；**不用于验证守卫 +0.78**（§3.16） |
-| **P0** | 下一轮改进的判定预算 | 用 `ladder_arm.sh --blocks 16`（双向共 16000 sets，SE≈0.33）；**新种子块取 §2.4 的「下一块」**；候选排序见 `memory/NEXT_STEPS_ANALYSIS_20261012.md` §4；δ 的 bootstrap CI 下界 >0 才采纳 |
+| **P0** | 下一轮改进的判定预算 | 用 `ladder_arm.sh --blocks 16`（双向共 16000 sets，SE≈0.33）；**新种子块取 §2.4 的「下一块」**；候选排序见 `memory/NEXT_STEPS_ANALYSIS.md` §4；δ 的 bootstrap CI 下界 >0 才采纳 |
 | **P1** ❌ | 推理期**状态依赖**守卫（Guard-P2，**已否证 2026-10-27**） | 20k 上 7 个配置全部 `p_win` 不升（−0.1~−0.2%）、无支配；最好 `w_opp×turn` 的交换率 25:1 ≈ 固定守卫自身 27:1 ⇒ 只是沿同一 frontier 移动（Q 已按局面定价）⇒ **不烧 ladder**；实现与回归保留为基建（§3.17，设计 `memory/DESIGN_guard_statewise_20261027.md`） |
 | **P0** 🔄 | ~~S6c 77k 复判（2026-10-27 02:52 进行中，已由下行结论取代）~~ | 臂：`checkpoints/s6c/mortal.pth`(956k) vs B/756k，λ=0，**双向 76 块×500 sets = 76,000 sets / 152,000 半庄**，种子块 **400000–437500 / 420000–457500**（首次使用）；`CUDA_DEVICE_ORDER=PCI_BUS_ID` + `--gpus 2,2,2,2`（4 并发于 GPU2 Quadro RTX 8000，3.7 GB/100%）；解析 SE≈0.22、δ_min≈0.43（比预估好，因为总量是双向 76k）； 产物 `logs/s6c77k/`；ETA ≈ 9~14 h。**⚠️ 坑：不设 `CUDA_DEVICE_ORDER=PCI_BUS_ID`  时 CUDA 索引 ≠ nvidia-smi 索引（cuda:2 = P100 而非 RTX 8000），会静默跑到别的卡上** |
 | **P0** ✅ | **守卫 λ=10 在 S6c 上复验（8 副本完成，确认有效）** | **+0.402 / +0.046 / +0.523 / +0.176 / +0.629 / +0.489 / +0.385 / +0.135 → 均值 +0.348、8/8 正号**；理论 SE 0.162 ⇒ **t=2.15、CI[+0.03,+0.67]**；经验跨副本 SD 0.194 ⇒ SE 0.068、t=5.09、CI[+0.21,+0.48]。对照 B/756k 同协议 **+0.78** ⇒ 守卫在 S6c 上仍有效，幅度约为 B 的 **45%**。**按预注册判据（均值≥+0.25 且理论 t≥2）⇒ 部署组合 = `S6c/956k + guard λ=10`**；种子 440000~580000 已消费；产物 `logs/guard_s6c/`（8 个副本 + `wave2.log`） |
@@ -956,7 +956,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 | Rust 核心 | `libriichi/src/{lib.rs,consts.rs,state/,dataset/,arena/,algo/,mjai/,agent/,bin/}`（`agent/akochan.rs` 为锚点客户端） |
 | 配置（现存 15） | `mortal/config.example.toml`、`config.round{2,3,4,5}.toml`、`config.offline.toml`、`config.grp_h128.toml`、`config.s6c{,_base,_probe,_smoke}.toml`、`config.anchor_ako.toml`、`config.iql_b_v2.toml`、`config.iql_b_v3.toml`、`config.mix_v1.toml`（留存原因：仍被仓库内工具/文档当输入引用；+ 生成物 `config.style_*.toml` 5 个） |
 | 脚本（现存 7） | `mortal/run_round{4,5}.sh`、`run_s6c.sh`、`run_s6c_chain.sh`、`run_guard_s6c_wave2.sh`、`ladder_arm.sh`、`run_anchor.sh` |
-| 文档 | `memory/MEMORY.md`（本文）、`memory/NEXT_STEPS_ANALYSIS_20261012.md`、`tools/training/TRAINING_MANUAL.md`、`tools/training/ENV_SETUP_P100.md`、`tools/tenhou_data/TASKLIST.md`、`tools/read_model/docs/README.md`、`tools/akochan_build_notes.md` |
+| 文档 | `memory/MEMORY.md`（本文）、`memory/NEXT_STEPS_ANALYSIS.md`、`tools/training/TRAINING_MANUAL.md`、`tools/training/ENV_SETUP_P100.md`、`tools/tenhou_data/TASKLIST.md`、`tools/read_model/docs/README.md`、`tools/akochan_build_notes.md` |
 | 数据索引 | `dataset/index/{player_ratings_*.csv,top_players_*.txt,repair_names_report.json}`；`mortal/indexes/*.pth` |
 
 **代码改动台账（相对上游）**

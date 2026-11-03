@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """在真实牌谱上验证 gamma / apply_gamma / dones / steps_to_done 的语义（2026-10-12）。
 
-**为什么需要它**（NEXT_STEPS_ANALYSIS_20261012.md §3.2）：
+**为什么需要它**（NEXT_STEPS_ANALYSIS.md §3.2）：
   MEMORY 一直把 `gamma<1` 描述为"跨局信用分配"，但代码事实并非如此：
   `steps_to_done` 在**局边界归零**（train.py/dataloader.py 里 `if not dones[i]` 才累加），
   而奖励取的是 `kyoku_rewards[at_kyoku[i]]`（当前局）→ gamma 只在**当前局内**给较早动作打折。

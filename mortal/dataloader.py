@@ -32,7 +32,7 @@ class FileDatasetsIter(IterableDataset):
         extra_features = '',
         filter_invalid_actions = False,
     ):
-        """reward_mode（2026-10-12 加，对应 NEXT_STEPS_ANALYSIS_20261012.md §3.1）：
+        """reward_mode（2026-10-12 加，对应 NEXT_STEPS_ANALYSIS.md §3.1）：
 
           'rank_pt'      —— GRP 预测的顺位概率 × pts 的每局期望点差（默认，等价历史行为）
           'delta_points' —— 每局**真实分数差**（由 grp.feature 各家分数与终局分算得，单位：点），

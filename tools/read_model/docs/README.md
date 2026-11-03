@@ -30,6 +30,14 @@
 > A0 补分数/局况（2026-11-03）：120k +0.02pp（zero effect）⇒ “缺特征”也证伪。
 > 详见 `tile_presence/README.md` 与 `tile_presence/results/run3_d224_120k/`。
 >
+> **立直前后打牌信息（2026-11-03 探针）**：A2c 已**隐式区分**——riichi 层删「立直后
+token」的 alloc_ce 仅 **+0.0005**、删「立直前」**+0.0819**（R=0.006；wait_ce 0.004）；
+> 连「摸切标志」都几乎没被用（+0.0035）。原因：立直后的牌已由 `river` 硬掩码处理，
+> `tl_tokens` 那部分本冗余；`post_riichi_river` 在 `compute_wait_bias` 是死参数（合理）。
+> ⇒ 立直层盲区**不在**「立直后处理」，而在「立直前信息不足以定形状」；
+> **加显式「立直后」标志无收益（已证伪）**。
+> 详见 `diagnostics/results/RIICHI_POST_PROBE.md`。
+>
 > **Phase 2 局部形状（2026-11-02 ~ 11-03，已收口：有条件成立、不重启 200k）**：
 > 新目录 `tools/read_model/local_shape/`，27 类三张窗口计数形状。
 >

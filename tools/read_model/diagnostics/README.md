@@ -50,7 +50,8 @@
 | `s3158_local_extract.py [n]` | **Phase 1**：建 40000 样本评估集 → A2b / A3 / counts 三套后验 → tl_tokens 顺序对调的配对反事实 → 落 `CACHE` | ~2.5 min，GPU |
 | `s3158_local_report.py` | **Phase 2a**：PART C（alloc CE 按列分解 + 邻接手切分组）、PART A（顺序模式 desc/asc/对照 + bootstrap + 立直分层 + 逐格 + 自然序格内分层）、PART A'（反事实）、PART D（tedashi vs tsumogiri）→ `results/local_order_report.json` | ~3 min，CPU |
 | `s3158_local_strata.py` | **Phase 2b**：格内分层 ΔΔ（消除 m 混合混杂）× 立直分层；反事实改**逐样本期望回归**（斜率 b、r²）→ `results/local_order_report2.json` | ~4 min，CPU |
-| `s3158_local_window.py` | **Phase 2c**：同色 ±2 窗口（5 张合计）版本，对应「7s **附近**的索子张」这种区域性提问（仅 stdout） | ~3 min，CPU |
+| `s3158_local_window.py` | **Phase 2c**：同色 ±2 窗口（5 张合计）版本，对应 「7s **附近**的索子张」这种区域性提问（仅 stdout） | ~3 min，CPU |
+| `riichi_post_discard_probe.py` | **立直前后打牌信息的利用方式**（2026-11-03）：`zero_tg` / `drop_post` / `drop_pre` / `drop_all` 五变体消融 → `results/riichi_post_probe.json`；结论 CAPTURED（R=0.006）见 `results/RIICHI_POST_PROBE.md` | ~11 min，GPU |
 
 > ⚠️ 地板口径提示（2026-10-20 审计）：Phase 2b/2c 原始跑批时用 **A3 规则法**当「顺序盲
 > 地板」——该设定已作废（A3 消费 `tl_tokens`，对顺序有真实响应，见下方方法学 2）。

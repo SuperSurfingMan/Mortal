@@ -1,6 +1,6 @@
 # 读牌模型（手牌暗牌预测，监督学习路线）— v1 / v2 / v2s / v2x / A2b / A3
 
-> 对应方案文档：`memory/NEXT_STEPS_ANALYSIS_20261012.md` 之后讨论的「监督学习路线
+> 对应方案文档：`memory/NEXT_STEPS_ANALYSIS.md` 之后讨论的「监督学习路线
 > （路线 1）完整模型设计与训练方案」。本目录是该方案的**第一个可运行版本**：
 > 从单一玩家视角，用可见历史监督预测其他三家的暗牌后验与听牌（荣和威胁）分布，
 > 输出校准概率 + 硬约束层，为将来注入 Mortal 提升防守做准备。
@@ -27,6 +27,7 @@
 > all macro AUC 0.708→0.715→**0.723**，但仍低于冻结 A2c 的 `1−P(count=0)` 0.738；
 > 与 A2c 混合无互补增益（最佳 0.7383 = A2c 单独）⇒ **门禁 FAIL，独立 token 读牌线关闭**。
 > 唯一残余价值形态：把 A2c 的 `P(count>0)` 当额外牌特征做残差/蒸馏。
+> A0 补分数/局况（2026-11-03）：120k +0.02pp（zero effect）⇒ “缺特征”也证伪。
 > 详见 `tile_presence/README.md` 与 `tile_presence/results/run3_d224_120k/`。
 >
 > **Phase 2 局部形状（2026-11-02）**：新目录 `tools/read_model/local_shape/`。P0 已跑完

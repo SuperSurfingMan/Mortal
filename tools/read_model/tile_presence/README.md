@@ -159,11 +159,51 @@ tmux new -d -s tp_train "bash tools/read_model/tile_presence/run_train.sh"
 `P(count>0)` 作为额外牌特征做残差/蒸馏（需为 train/val 导出 A2c 的 AP），
 否则它的信息严格弱于现有读牌模型。
 
-## 9. 运行记录
+**根因分层归因**（查表基线 0.646、动作流只值 0.94pp、危险度只值 0.15pp、
+输出仍是逐牌边际、验证集选择噪声 0.5pp）见
+[`ANALYSIS_WHY_BELOW.md`](ANALYSIS_WHY_BELOW.md)。
 
-- 缓存：`.cache`（40k）与 `.cache120`（120k，1.4GB）
-- 结果：`results/run1_d192_lr3e-4/`、`results/run2_d160_aug/`、
-  `results/run3_d224_120k/`（含 `presence.pth`、`tile_presence.json`、
-  `TILE_PRESENCE_REPORT.md`、`analyze.json`）
-- 日志：`mortal/logs/read_model/tile_presence/`
-- 互补性诊断：`analyze.py`（逐牌 AUC、与 A2c 的线性/秩混合扫描）
+**「超过 A2c」的可行性**（预测相关性 0.927、分歧处七成是模型错、容量约束 A2c 已满足、
+数据外推 ~0.73）见 [`FEASIBILITY_BEAT_A2C.md`](FEASIBILITY_BEAT_A2C.md)。
+
+**A0 分数/局况特征（2026-11-03，已做）**：把 A2c 有而我们漏的当前分数/名次/局数/
+本场/供托/亲家/场风补进 context（18→29 维）。**120k 主配置 +0.02pp（zero effect）**，
+40k −0.60pp；推理时清零反而 +0.11pp；presence 率在名次/分差上极差只有 0.55pp
+⇒ 「缺分数特征」被证伪。详见 [`A0_SCORE_CONTEXT.md`](A0_SCORE_CONTEXT.md)。
+
+## 9. 文件与运行记录
+
+### 9.1 代码
+
+| 文件 | 作用 |
+|---|---|
+| `tokens.py` | 牌/动作/context 特征（`FT=22 / FE=22 / FC=29`） |
+| `export.py` | 回放 → 紧凑 token 缓存（不存 obs） |
+| `model.py` | 双流交叉注意力 |
+| `train_presence.py` | 训练 + 终评 + 门禁（支持 `--drop` 特征组消融） |
+| `analyze.py` | 逐牌 AUC + 与 A2c 的混合/秩平均扫描 |
+| `analyze_within.py` | 手内排序 AUC |
+| `analyze_capacity.py` | 三家联合容量约束与投影 |
+| `baseline_lookup.py` | 公共统计查表基线（无训练） |
+| `run_export.sh` / `run_train.sh` / `run_ablation.sh` | 入口 |
+
+### 9.2 结果
+
+| 目录 | 内容 |
+|---|---|
+| `results/run1_d192_lr3e-4/` | 40k，2.57M，AUC 0.7082 |
+| `results/run2_d160_aug/` | 40k + 增广/正则，1.79M，AUC 0.7153 |
+| `results/run3_d224_120k/` | 120k，5.09M，AUC **0.7231**（主结果；含 `analyze.json`/`within.json`/`capacity.json`） |
+| `results/run4_a0_40k/` | A0 分数/局况，40k，AUC 0.7093 |
+| `results/run5_a0_120k/` | A0 分数/局况，120k，AUC 0.7233 |
+| `results/ablations/` | `no_events` 0.7059 / `no_history` 0.7141 / `no_safety` 0.7138 |
+| `results/diagnostics/lookup.json` | 查表基线（0.6363 / 0.6461 / 0.6495） |
+| `results/cache_meta/` | 四个缓存的导出参数（n/seed/glob） |
+
+### 9.3 缓存（已清理，可重建）
+
+`.cache` / `.cache120` / `.cache_a0` / `.cache120_a0` 已于 2026-11-03 清理
+（约 **4.2GB**，磁盘紧张）；导出参数保留在 `results/cache_meta/`。
+重建方式：`run_export.sh`（40k 约 6 分钟，120k 约 12 分钟，CPU）。
+
+日志：`mortal/logs/read_model/tile_presence/`。

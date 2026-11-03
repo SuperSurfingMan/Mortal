@@ -1,0 +1,9 @@
+{
+ "split": "eval",
+ "glob": "dataset/mjai/houou4/202609/**/*.json.gz",
+ "seed": 20261016,
+ "n_files": 15892,
+ "feature_version": 1,
+ "check_alloc": "/tmp/read_model_diag_cache_a2c/cache.npz",
+ "n": 40000
+}

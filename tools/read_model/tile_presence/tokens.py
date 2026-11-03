@@ -38,7 +38,7 @@ MELD_ACTIONS = (A_CHI, A_PON, A_DAIMINKAN, A_ANKAN, A_KAKAN)
 
 FT = 22          # 牌 token 特征维
 FE = 22          # 动作 token 特征维
-FC = 18          # context 特征维
+FC = 29          # context 特征维（18 局面 + 11 A0 分数/局况）
 
 TILE_FEATURE_NAMES = (
     'tedashi_n', 'tsumogiri_n', 'has_tedashi', 'tedashi_first_turn',
@@ -59,6 +59,10 @@ CONTEXT_FEATURE_NAMES = (
     'n_riichi_other', 'n_riichi_total', 'defense_frac', 'last3_risk',
     'own_man', 'own_pin', 'own_sou', 'own_honor', 'own_dora', 'dora_total',
     'discard_n', 'tedashi_frac',
+    # A0（2026-11-03）：当前局分数与局况。一局内不变，来自 mjai start_kyoku；
+    # A2c 的 obs 里有这些（rows 7..22），而本模型之前完全没给。
+    'score', 'rank', 'gap_leader', 'gap_next', 'is_oya',
+    'kyoku', 'honba', 'kyotaku', 'bakaze_south', 'is_last', 'n_negative',
 )
 
 
@@ -300,6 +304,28 @@ def build_sample(s: dict) -> dict:
     Cx[:, 13] = own_f[27:].sum() / 14.0
     Cx[:, 14] = dora_own / 4.0
     Cx[:, 15] = float(dora_cnt.sum()) / 4.0
+
+    # ---- A0：当前分数 / 名次 / 局况（相对目标家）----
+    scores = np.asarray(s.get('scores', np.full(4, 25000)), dtype=np.float64)
+    kmeta = np.asarray(s.get('kyoku_meta', np.zeros(5)), dtype=np.float64)
+    observer = int(s.get('_observer', 0))
+    for j in range(3):
+        tgt = (observer + j + 1) % 4
+        sc = float(scores[tgt])
+        rank = int((scores > sc).sum())          # 0-based；并列取同分
+        higher = scores[scores > sc]
+        gap_next = (sc - float(higher.min())) if higher.size else 0.0
+        Cx[j, 18] = float(np.clip(sc / 100000.0, 0.0, 1.0))
+        Cx[j, 19] = rank / 3.0
+        Cx[j, 20] = float(np.clip((sc - float(scores.max())) / 50000.0, -1.0, 1.0))
+        Cx[j, 21] = float(np.clip(gap_next / 30000.0, -1.0, 1.0))
+        Cx[j, 22] = 1.0 if int(kmeta[3]) == tgt else 0.0     # 亲家
+        Cx[j, 23] = min(float(kmeta[0]), 8.0) / 8.0           # 第几局
+        Cx[j, 24] = min(float(kmeta[1]), 5.0) / 5.0           # 本场
+        Cx[j, 25] = min(float(kmeta[2]), 5.0) / 5.0           # 供托
+        Cx[j, 26] = float(kmeta[4])                            # 南场
+        Cx[j, 27] = 1.0 if rank == 3 else 0.0
+        Cx[j, 28] = float((scores < 0).sum()) / 3.0
 
     return {
         'tile_feat': T,

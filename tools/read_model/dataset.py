@@ -261,6 +261,9 @@ class GameReplayer:
         self.n_melds = [0] * 4                # 吃/碰/大明杠/暗杠次数（加杠不计）
         self.n_tsumo = 0                 # 本局摸牌数（含岭上）
         self.kyoku = 0
+        # A0：当前局的分数/局数/本场/供托/亲家/场风（一局内不变，只由 start_kyoku 写入）
+        self.kyoku_meta = {'scores': [25000] * 4, 'kyoku': 1, 'honba': 0,
+                           'kyotaku': 0, 'oya': 0, 'bakaze': 'E'}
         self.event_kyoku = np.zeros(len(events), dtype=np.int64)
         self.samples: list[dict] = []
         self.stats = {'n_snapshots': 0, 'n_samples': 0, 'n_kyoku': 0}
@@ -291,6 +294,15 @@ class GameReplayer:
             # 结构标签更大）。worker RSS 随文件累积的一个次要来源。
             self.tl_cache.clear()
             self.struct_cache.clear()
+            # A0：记录本局的分数与局况（mjai start_kyoku 自带）
+            self.kyoku_meta = {
+                'scores': [int(x) for x in ev.get('scores', [25000] * 4)],
+                'kyoku': int(ev.get('kyoku', 1)),
+                'honba': int(ev.get('honba', 0)),
+                'kyotaku': int(ev.get('kyotaku', 0)),
+                'oya': int(ev.get('oya', 0)),
+                'bakaze': ev.get('bakaze', 'E'),
+            }
             self.c_total[tile_id(ev['dora_marker'])] += 1
             self.dora_count[tile_id(ev['dora_marker'])] += 1
             return
@@ -576,6 +588,12 @@ class GameReplayer:
             'tl_flags': tl_flags,
             'struct_form': struct_form,
             'struct_counts': struct_counts,
+            'scores': np.asarray(self.kyoku_meta['scores'], dtype=np.int32),
+            'kyoku_meta': np.asarray([
+                self.kyoku_meta['kyoku'], self.kyoku_meta['honba'],
+                self.kyoku_meta['kyotaku'], self.kyoku_meta['oya'],
+                1 if self.kyoku_meta['bakaze'] == 'S' else 0,
+            ], dtype=np.int32),
             '_observer': observer,
             '_event': ev_idx,
             '_kyoku': int(self.event_kyoku[ev_idx]),

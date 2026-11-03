@@ -1,0 +1,25 @@
+{
+ "model": {
+  "auc_raw": 0.7231025996751956,
+  "auc_proj": 0.7232339442796324,
+  "violation_cells_frac": 0.005627205882352941,
+  "mean_overflow": 0.002458911387225175,
+  "overflow_p95": 0.0,
+  "cap1_cells": 452322,
+  "cap1_violation_frac": 0.0440725854590314,
+  "cap1_auc_raw": 0.7056520927732122,
+  "cap1_auc_proj": 0.7070870290751318
+ },
+ "a2c": {
+  "auc_raw": 0.7382760411905241,
+  "auc_proj": 0.7382773125653941,
+  "violation_cells_frac": 0.00013823529411764705,
+  "mean_overflow": 9.192513192401212e-06,
+  "overflow_p95": 0.0,
+  "cap1_cells": 452322,
+  "cap1_violation_frac": 0.0012468993327762082,
+  "cap1_auc_raw": 0.757800645999048,
+  "cap1_auc_proj": 0.7578175818679136
+ },
+ "best_step": 2000
+}

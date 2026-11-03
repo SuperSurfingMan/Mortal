@@ -120,3 +120,7 @@ mortal/config.style_*.toml
 # 根目录 logs/selfplay/ 是 selfplay_gen.py 产出的牌谱（json.gz）与跑批日志，属运行期产物；
 # 驱动脚本 mortal/run_selfplay_8k.sh 入库。只锚定仓库根，避免误伤别处的同名目录。
 /logs/
+# ---- 本项目追加（2026-11-03）：局部形状探针的 smoke/feature 缓存 ----
+# local_shape 的正式缓存已在 tools/read_model/local_shape/.gitignore（.cache/、.cache_p2/）；
+# 这里是调试时写进 mortal/ 的 smoke 副本，属运行期产物，不入库。
+mortal/local_shape_cache*/

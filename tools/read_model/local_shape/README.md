@@ -217,9 +217,25 @@ eval alloc CE：**0.6807**（A2c 0.6516，+0.0291）。
   可作为**校准**参考，但不能声称“局部形状读得更准”。
 - **P3（仅在新任务/新标签下重启）**：5 类分解软标签或结构化解码；当前不启动。
 
+## 5b. BAYES_CEILING：上限探针（2026-11-03）
+
+`bayes_ceiling.py` 复用 `bayes_bound.py` 的三层 tier（counts 精确超几何 / hard 立直约束 /
+behave 行为似然）直接估计 `P(shape_j=k|o)`，回答“FAIL 是否属于后验本身接近均匀的
+预期结果”。要点：
+
+- **对齐**：eval 划分与 P0 缓存逐样本校验 `alloc`；mask/active 口径直接复用
+  `eval_local_shape`；`counts` 实现与缓存 `CPMF0` 自检（max err 3e-08）。
+- **判定用 top1**（argmax 对概率失配稳健）：诊断发现「pool=unseen 均匀子集」假设被
+  手切行为打破（校准 gap ≈0.08），CE 口径会失真甚至高于标签熵；CE 仅作参考。
+- MC 后验含 Dirichlet(α/K) 平滑（防 `-log 0` 爆炸），M=256/1024/4096 同源截断做收敛检查。
+- 结果与判定见 `results/BAYES_CEILING_REPORT.md`。
+
 ## 6. 已知边界
 
 - 缓存是 40000 样本、202609 单月；bootstrap 为**样本级**（非文件块），CI 偏窄；
-- `prior_major` 在评估集上拟合，是保守的 oracle 先验；
+- `prior_major` 在评估集上拟合，是保守的 oracle 先验；P1 的 `prior_eval` 是**全局**
+  27 类先验（CE 更大），与本目录的**每中心**先验口径不同，勿直接对比；
+- counts/hard/behave 的 pool 含 ~9 张不可入手死牌（ura/备用指示牌）且未建模手切
+  相关性 ⇒ 其 CE 是**保守（偏高）**估计，上限结论以 top1 判据为准；
 - P0 的“形状”是计数形状，不是两面/嵌张分解；后者需要 P1 的软标签；
 - 所有指标都是离线诊断，强度结论仍只认 ladder。

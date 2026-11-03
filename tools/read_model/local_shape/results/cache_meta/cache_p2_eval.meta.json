@@ -1,0 +1,11 @@
+{
+ "n": 40000,
+ "C": 96,
+ "dT": 64,
+ "S": 46,
+ "split": "eval",
+ "glob": "/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202609/**/*.json.gz",
+ "seed": 20261016,
+ "n_files": 15892,
+ "ckpt": "/mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2c/best.pth"
+}

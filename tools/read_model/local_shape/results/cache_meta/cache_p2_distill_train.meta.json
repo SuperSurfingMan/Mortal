@@ -1,0 +1,12 @@
+{
+ "n_targets": 1631,
+ "n_snapshots": 1501,
+ "n_ref": 512,
+ "beta": 1.0,
+ "max_k": 40,
+ "train_cache": "/mnt/data8/mortal/Mortal/tools/read_model/local_shape/.cache_p2/train.npz",
+ "train_glob": "/mnt/data8/mortal/Mortal/dataset/mjai/houou4_names/202608/**/*.json.gz",
+ "seed": 20261102,
+ "file_seed": 20261102,
+ "val_frac": 0.2
+}

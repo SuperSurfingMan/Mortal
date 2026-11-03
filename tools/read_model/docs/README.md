@@ -16,6 +16,34 @@
 > （hit@1 0.1724→0.1698、cond_ce 2.8595→2.8642，post0/turn≤7 反降）⇒ **立直层专项关闭**。
 > 读牌模型冻结 A2c；唯一未验证路径 = S6b 注入 + RM11。详见 §13.13.8；
 > 最新现状/下一步总览见 §13.13（2026-10-22 更新）。
+>
+> **守卫 risk 口径修正（2026-11-02/03）**：`risk` 旧实现双乘 P(听)，已修为
+> `risk=Σ_j wp[j,t]`；修正后在全新种子 1000000/1020000 上重扫 legacy λ=10 与
+> fixed λ=4.5/6/7.5，四臂均 NO-CONCLUSION ⇒ 线上默认 `MORTAL_GUARD_LAMBDA=0`。
+> 详见 §13.15.6 与 [GUARD_RISK_FIX_20261102.md](file:///mnt/data8/mortal/Mortal/tools/read_model/docs/GUARD_RISK_FIX_20261102.md)。
+>
+> **Phase 3 逐牌存在性（2026-11-03）**：新目录 `tools/read_model/tile_presence/`，
+> 牌 token × 动作 token 双流交叉注意力，输出 34 类「在不在」。40k/120k 三次运行，
+> all macro AUC 0.708→0.715→**0.723**，但仍低于冻结 A2c 的 `1−P(count=0)` 0.738；
+> 与 A2c 混合无互补增益（最佳 0.7383 = A2c 单独）⇒ **门禁 FAIL，独立 token 读牌线关闭**。
+> 唯一残余价值形态：把 A2c 的 `P(count>0)` 当额外牌特征做残差/蒸馏。
+> 详见 `tile_presence/README.md` 与 `tile_presence/results/run3_d224_120k/`。
+>
+> **Phase 2 局部形状（2026-11-02）**：新目录 `tools/read_model/local_shape/`。P0 已跑完
+> （40000 样本 CPU 基线）：A2c 的 27 类局部形状 top1 仅比无信息先验高 0.4~1.4pp，
+> 立直 active_both 为负；pairwise AUC 0.72~0.84 说明边际有排序信息。P1 冻结骨干局部头
+> 已跑：active_any top1 **56.0% = 先验**、低于 A2c product 57.5%；active_both −0.85pp、
+> 立直 −1.35pp ⇒ **FAIL**，按预注册门禁停止冻结局部头。P2a 立直显式特征也已跑：
+> riichi active_both **0.659 vs A2c 0.669**（仍低于 A2c）⇒ **FAIL**。P2b `behave` 蒸馏
+> **PASS via CE**：riichi active_both top1 **0.667 vs A2c 0.669**（基本持平），
+> CE **1.006 vs 1.017**（优于 A2c）；但 top1 未超 A2c，只是校准/CE 的胜利。
+> P2c 受控解冻（最后 2 个 Block + H1 + head）已跑：riichi active_both top1 **0.6602 vs A2c
+> 0.6686**（strict top1 FAIL），CE **0.9386 vs 1.0173**（校准更好），但 alloc CE
+> **0.6807 vs 0.6516** 退化 ⇒ **FAIL**。P1/P2a/P2c 均未把 top1 推过 A2c ⇒
+> **按预注册门禁关闭局部形状线**，不跑 200k；P2b/P2c 的 CE 改善仅作风险校准参考。
+> 详见 `local_shape/README.md`、`local_shape/results/p1/P1_REPORT.md`、
+> `local_shape/results/p2/P2_REPORT.md`、`local_shape/results/p2b/P2B_REPORT.md`、
+> `local_shape/results/p2c/P2C_REPORT.md`。
 
 ## 0. 交付物与边界
 
@@ -2118,6 +2146,37 @@ P(放铳) 估计器，A2c 的 AUC 0.9698 已经够用。
 **结论：GO（λ=10 线性）**。推荐线上配置 `MORTAL_GUARD_LAMBDA=10`；
 若追求更保守的备选，`7.5` 也在显著区间（+0.712）。
 
+> ⚠️ 该结论已被 2026-11-02/03 的口径修正推翻，见 §13.15.6。
+
+#### 13.15.6 risk 双乘 P(听) 修正与 λ 重扫（2026-11-02/03，终局 λ=0）
+
+**问题**：`factorized_wait_probs` 的 `wp[..., :34]` 已经是
+`P(听)·P(待牌=t|听)`，旧守卫又乘了一次 `p_tenpai`，实际是
+`Σ_j P(听_j)^2·P(待牌_j=t|听_j)`。修正后 risk 均值约为旧口径 **1.55~1.66×**；
+20k 上 `fixed λ=6` 与旧 `legacy λ=10` 工作点几乎重合（change 8.33% vs 7.98%、
+deal 0.0097 vs 0.0094、a2c 0.3118 vs 0.3098）。
+
+**受控 ladder**（B/756k 自对弈，守卫只挂挑战者，每臂 16 块×500 sets/向 =
+64,000 半庄，全新种子 **1000000/1020000**）：
+
+| 臂 | risk | λ | δ（pt/半庄） | bootstrap 95%CI | agari | houjuu |
+|---|---|---:|---:|---|---:|---:|
+| L0 | legacy | 10 | **−0.184** | [−0.61, +0.27] | 0.2076 | 0.1126 |
+| C0 | fixed | 6 | **−0.124** | [−0.56, +0.35] | 0.2092 | 0.1153 |
+| C− | fixed | 4.5 | **+0.047** | [−0.37, +0.46] | 0.2105 | 0.1178 |
+| C+ | fixed | 7.5 | **−0.103** | [−0.56, +0.39] | 0.2078 | 0.1129 |
+
+四臂全部 **NO-CONCLUSION**；配对 Δδ（fixed − legacy）分别为 +0.059
+[−0.30,+0.42]、+0.231 [−0.16,+0.61]、+0.080 [−0.28,+0.45]，修正版不劣于旧口径，
+但也没有显著正收益。**legacy λ=10 的历史 +0.778 在本种子块未复现**（CI 上界 +0.27）；
+且旧 +0.778 是两次同向运行的 `avg_pt` 均值（非 δ、未 A/B 换边），按 δ 粗算约
++0.448 且 CI 跨 0。
+
+**判决**：按预注册规则，所有 fixed 臂不显著 ⇒ 线上 `MORTAL_GUARD_LAMBDA=0`
+（关闭守卫），不跑 fresh-seed 确认（1040000/1060000 未消费），不保留 legacy
+默认路径。修复代码、单一真源与 `tools/test_guard_risk.py` 回归保留；完整记录见
+[GUARD_RISK_FIX_20261102.md](file:///mnt/data8/mortal/Mortal/tools/read_model/docs/GUARD_RISK_FIX_20261102.md)。
+
 ### 13.16 主模型 S6c：自家速度 2 行注入（2026-10-23，纯 Python，不动 Rust）
 
 **定位**：这一段是**主模型**的特征注入（S6 轴的第三个子项），与读牌模型无关；放在这里只为延续 §13 编号。完整记录（探测数字、口径推导、产物台账）在 **`memory/MEMORY.md` §3.11**。
@@ -2216,6 +2275,7 @@ P(放铳) 估计器，A2c 的 AUC 0.9698 已经够用。
 | `tools/read_model/shanten_fast.py` | numpy 向量化的 tomohxx 向听查表（与 Rust 逐位同口径，4096 手牌 3.7 ms；MCMC/上界专用） |
 | `tools/read_model/enum_fuse.py` | RM9 推理期融合评估：`support`（枚举支撑集均匀）/`rule`（规则连续分布）/`sample`（alloc 采样手牌→精确 waits）三源 × α 扫描；20000 固定集，输出 `<ckpt>/enum_fuse_*_report.json` |
 | `tools/read_model/riichi_diag.py` | 立直层专项诊断：按 `post_riichi_river` 张数（post0/1-2/3+）、turn≤7/≥8、called 分层 + 条件分布温度扫描；输出 `riichi_diag*.json` |
+| `tools/read_model/compare_guard_arms.py` | **守卫臂配对分析（2026-11-02/03）**：同种子按方向配对，算 Δδ=δ_arm−δ_ref 与 bootstrap CI；不把 A/B 原始 pt 差直接平均 |
 
 | `tools/read_model/diagnostics/` | 复核与局部手牌信息的全部诊断脚本（`s315_*` / `s3158_*` + `_common.py` 路径层 + `README.md` 方法学纪律 + `results/*.json` 原始产物） |
 
@@ -2225,6 +2285,7 @@ P(放铳) 估计器，A2c 的 AUC 0.9698 已经够用。
 |---|---|
 | 读牌模型 | `tools/read_model/`：dataset/model/model_v2（**P1: `wait_head` flat/tile 双参数化，tile=RM5 逐牌列 H2 头 + tenpai 标量头**；**RM12: `tl_mode=pooled/tile` + tile-indexed 时序图；RM14: `next_tedashi` 辅助头**）/model_v2s/structure/constraints/train（**P1: L_wait 改 34 类条件 CE；`--wait-head` CLI**；**RM12: `--tl-mode`；RM14: `--next-tedashi-weight`**；**RM9: `--init` 暖启、`--riichi-weight`、`--riichi-early-weight`**）/evaluate/export_onnx/compare_bootstrap 等；**RM12/RM14: dataset 侧车 `tl_turn/tl_age/tl_consumed/tl_flags` + `next_tedashi` 标签**；A3 规则法基线（rule_baseline.py + a3_eval/compare_a3/calibrate_a3/test_rule_baseline/run_a3.sh）；P0：model.factorized_wait_probs/val_score v2/order_metrics.py；dataset 增补 meld_counts/dora_indicators 公开字段 |
 | 时钟探针副本 | `tools/read_model_clock/`：dataset 增 `tl_pos`/`tl_age_ev`；model_v2 `tile_order` 最小集（`e_last`/`pos_diff`/`valid`、`tile_proj=3d+3`、`e_rec` 用事件年龄）；train/evaluate/order_metrics/diagnostics 副本；`s3158` 反事实同步交换时钟侧车；`run_p1b_clock.sh` + `monitor_probe.sh`；独立 cache |
+| 守卫 risk 口径修正 | `mortal/guard_risk.py`（单一真源）；`mortal/defense_guard.py`（risk_mode/helper）；`mortal/ladder.py` + `ladder_arm.sh`（`--guard-risk-mode` 对照）；`precompute_danger.py` + 5 个 eval 脚本改为 helper；`tools/test_guard_risk.py`（合成反例 + 真实批次）；`compare_guard_arms.py`（配对 Δδ） |
 
 ### 15.3 产物
 
@@ -2244,6 +2305,8 @@ P(放铳) 估计器，A2c 的 AUC 0.9698 已经够用。
 | `mortal/logs/read_model/a2c_accept_20261021/` | A2c 验收全套证据：`chain.log`/`status`（含四任务 RC）+ `evaluate`/`strat_metrics`/`compare_a3`/`order_metrics` 日志 + `order_metrics_a2b_regress.log`（修复后 A2b 数值回归，逐位复现 67%/82.0%/+31.1%、b=0.0144） | 日志 |
 | `tools/read_model/diagnostics/results/p1_impl_20261019/` | P1 smoke 500 步记录 + A2c 训练启动参数，§13.4 的原始出处 | ~5 KB |
 | `tools/read_model/diagnostics/results/p0_rerun_20261019/` | P0 复跑全档：4 份日志 + 旧口径报告存档（`*.prerm1.json`）+ 旧 bayes tables，§13.3 表格数字的原始出处 | ~400 KB |
+| `tools/read_model/diagnostics/results/guard_fix_20261102/` | **守卫 risk 口径修正（2026-11-02/03）**：`legacy_20k.json`/`fixed_20k.json` λ 扫描、`paired_all_vs_l10.json` 配对 Δδ；`GUARD_RISK_FIX_20261102.md` 的原始出处 | 数十 KB |
+| `mortal/runs/guard_fix/` | **守卫 λ 重扫 ladder**：`legacy_l10`/`fixed_l60`/`fixed_l45`/`fixed_l75`/`null_l0` 的牌谱与 `run_meta.json`（每臂 64k 半庄） | 牌谱数 GB |
 
 ## 16. 章节映射（旧 MEMORY.md 编号 → 本文）
 

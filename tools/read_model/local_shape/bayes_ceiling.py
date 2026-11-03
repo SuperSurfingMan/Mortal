@@ -286,10 +286,10 @@ def run_counts_exact(z, masks, centers, active_any, active_both, CU, N,
                         continue
                     add_masked(acc[(layer, act)], m, ce, top1, top3, ent)
                     add_masked(accp[(layer, act)], m, ceq, top1q, top3q, entq)
-                    per[(layer, act)]['ce'][m, j] = ce[m]
-                    per[(layer, act)]['top1'][m, j] = top1[m]
-                    per[(layer, act)]['top3'][m, j] = top3[m]
-                    per[(layer, act)]['cnt'][m, j] = 1.0
+                    per[(layer, act)]['ce'][m, j] += ce[m]
+                    per[(layer, act)]['top1'][m, j] += top1[m]
+                    per[(layer, act)]['top3'][m, j] += top3[m]
+                    per[(layer, act)]['cnt'][m, j] += 1.0
                     perp[(layer, act)]['ce'][m, j] = ceq[m]
                     perp[(layer, act)]['top1'][m, j] = top1q[m]
                     perp[(layer, act)]['cnt'][m, j] = 1.0
@@ -449,10 +449,10 @@ def run_mc(z, index, masks, centers, active_any, active_both, args, m_list):
                                         continue
                                     add(need[tier][(layer, act, m)],
                                         ce, t1, t3, ent)
-                                    per[tier][(layer, act, m)]['ce'][i, j] = ce
-                                    per[tier][(layer, act, m)]['top1'][i, j] = t1
-                                    per[tier][(layer, act, m)]['top3'][i, j] = t3
-                                    per[tier][(layer, act, m)]['cnt'][i, j] = 1.0
+                                    per[tier][(layer, act, m)]['ce'][i, j] += ce
+                                    per[tier][(layer, act, m)]['top1'][i, j] += t1
+                                    per[tier][(layer, act, m)]['top3'][i, j] += t3
+                                    per[tier][(layer, act, m)]['cnt'][i, j] += 1.0
         done += 1
         if done % 10 == 0:
             el = time.time() - t0
@@ -528,32 +528,48 @@ def judge(row):
                else 'hard' if h1 is not None else 'counts')
     if pm is None or best1 is None:
         return {'verdict': 'NO-DATA'}
-    info_bayes = best1 - pm
-    info_head = (head1 - pm) if head1 is not None else None
-    ratio = (info_head / info_bayes
-             if (info_head is not None and info_bayes > 1e-6) else None)
-    if info_bayes < 0.01:
-        verdict = 'POSTERIOR≈PRIOR（后验接近先验，FAIL 属预期）'
-    elif ratio is None:
-        verdict = 'NO-HEAD'
-    elif ratio >= 0.85:
-        verdict = 'HEAD≈CEILING（实测已用掉 ≥85% 可达信息）'
-    elif ratio < 0.50:
-        verdict = 'HEADROOM（仍有显著可回收信息）'
+    info_bayes = best1 - pm                     # tier 信息量（top1）
+    head_vs_prior = (head1 - pm) if head1 is not None else None
+    head_vs_best = (head1 - best1) if head1 is not None else None
+    ratio = (head_vs_prior / info_bayes
+             if (head_vs_prior is not None and info_bayes > 1e-6) else None)
+    # 分类：必须区分「任务信号稀薄」与「tier 不是紧上界」，两者含义相反。
+    # 0.3pp 阈值：prior 与 tier 是同一批样本上的配对比较，SE 远小于独立比例差。
+    if info_bayes <= 0.003:
+        if head_vs_prior is not None and head_vs_prior > 0.02:
+            verdict = 'TIER_NOT_TIGHT（实测头超出 tier ⇒ tier 漏信息）'
+        else:
+            verdict = 'SIGNAL_SHALLOW（tier 信息≈0，实测头超额≤2pp）'
+    elif head_vs_best is not None and head_vs_best >= 0:
+        verdict = 'HEAD≈CEILING（实测已达/超出 tier 上限）'
+    elif head_vs_best is not None and head_vs_best < -0.01:
+        verdict = 'HEADROOM（tier 信息未被利用）'
     else:
-        verdict = 'PARTIAL（部分信息未利用）'
+        verdict = 'PARTIAL（差距在 1pp 内）'
     # CE 口径（仅参考，含失配风险）
     pri_ce = g('prior', 'ce')
     c_ce = g('counts', 'ce')
     p_ce = g('counts_prod', 'ce')
     head_ce = g('p2c', 'ce')
+    # 显著性：tier 是 MC 子集（n 常远小于 prior 的全量 n）⇒ 必须报 sigma
+    n_tier = (row.get(ref_key) or {}).get('n')
+    se = float(np.sqrt(0.25 / n_tier)) if n_tier else None
+    sigma = (abs(info_bayes) / se) if (se and se > 0) else None
     return {'metric': 'top1', 'ref_tier': ref_key,
+            'n_prior': (row.get('prior') or {}).get('n'),
+            'n_tier': n_tier, 'sigma': sigma,
             'info_bayes': float(info_bayes),
-            'info_head': None if info_head is None else float(info_head),
+            'info_head': None if head_vs_prior is None else float(head_vs_prior),
             'info_ratio': None if ratio is None else float(ratio),
+            'head_vs_prior': (None if head_vs_prior is None
+                              else float(head_vs_prior)),
+            'head_vs_best': (None if head_vs_best is None
+                             else float(head_vs_best)),
+            'prior_top1': float(pm), 'best_top1': float(best1),
             'top1_counts_vs_prior': (None if c1 is None else float(c1 - pm)),
             'top1_a2c_vs_counts': (None if (a2c1 is None or c1 is None)
                                    else float(a2c1 - c1)),
+            'top1_a2c_vs_best': (None if (a2c1 is None) else float(a2c1 - best1)),
             'top1_head_vs_best': (None if head1 is None
                                   else float(head1 - best1)),
             'joint_struct_nats': (None if (p_ce is None or c_ce is None)
@@ -570,6 +586,168 @@ def judge(row):
                                       else float(head_ce
                                                  - g('behave', 'ce'))),
             'verdict': verdict}
+
+
+# --------------------------------------------------------------------------- #
+# 汇总判定
+# --------------------------------------------------------------------------- #
+def _cell(table, layer, act):
+    return (table.get(layer) or {}).get(act) or {}
+
+
+def _mkey(d, m):
+    """兼容 JSON 序列化后的 str key 与内存中的 int key。"""
+    if not isinstance(d, dict):
+        return None
+    return d.get(m, d.get(str(m)))
+
+
+def build_verdict(table, meta, mc):
+    """汇总 18 个 cell 的判定，生成 findings 与总体结论。
+
+    关键区分：
+      SIGNAL_SHALLOW = tier 信息≈0 且实测头总超额≤2pp ⇒ 任务信号稀薄；
+      TIER_NOT_TIGHT = tier 信息≈0 但实测头超额>2pp ⇒ tier 漏信息，非真上限；
+      HEADROOM      = tier 有信息但实测头没拿到。
+    """
+    g = lambda l, a: (_cell(table, l, a).get('judge') or {})
+    ka = g('all', 'active_any')
+    kb = g('all', 'active_both')
+    kc = g('clean_t8', 'active_both')
+    jr = g('riichi', 'active_both')
+    cells = [(l, a, g(l, a)) for l in LAYERS for a in ACTIVES if g(l, a)]
+    n_shallow = sum(1 for _, _, j in cells
+                    if str(j.get('verdict', '')).startswith('SIGNAL_SHALLOW'))
+    n_tight = sum(1 for _, _, j in cells
+                  if str(j.get('verdict', '')).startswith('TIER_NOT_TIGHT'))
+    n_head = sum(1 for _, _, j in cells
+                 if str(j.get('verdict', '')).startswith('HEADROOM'))
+
+    chk = meta.get('counts_selfcheck') or {}
+    m_list = meta.get('m_list') or []
+    deltas = []
+    for tier in mc:
+        node = ((mc[tier].get('all') or {}).get('active_any') or {})
+        by = node.get('by_M') or {}
+        if len(m_list) >= 2:
+            a0, a1 = _mkey(by, m_list[0]), _mkey(by, m_list[-1])
+            if a0 and a1:
+                deltas.append(abs(a1['ce'] - a0['ce']))
+
+    r = _cell(table, 'all', 'active_any')
+    rb = _cell(table, 'riichi', 'active_both')
+    t1 = lambda row, k: (row.get(k) or {}).get('top1')
+    ce_prod = (r.get('counts_prod') or {}).get('ce')
+    ce_a2c = (r.get('a2c') or {}).get('ce')
+    ce_gap = (ce_a2c - ce_prod
+              if (ce_a2c is not None and ce_prod is not None
+                  and np.isfinite(ce_a2c) and np.isfinite(ce_prod)) else None)
+
+    findings = [
+        f"counts 精确自检：max|P(a=0) − CPMF0| = {chk.get('max_abs_err', float('nan')):.1e}"
+        f"（{chk.get('n_checks', 0)} 处）⇒ 多元超几何实现与 `counts_tier` 一致；"
+        f"校准诊断 max|P(count_a=k)−经验频率| = {chk.get('calib_max_gap', float('nan')):.3f}"
+        f"（均匀子集假设被手切行为打破 ⇒ CE 口径失真，top1 判据不受影响）。",
+        f"all/active_any top1：prior {_f(t1(r, 'prior'), 3)}、counts 联合 "
+        f"{_f(t1(r, 'counts'), 3)}、hard {_f(t1(r, 'hard'), 3)}、behave "
+        f"{_f(t1(r, 'behave'), 3)}、A2c {_f(t1(r, 'a2c'), 3)}、P1 "
+        f"{_f(t1(r, 'p1'), 3)}、P2b {_f(t1(r, 'p2b'), 3)}、P2c "
+        f"{_f(t1(r, 'p2c'), 3)}。",
+        f"all/active_any：tier 信息 I(prior→{ka.get('ref_tier', 'best')}) = "
+        f"{_f(ka.get('info_bayes'), 3)}（top1）；P2c 超额 {_f(ka.get('head_vs_prior'), 3)}"
+        f"；A2c 超额 {_f((t1(r, 'a2c') or float('nan')) - (ka.get('prior_top1') or 0), 3)}"
+        f"；A2c 超出 tier {_f(ka.get('top1_a2c_vs_best'), 3)} ⇒ {ka.get('verdict', '—')}。",
+        f"all/active_both：prior {_f((_cell(table, 'all', 'active_both').get('prior') or {}).get('top1'), 3)}、"
+        f"behave {_f(t1(_cell(table, 'all', 'active_both'), 'behave'), 3)}、"
+        f"P2c {_f(t1(_cell(table, 'all', 'active_both'), 'p2c'), 3)}；"
+        f"tier 信息 {_f(kb.get('info_bayes'), 3)}，P2c 相对 tier "
+        f"{_f(kb.get('head_vs_best'), 3)} ⇒ {kb.get('verdict', '—')}。",
+        f"clean_t8/active_both：prior {_f((_cell(table, 'clean_t8', 'active_both').get('prior') or {}).get('top1'), 3)}、"
+        f"behave {_f(t1(_cell(table, 'clean_t8', 'active_both'), 'behave'), 3)}、"
+        f"P2c {_f(t1(_cell(table, 'clean_t8', 'active_both'), 'p2c'), 3)}；"
+        f"tier 信息 {_f(kc.get('info_bayes'), 3)}，P2c 相对 tier "
+        f"{_f(kc.get('head_vs_best'), 3)} ⇒ {kc.get('verdict', '—')}。",
+        f"riichi/active_both（n={_cell(table, 'riichi', 'active_both').get('n_prior', '—')}，"
+        f"小样本+prior 为评估集 oracle）：prior "
+        f"{_f((rb.get('prior') or {}).get('top1'), 3)}、hard {_f(t1(rb, 'hard'), 3)}、"
+        f"behave {_f(t1(rb, 'behave'), 3)}、A2c {_f(t1(rb, 'a2c'), 3)}；"
+        f"tier 信息 {_f(jr.get('info_bayes'), 3)} ⇒ {jr.get('verdict', '—')}。",
+        f"all/active_any CE（仅参考，含失配）：prior "
+        f"{_f((r.get('prior') or {}).get('ce'), 3)}、A2c {_f(ce_a2c, 3)}、P2b "
+        f"{_f((r.get('p2b') or {}).get('ce'), 3)}、P2c "
+        f"{_f((r.get('p2c') or {}).get('ce'), 3)}、counts "
+        f"{_f((r.get('counts') or {}).get('ce'), 3)}、hard "
+        f"{_f((r.get('hard') or {}).get('ce'), 3)}、behave "
+        f"{_f((r.get('behave') or {}).get('ce'), 3)}；A2c CE 相对数牌乘积 "
+        f"{_f(ce_gap, 3)} nats。",
+        f"M 收敛：all/active_any 上三 tier 的 |CE(M_max) − CE(M_min)| "
+        f"最大 {_f(max(deltas) if deltas else float('nan'), 4)} nats"
+        f"（Dirichlet α={meta.get('alpha')} 平滑后）。",
+        f"verdict 分布（{len(cells)} 个 cell）：SIGNAL_SHALLOW {n_shallow}、"
+        f"TIER_NOT_TIGHT {n_tight}、HEADROOM {n_head}。",
+    ]
+
+    shallow = str(ka.get('verdict', '')).startswith('SIGNAL_SHALLOW')
+    sigs = [j.get('sigma') for _, _, j in cells
+            if str(j.get('verdict', '')).startswith('HEADROOM') and j.get('sigma')]
+    sig_txt = (f"（效应仅 {min(sigs):.1f}~{max(sigs):.1f}σ，tier 为 MC 子集，"
+               f"**不足以支撑重启**）" if sigs else '')
+    if shallow and n_head:
+        decision = (
+            f"active_any（n={ka.get('n_prior')}，最可信）：tier 信息 "
+            f"{ka.get('info_bayes', 0) * 100:+.1f}pp（{_f(ka.get('sigma'), 1)}σ）、"
+            f"实测头总超额仅 {ka.get('head_vs_prior', 0) * 100:+.1f}pp ⇒ "
+            f"27 类局部形状标签本身可预测性极低；但 A2c 超出 tier "
+            f"{ka.get('top1_a2c_vs_best', 0) * 100:+.1f}pp ⇒ tier 不是紧上界。"
+            f"同时 {n_head} 个 cell（含 active_both 系）判 HEADROOM"
+            f"：behave 高于 prior、P2c 未拿到{sig_txt}。"
+            f"⇒ P1/P2a/P2c 的 FAIL 主因是**任务信号稀薄**，不是训练/结构缺陷；"
+            f"但**不能声称已达理论天花板**（tier 漏牌河顺序/宣言牌等信息）。"
+            f"局部形状线维持关闭。")
+    elif shallow:
+        decision = ('tier 信息≈0 且实测头超额有限 ⇒ 任务信号稀薄，'
+                    'P1/P2a/P2c 的 FAIL 属任务性质；局部形状线维持关闭。')
+    elif n_head:
+        decision = (f'{n_head} 个 cell 判 HEADROOM ⇒ 存在未利用的 tier 信息，'
+                    'FAIL 可能是实现/表示问题')
+    else:
+        decision = '分层结论不一，见完整分层表与判定列'
+    return {'decision': decision, 'findings': findings}
+
+
+def rebuild_from_json(path, out):
+    """从已有 JSON 重建判定与报告（不重跑采样，秒级）。"""
+    res = json.loads(Path(path).read_text())
+    meta, table = res['meta'], res['table']
+    mc = res.get('mc') or {}
+    m_list = meta.get('m_list') or []
+    for layer in LAYERS:
+        for act in ACTIVES:
+            row = (table.get(layer) or {}).get(act)
+            if not row:
+                continue
+            ci = {}
+            for tier in mc:
+                node = ((mc[tier].get(layer) or {}).get(act) or {})
+                cis = node.get('ci') or {}
+                for m in ([m_list[-1], str(m_list[-1])] if m_list else []):
+                    hit = cis.get(m)
+                    if isinstance(hit, dict) and 'top1' in hit:
+                        ci[tier] = hit['top1']
+                        break
+            row['ci_top1'] = ci
+            row['judge'] = judge(row)
+    res['verdict'] = build_verdict(table, meta, mc)
+    out.mkdir(parents=True, exist_ok=True)
+    with open(out / 'bayes_ceiling.json', 'w') as f:
+        json.dump(res, f, ensure_ascii=False, indent=1, default=float)
+    write_report(out / 'BAYES_CEILING_REPORT.md', res)
+    print(f'[out] {out}/bayes_ceiling.json')
+    print(f'[out] {out}/BAYES_CEILING_REPORT.md')
+    print(f'[verdict] {res["verdict"]["decision"]}')
+    for line in res['verdict']['findings']:
+        print(' -', line)
+    return res
 
 
 # --------------------------------------------------------------------------- #
@@ -594,7 +772,12 @@ def write_report(path, res):
     L.append('- 口径：P0 的 eval 划分与 mask（`active_any` = 窗口至少一端被目标家'
              '手切过；`active_both` = 两端都手切过）；27 类 = 计数截断 0/1/2+。')
     L.append('- `counts` = 精确多元超几何（全量、无 MC 误差）；`hard` = counts + '
-             '立直⇒听牌（MC）；`behave` = hard + 舍牌行为似然（MC，构造性近似）。\n')
+             '立直⇒听牌（MC）；`behave` = hard + 舍牌行为似然（MC，构造性近似）。')
+    L.append('- **口径限制（重要）**：三 tier 只含「张数 + 立直约束 + 静态舍牌似然」，'
+             '**不含**牌河顺序/宣言牌/逐巡事件 ⇒ 它是信息**子集**，实测头（A2c/P2c）'
+             '可以超过它，此时它**不是紧上界**；`prior` 是在评估集上拟合的 oracle '
+             '（P0 口径），小样本子集（如 riichi/active_both n≈2734）上尤其强，'
+             '其 `prior_top3` 会显著高于任何模型。\n')
 
     L.append('## 1. 采样量 M 收敛检查\n')
     L.append('三档 M 从同一次 `M_max` 采样按链条步截断（`counts`/`hard` 为独立'
@@ -607,7 +790,8 @@ def write_report(path, res):
         L.append('|---' * (len(m['m_list']) + 3) + '|')
         for tier in res['mc']:
             by = res['mc'][tier][layer][act]['by_M']
-            vals = [by[x]['ce'] for x in m['m_list']]
+            vals = [(_mkey(by, x) or {}).get('ce', float('nan'))
+                    for x in m['m_list']]
             L.append(f"| {tier} | " + ' | '.join(_f(v) for v in vals)
                      + f" | {_f(vals[-1] - vals[0], 5)} | "
                        f"{_f(max(vals) - min(vals), 5)} |")
@@ -647,12 +831,26 @@ def write_report(path, res):
                          f"{_f(d, 3) if d is not None else '—'} |")
             j = r.get('judge', {})
             js = j.get('joint_struct_nats')
-            L.append(f"\n判定：**{j.get('verdict', '—')}**；可达信息 "
+            ci = r.get('ci_top1') or {}
+            ci_txt = ''
+            # 用解析 CI（比例的正态近似）；bootstrap 的 per 按样本而非
+            # 中心累积，未修正前不作为报告口径。
+            for tier in ('behave', 'hard'):
+                d = r.get(tier) or {}
+                n_t, p_t = d.get('n'), d.get('top1')
+                if n_t and p_t is not None and np.isfinite(p_t):
+                    half = 1.96 * float(np.sqrt(max(p_t * (1 - p_t), 0.0) / n_t))
+                    ci_txt = (f"；{tier} top1 95%CI "
+                              f"[{p_t - half:.3f}, {p_t + half:.3f}]（n={n_t}）")
+                    break
+            L.append(f"\n判定：**{j.get('verdict', '—')}**；tier 信息 "
                      f"I(prior→{j.get('ref_tier', 'best')}) = "
-                     f"{_f(j.get('info_bayes'), 3)}（top1）；P2c 利用 "
-                     f"{_f(j.get('info_head'), 3)}"
-                     f"（{_f((j.get('info_ratio') or 0) * 100, 1)}%）；"
-                     f"P2c − best top1 = {_f(j.get('top1_head_vs_best'), 3)}。")
+                     f"{_f(j.get('info_bayes'), 3)}（top1；n_tier="
+                     f"{j.get('n_tier', '—')}，n_prior={j.get('n_prior', '—')}，"
+                     f"{_f(j.get('sigma'), 1)}σ）；"
+                     f"P2c 相对 tier {_f(j.get('head_vs_best'), 3)}"
+                     f"（相对 prior {_f(j.get('head_vs_prior'), 3)}）"
+                     f"{ci_txt}。")
             if js is not None:
                 L.append(f"结构分解（CE，仅参考）：数牌边际乘积 "
                          f"{_f((r.get('counts_prod') or {}).get('ce'), 3)} → "
@@ -705,7 +903,11 @@ def main():
     ap.add_argument('--index-cache', default='/tmp/bayes_ceiling_index.npz')
     ap.add_argument('--out', default=str(HERE / 'results'))
     ap.add_argument('--n-centers', type=int, default=0)
+    ap.add_argument('--from-json', default='',
+                    help='只从已有 bayes_ceiling.json 重建判定与报告（不重跑采样）')
     args = ap.parse_args()
+    if args.from_json:
+        return rebuild_from_json(Path(args.from_json), Path(args.out))
     args.tiers = [t.strip() for t in args.tiers.split(',') if t.strip()]
     m_list = [int(x) for x in args.m_list.split(',') if x.strip()]
     m_list = [x for x in m_list if 0 < x <= args.metric_samples]
@@ -825,7 +1027,9 @@ def main():
                 row['prior'] = dict(ex['prior'])
                 row['n_prior'] = ex['prior']['n']
             for tier in mc:
-                d = mc[tier][layer][act]['by_M'][m_list[-1]]
+                d = _mkey(mc[tier][layer][act]['by_M'], m_list[-1])
+                if not d:
+                    continue
                 key = tier if tier != 'counts' else 'counts_mc'
                 row[key] = {'ce': d['ce'], 'top1': d['top1'],
                             'top3': d['top3'], 'n': d['n'],
@@ -854,90 +1058,23 @@ def main():
             table[layer][act] = row
 
     # ---- 判定 ----
-    r = table['all']['active_any']
-    j = r['judge']
-    rb = table['riichi']['active_both']
-    jb = rb['judge']
-    deltas = []
-    for tier in mc:
-        by = mc[tier]['all']['active_any']['by_M']
-        deltas.append(abs(by[m_list[-1]]['ce'] - by[m_list[0]]['ce']))
-    ce_prod = (r.get('counts_prod') or {}).get('ce')
-    ce_a2c = (r.get('a2c') or {}).get('ce')
-    ce_a2c_vs_prod = (ce_a2c - ce_prod
-                      if (ce_a2c is not None and ce_prod is not None
-                          and np.isfinite(ce_a2c) and np.isfinite(ce_prod))
-                      else None)
-    rc = table['clean_t8']['active_both']['judge']['verdict']
-    t1 = lambda key: (r.get(key) or {}).get('top1')
-    findings = [
-        f"counts 精确自检：max|P(a=0) − CPMF0| = {chk['max_abs_err']:.1e}"
-        f"（{chk['n_checks']} 处）⇒ 多元超几何实现与 `counts_tier` 一致；"
-        f"校准诊断 max|P(count_a=k)−经验频率| = {chk['calib_max_gap']:.3f}"
-        f"（均匀子集假设被手切行为打破 ⇒ CE 口径失真，top1 判据不受影响）。",
-        f"all/active_any top1：prior {_f(t1('prior'), 3)}、counts 联合 "
-        f"{_f(t1('counts'), 3)}、hard {_f(t1('hard'), 3)}、behave "
-        f"{_f(t1('behave'), 3)}、A2c {_f(t1('a2c'), 3)}、P2b "
-        f"{_f(t1('p2b'), 3)}、P2c {_f(t1('p2c'), 3)}。",
-        f"all/active_any：可达信息 I(prior→{j.get('ref_tier', 'best')}) = "
-        f"{_f(j.get('info_bayes'), 3)}（top1）；P2c 用掉 "
-        f"{_f(j.get('info_head'), 3)}"
-        f"（{_f((j.get('info_ratio') or 0) * 100, 1)}%）⇒ {j['verdict']}。",
-        f"all/active_any CE（仅参考，含失配）：prior "
-        f"{_f((r.get('prior') or {}).get('ce'), 3)}、A2c "
-        f"{_f((r.get('a2c') or {}).get('ce'), 3)}、P2b "
-        f"{_f((r.get('p2b') or {}).get('ce'), 3)}、P2c "
-        f"{_f((r.get('p2c') or {}).get('ce'), 3)}、counts 联合 "
-        f"{_f((r.get('counts') or {}).get('ce'), 3)}、hard "
-        f"{_f((r.get('hard') or {}).get('ce'), 3)}、behave "
-        f"{_f((r.get('behave') or {}).get('ce'), 3)}；"
-        f"A2c CE 相对数牌乘积差距 = {_f(ce_a2c_vs_prod, 3)} nats。",
-        f"riichi/active_both top1：prior {_f((rb.get('prior') or {}).get('top1'), 3)}、"
-        f"A2c {_f((rb.get('a2c') or {}).get('top1'), 3)}、P2b "
-        f"{_f((rb.get('p2b') or {}).get('top1'), 3)}、P2c "
-        f"{_f((rb.get('p2c') or {}).get('top1'), 3)}、counts "
-        f"{_f((rb.get('counts') or {}).get('top1'), 3)}、hard "
-        f"{_f((rb.get('hard') or {}).get('top1'), 3)}、behave "
-        f"{_f((rb.get('behave') or {}).get('top1'), 3)}；I = "
-        f"{_f(jb.get('info_bayes'), 3)} ⇒ {jb['verdict']}。",
-        f"M 收敛：all/active_any 上三 tier 的 |CE(M_max) − CE(M_min)| "
-        f"最大 {_f(max(deltas), 4)} nats（Dirichlet α={args.alpha} 平滑后）。",
-        f"clean_t8/active_both 判定：{rc}。",
-    ]
-    if j['verdict'].startswith('POSTERIOR') and jb['verdict'].startswith('POSTERIOR'):
-        decision = ('两层均接近先验/上限 → P1/P2a/P2c 的 FAIL 属**预期结果**，'
-                    '局部形状线按上限关闭是正确的')
-    elif j['verdict'].startswith('POSTERIOR') and not jb['verdict'].startswith('POSTERIOR'):
-        decision = ('非立直层后验≈先验（FAIL 属预期）；但**立直 active_both 层存在可达信息**'
-                    '（hard/behave top1 显著高于 prior）未被 A2c/P2c 利用 —— '
-                    '若重启，唯一值得做的是立直家 tenpai 约束的显式注入，'
-                    '而非通用局部头（P1/P2a/P2c 路线仍关闭）')
-    elif j['verdict'].startswith('HEADROOM'):
-        decision = ('非立直层仍有可回收信息 → FAIL 主要是**实现/表示问题**，'
-                    '需换更强的条件化方式')
-    else:
-        decision = '分层结论不一，见完整分层表与判定列'
-
-    res = {
-        'meta': {
-            'cache': args.cache, 'n_cache': int(z['n']), 'n_mc': int(n_mc),
-            'tiers': args.tiers, 'm_list': m_list,
-            'metric_samples': args.metric_samples, 'chains': args.chains,
-            'iters': args.iters, 'beta': args.beta, 'max_k': args.max_k,
-            'alpha': args.alpha,
-            'seed': args.seed, 'alloc_match': bool(alloc_match),
-            'counts_selfcheck': chk, 'centers': len(centers),
-            'protocol': 'P0 eval 划分 + active_any/active_both mask；'
-                        'counts 精确（全量）、hard/behave MC（子集）；'
-                        '三档 M 同源截断；MC 后验含 Dirichlet(α/K) 平滑；'
-                        '判定用 top1（对均匀子集假设的手切失配稳健），'
-                        'CE 仅作参考',
-        },
-        'counts_exact': counts_exact,
-        'mc': mc,
-        'table': table,
-        'verdict': {'decision': decision, 'findings': findings},
+    meta = {
+        'cache': args.cache, 'n_cache': int(z['n']), 'n_mc': int(n_mc),
+        'tiers': args.tiers, 'm_list': m_list,
+        'metric_samples': args.metric_samples, 'chains': args.chains,
+        'iters': args.iters, 'beta': args.beta, 'max_k': args.max_k,
+        'alpha': args.alpha,
+        'seed': args.seed, 'alloc_match': bool(alloc_match),
+        'counts_selfcheck': chk, 'centers': len(centers),
+        'protocol': 'P0 eval 划分 + active_any/active_both mask；'
+                    'counts 精确（全量）、hard/behave MC（子集）；'
+                    '三档 M 同源截断；MC 后验含 Dirichlet(α/K) 平滑；'
+                    '判定用 top1（对均匀子集假设的手切失配稳健），'
+                    'CE 仅作参考',
     }
+    verdict = build_verdict(table, meta, mc)
+    res = {'meta': meta, 'counts_exact': counts_exact, 'mc': mc,
+           'table': table, 'verdict': verdict}
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     with open(out / 'bayes_ceiling.json', 'w') as f:
@@ -945,8 +1082,8 @@ def main():
     write_report(out / 'BAYES_CEILING_REPORT.md', res)
     print(f'\n[out] {out}/bayes_ceiling.json')
     print(f'[out] {out}/BAYES_CEILING_REPORT.md')
-    print(f'[verdict] {decision}')
-    for line in findings:
+    print(f'[verdict] {verdict["decision"]}')
+    for line in verdict['findings']:
         print(' -', line)
     print(f'[done] {time.time() - t_start:.0f}s')
 

@@ -58,6 +58,7 @@ python3 ladder.py <challenger> <champion> <seed> 500 <log_dir>   # 单卡判定
 | 工具、文件、产物在哪 | §6 |
 | 种子块台账（下一块用什么） | §2.4 |
 | **读牌模型（暗牌/听牌/待牌预测）的一切** | **`tools/read_model/docs/README.md`**（本文仅 §3.12 摘要） |
+| 局部形状线终结论（**有条件成立**）+ cond 口径修正 | `tools/read_model/local_shape/README.md`、`memory/DESIGN_local_shape_cond_20261103.md` |
 
 ---
 

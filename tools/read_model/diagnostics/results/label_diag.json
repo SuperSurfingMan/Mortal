@@ -1,0 +1,586 @@
+{
+ "meta": {
+  "cache": "/tmp/read_model_diag_cache_a2c/cache.npz",
+  "n": 40000,
+  "centers": 21,
+  "seconds": 4.39735221862793
+ },
+ "tasks": {
+  "shape27": {
+   "K": 27,
+   "axes": "target_center",
+   "slices": {
+    "all/all_centers": {
+     "n": 2520000,
+     "K": 27,
+     "p_max": 0.33035753968253967,
+     "p_max_class": 0,
+     "H": 2.434599903395623,
+     "eff": 11.411252196648373,
+     "H_norm": 0.7386894444042017,
+     "n_classes_used": 27
+    },
+    "all/active_any": {
+     "n": 393393,
+     "K": 27,
+     "p_max": 0.5603836367195146,
+     "p_max_class": 0,
+     "H": 1.7499579249782298,
+     "eff": 5.754360556066495,
+     "H_norm": 0.5309601160872297,
+     "n_classes_used": 27
+    },
+    "all/active_both": {
+     "n": 22133,
+     "K": 27,
+     "p_max": 0.7350110694438169,
+     "p_max_class": 0,
+     "H": 1.118114745789558,
+     "eff": 3.059081617107794,
+     "H_norm": 0.33925063382918336,
+     "n_classes_used": 21
+    },
+    "riichi/all_centers": {
+     "n": 178584,
+     "K": 27,
+     "p_max": 0.3466099986560946,
+     "p_max_class": 0,
+     "H": 2.337410202783014,
+     "eff": 10.354386048873153,
+     "H_norm": 0.7092008184302967,
+     "n_classes_used": 27
+    },
+    "riichi/active_any": {
+     "n": 42401,
+     "K": 27,
+     "p_max": 0.4652956298200514,
+     "p_max_class": 0,
+     "H": 1.9703881061675552,
+     "eff": 7.173460012233739,
+     "H_norm": 0.5978415153042247,
+     "n_classes_used": 24
+    },
+    "riichi/active_both": {
+     "n": 2734,
+     "K": 27,
+     "p_max": 0.6547183613752743,
+     "p_max_class": 0,
+     "H": 1.2260121159976347,
+     "eff": 3.407613237907971,
+     "H_norm": 0.37198810676693983,
+     "n_classes_used": 10
+    },
+    "clean_t8/all_centers": {
+     "n": 578424,
+     "K": 27,
+     "p_max": 0.3049164626640665,
+     "p_max_class": 0,
+     "H": 2.5642619119368124,
+     "eff": 12.991066279253582,
+     "H_norm": 0.7780305931966731,
+     "n_classes_used": 27
+    },
+    "clean_t8/active_any": {
+     "n": 147841,
+     "K": 27,
+     "p_max": 0.4578973356511387,
+     "p_max_class": 0,
+     "H": 2.0348299567894834,
+     "eff": 7.650951022584533,
+     "H_norm": 0.6173940153950601,
+     "n_classes_used": 27
+    },
+    "clean_t8/active_both": {
+     "n": 10543,
+     "K": 27,
+     "p_max": 0.6850042682348477,
+     "p_max_class": 0,
+     "H": 1.283590996597881,
+     "eff": 3.6095784641667197,
+     "H_norm": 0.3894582920161422,
+     "n_classes_used": 21
+    }
+   },
+   "all": {
+    "n": 393393,
+    "K": 27,
+    "p_max": 0.5603836367195146,
+    "p_max_class": 0,
+    "H": 1.7499579249782298,
+    "eff": 5.754360556066495,
+    "H_norm": 0.5309601160872297,
+    "n_classes_used": 27
+   },
+   "risk": "HIGH",
+   "suggest": "cond / macro；top1 不可作门禁",
+   "metric_in_use": "top1 + CE",
+   "hit_by_top1": true,
+   "metric_note": "P0/P1/P2a/P2b/P2c 门禁用 top1 ⇒ 已确认被 EMPTY 稀释"
+  },
+  "shape10": {
+   "K": 10,
+   "axes": "target_center",
+   "slices": {
+    "all/all_centers": {
+     "n": 2520000,
+     "K": 10,
+     "p_max": 0.33035753968253967,
+     "p_max_class": 0,
+     "H": 1.9553346874639526,
+     "eff": 7.066283624523873,
+     "H_norm": 0.8491910650396141,
+     "n_classes_used": 10
+    },
+    "all/active_any": {
+     "n": 393393,
+     "K": 10,
+     "p_max": 0.5603836367195146,
+     "p_max_class": 0,
+     "H": 1.48085093054375,
+     "eff": 4.396685363455079,
+     "H_norm": 0.6431253876564462,
+     "n_classes_used": 10
+    },
+    "all/active_both": {
+     "n": 22133,
+     "K": 10,
+     "p_max": 0.7350110694438169,
+     "p_max_class": 0,
+     "H": 0.9791285185217116,
+     "eff": 2.6621352291715774,
+     "H_norm": 0.4252301126680852,
+     "n_classes_used": 10
+    },
+    "riichi/all_centers": {
+     "n": 178584,
+     "K": 10,
+     "p_max": 0.3466099986560946,
+     "p_max_class": 0,
+     "H": 1.84801267355618,
+     "eff": 6.347193035717937,
+     "H_norm": 0.8025817066127243,
+     "n_classes_used": 10
+    },
+    "riichi/active_any": {
+     "n": 42401,
+     "K": 10,
+     "p_max": 0.4652956298200514,
+     "p_max_class": 0,
+     "H": 1.6208300545630425,
+     "eff": 5.0572863984861485,
+     "H_norm": 0.7039175487996758,
+     "n_classes_used": 9
+    },
+    "riichi/active_both": {
+     "n": 2734,
+     "K": 10,
+     "p_max": 0.6547183613752743,
+     "p_max_class": 0,
+     "H": 1.0454334452206975,
+     "eff": 2.8446312482923863,
+     "H_norm": 0.45402597645645437,
+     "n_classes_used": 8
+    },
+    "clean_t8/all_centers": {
+     "n": 578424,
+     "K": 10,
+     "p_max": 0.3049164626640665,
+     "p_max_class": 0,
+     "H": 1.9969885860423093,
+     "eff": 7.366838062902638,
+     "H_norm": 0.8672811233419521,
+     "n_classes_used": 10
+    },
+    "clean_t8/active_any": {
+     "n": 147841,
+     "K": 10,
+     "p_max": 0.4578973356511387,
+     "p_max_class": 0,
+     "H": 1.6917893603215954,
+     "eff": 5.4291867901205455,
+     "H_norm": 0.7347347837303011,
+     "n_classes_used": 10
+    },
+    "clean_t8/active_both": {
+     "n": 10543,
+     "K": 10,
+     "p_max": 0.6850042682348477,
+     "p_max_class": 0,
+     "H": 1.1221808473071213,
+     "eff": 3.0715454759989766,
+     "H_norm": 0.48735694968299836,
+     "n_classes_used": 10
+    }
+   },
+   "all": {
+    "n": 393393,
+    "K": 10,
+    "p_max": 0.5603836367195146,
+    "p_max_class": 0,
+    "H": 1.48085093054375,
+    "eff": 4.396685363455079,
+    "H_norm": 0.6431253876564462,
+    "n_classes_used": 10
+   },
+   "risk": "HIGH",
+   "suggest": "cond / macro；top1 不可作门禁",
+   "metric_in_use": "top1 + CE",
+   "hit_by_top1": true,
+   "metric_note": "语义标签验证用 top1 ⇒ 同样受影响"
+  },
+  "count5": {
+   "K": 5,
+   "axes": "target_tile",
+   "slices": {
+    "all": {
+     "n": 4080000,
+     "K": 5,
+     "p_max": 0.7062291666666667,
+     "p_max_class": 0,
+     "H": 0.7784235095676605,
+     "eff": 2.1780359047498554,
+     "H_norm": 0.4836617203768857,
+     "n_classes_used": 5
+    },
+    "riichi": {
+     "n": 289136,
+     "K": 5,
+     "p_max": 0.6969557578440595,
+     "p_max_class": 0,
+     "H": 0.8048258871845934,
+     "eff": 2.2363070951964317,
+     "H_norm": 0.5000664399457209,
+     "n_classes_used": 5
+    },
+    "clean_t8": {
+     "n": 936496,
+     "K": 5,
+     "p_max": 0.6996036288462524,
+     "p_max_class": 0,
+     "H": 0.8056221953270507,
+     "eff": 2.2380885939622197,
+     "H_norm": 0.5005612140133039,
+     "n_classes_used": 5
+    }
+   },
+   "all": {
+    "n": 4080000,
+    "K": 5,
+    "p_max": 0.7062291666666667,
+    "p_max_class": 0,
+    "H": 0.7784235095676605,
+    "eff": 2.1780359047498554,
+    "H_norm": 0.4836617203768857,
+    "n_classes_used": 5
+   },
+   "risk": "HIGH",
+   "suggest": "cond / macro；top1 不可作门禁",
+   "metric_in_use": "CE + MAE",
+   "hit_by_top1": false,
+   "metric_note": "A2c alloc 指标不用 top1 ⇒ 未受影响"
+  },
+  "presence2": {
+   "K": 2,
+   "axes": "target_tile",
+   "slices": {
+    "all": {
+     "n": 4080000,
+     "K": 2,
+     "p_max": 0.7062291666666667,
+     "p_max_class": 0,
+     "H": 0.6054935850577283,
+     "eff": 1.832156310720234,
+     "H_norm": 0.8735425924528645,
+     "n_classes_used": 2
+    },
+    "riichi": {
+     "n": 289136,
+     "K": 2,
+     "p_max": 0.6969557578440595,
+     "p_max_class": 0,
+     "H": 0.6134216590219899,
+     "eff": 1.8467395134358564,
+     "H_norm": 0.8849803854449054,
+     "n_classes_used": 2
+    },
+    "clean_t8": {
+     "n": 936496,
+     "K": 2,
+     "p_max": 0.6996036288462524,
+     "p_max_class": 0,
+     "H": 0.6111997725077949,
+     "eff": 1.8426408229145141,
+     "H_norm": 0.8817748807894583,
+     "n_classes_used": 2
+    }
+   },
+   "all": {
+    "n": 4080000,
+    "K": 2,
+    "p_max": 0.7062291666666667,
+    "p_max_class": 0,
+    "H": 0.6054935850577283,
+    "eff": 1.832156310720234,
+    "H_norm": 0.8735425924528645,
+    "n_classes_used": 2
+   },
+   "risk": "HIGH",
+   "suggest": "cond / macro；top1 不可作门禁",
+   "metric_in_use": "AUC + BCE",
+   "hit_by_top1": false,
+   "metric_note": "Phase 3 用 AUC/BCE ⇒ 未受影响"
+  },
+  "tenpai2": {
+   "K": 2,
+   "axes": "target",
+   "slices": {
+    "all": {
+     "n": 120000,
+     "K": 2,
+     "p_max": 0.8526083333333333,
+     "p_max_class": 0,
+     "H": 0.4181578615261788,
+     "eff": 1.5191604724649916,
+     "H_norm": 0.603274273132552,
+     "n_classes_used": 2
+    },
+    "riichi": {
+     "n": 8504,
+     "K": 2,
+     "p_max": 1.0,
+     "p_max_class": 1,
+     "H": -0.0,
+     "eff": 1.0,
+     "H_norm": -0.0,
+     "n_classes_used": 1
+    },
+    "clean_t8": {
+     "n": 27544,
+     "K": 2,
+     "p_max": 0.9315640429857682,
+     "p_max_class": 0,
+     "H": 0.24957433447094163,
+     "eff": 1.2834789676399352,
+     "H_norm": 0.360059654674391,
+     "n_classes_used": 2
+    }
+   },
+   "all": {
+    "n": 120000,
+    "K": 2,
+    "p_max": 0.8526083333333333,
+    "p_max_class": 0,
+    "H": 0.4181578615261788,
+    "eff": 1.5191604724649916,
+    "H_norm": 0.603274273132552,
+    "n_classes_used": 2
+   },
+   "risk": "HIGH",
+   "suggest": "cond / macro；top1 不可作门禁",
+   "metric_in_use": "AUC",
+   "hit_by_top1": false,
+   "metric_note": "bayes_bound.tenpai_auc ⇒ 未受影响"
+  },
+  "riichi2": {
+   "K": 2,
+   "axes": "target",
+   "slices": {
+    "all": {
+     "n": 120000,
+     "K": 2,
+     "p_max": 0.9291333333333334,
+     "p_max_class": 0,
+     "H": 0.2558749973307407,
+     "eff": 1.2915912654925172,
+     "H_norm": 0.3691495897365364,
+     "n_classes_used": 2
+    },
+    "riichi": {
+     "n": 8504,
+     "K": 2,
+     "p_max": 1.0,
+     "p_max_class": 1,
+     "H": -0.0,
+     "eff": 1.0,
+     "H_norm": -0.0,
+     "n_classes_used": 1
+    },
+    "clean_t8": {
+     "n": 27544,
+     "K": 2,
+     "p_max": 1.0,
+     "p_max_class": 0,
+     "H": -0.0,
+     "eff": 1.0,
+     "H_norm": -0.0,
+     "n_classes_used": 1
+    }
+   },
+   "all": {
+    "n": 120000,
+    "K": 2,
+    "p_max": 0.9291333333333334,
+    "p_max_class": 0,
+    "H": 0.2558749973307407,
+    "eff": 1.2915912654925172,
+    "H_norm": 0.3691495897365364,
+    "n_classes_used": 2
+   },
+   "risk": "HIGH",
+   "suggest": "cond / macro；top1 不可作门禁",
+   "metric_in_use": "BCE / AUC",
+   "hit_by_top1": false,
+   "metric_note": "辅助头 ⇒ 未受影响"
+  },
+  "called2": {
+   "K": 2,
+   "axes": "target",
+   "slices": {
+    "all": {
+     "n": 120000,
+     "K": 2,
+     "p_max": 0.8347,
+     "p_max_class": 0,
+     "H": 0.44835490495255753,
+     "eff": 1.5657342839089265,
+     "H_norm": 0.6468393979332974,
+     "n_classes_used": 2
+    },
+    "riichi": {
+     "n": 8504,
+     "K": 2,
+     "p_max": 0.9911806208842897,
+     "p_max_class": 0,
+     "H": 0.050503125845631436,
+     "eff": 1.0518001511147723,
+     "H_norm": 0.07286060920688371,
+     "n_classes_used": 2
+    },
+    "clean_t8": {
+     "n": 27544,
+     "K": 2,
+     "p_max": 1.0,
+     "p_max_class": 0,
+     "H": -0.0,
+     "eff": 1.0,
+     "H_norm": -0.0,
+     "n_classes_used": 1
+    }
+   },
+   "all": {
+    "n": 120000,
+    "K": 2,
+    "p_max": 0.8347,
+    "p_max_class": 0,
+    "H": 0.44835490495255753,
+    "eff": 1.5657342839089265,
+    "H_norm": 0.6468393979332974,
+    "n_classes_used": 2
+   },
+   "risk": "HIGH",
+   "suggest": "cond / macro；top1 不可作门禁",
+   "metric_in_use": "BCE / AUC",
+   "hit_by_top1": false,
+   "metric_note": "辅助头 ⇒ 未受影响"
+  },
+  "shanten8": {
+   "K": 8,
+   "axes": "target",
+   "slices": {
+    "all": {
+     "n": 120000,
+     "K": 8,
+     "p_max": 0.2864,
+     "p_max_class": 2,
+     "H": 1.6113245711532842,
+     "eff": 5.009442197897638,
+     "H_norm": 0.7748833226884596,
+     "n_classes_used": 7
+    },
+    "riichi": {
+     "n": 8504,
+     "K": 8,
+     "p_max": 1.0,
+     "p_max_class": 0,
+     "H": -0.0,
+     "eff": 1.0,
+     "H_norm": -0.0,
+     "n_classes_used": 1
+    },
+    "clean_t8": {
+     "n": 27544,
+     "K": 8,
+     "p_max": 0.4545091489979669,
+     "p_max_class": 1,
+     "H": 1.2529329938835092,
+     "eff": 3.5005951394514687,
+     "H_norm": 0.602533405613967,
+     "n_classes_used": 6
+    }
+   },
+   "all": {
+    "n": 120000,
+    "K": 8,
+    "p_max": 0.2864,
+    "p_max_class": 2,
+    "H": 1.6113245711532842,
+    "eff": 5.009442197897638,
+    "H_norm": 0.7748833226884596,
+    "n_classes_used": 7
+   },
+   "risk": "MED",
+   "suggest": "top1 + macro 双报",
+   "metric_in_use": "accuracy（辅助）",
+   "hit_by_top1": true,
+   "metric_note": "shanten_acc 会被 28.6% 多数类抬高，影响有限"
+  },
+  "wait36": {
+   "K": 35,
+   "axes": "multi",
+   "multi": true,
+   "slices": {
+    "all": {
+     "n": 119984,
+     "mean_pos": 1.1069725963461794,
+     "p_max": 0.8525553407120949,
+     "p_max_class": 34,
+     "p_none": 0.8525553407120949
+    },
+    "riichi": {
+     "n": 8504,
+     "mean_pos": 1.8096190028222012,
+     "p_max": 0.11747412982126058,
+     "p_max_class": 4,
+     "p_none": 0.0
+    },
+    "clean_t8": {
+     "n": 27544,
+     "mean_pos": 1.0337641591635203,
+     "p_max": 0.9315640429857682,
+     "p_max_class": 34,
+     "p_none": 0.9315640429857682
+    }
+   },
+   "metric_in_use": "hit@1 / hit@5",
+   "hit_by_top1": false,
+   "metric_note": "多标签 ⇒ top1 不适用",
+   "risk": "NA"
+  }
+ },
+ "verdict": {
+  "decision": "标签集中且**现用** top1/accuracy 的任务：shape27, shape10, shanten8 ⇒ 这些门禁必须改 cond/macro 或补「非平凡类条件」；其余 5 个高集中任务已用 AUC/CE/MAE/hit@k，无需改口径。 另：5 个退化项（tenpai2@riichi, riichi2@riichi, riichi2@clean_t8, called2@clean_t8, shanten8@riichi）因标签恒定，已无信息，应直接从评估中移除。",
+  "findings": [
+   "标签集中的任务（HIGH）：shape27, shape10, count5, presence2, tenpai2, riichi2, called2；MED：shanten8；LOW：无；退化（p_max=1）：tenpai2@riichi, riichi2@riichi, riichi2@clean_t8, called2@clean_t8, shanten8@riichi。",
+   "**真正被 top1 坑的（集中且现用 top1/accuracy）：shape27, shape10, shanten8**。其余 count5, presence2, tenpai2, riichi2, called2 虽集中但用 AUC/CE/MAE/hit@k，**未受影响**。",
+   "退化项 tenpai2@riichi, riichi2@riichi, riichi2@clean_t8, called2@clean_t8, shanten8@riichi：标签恒定（立直必听牌、向听恒 0）⇒ 这些子集上的 tenpai/shanten 指标恒为 100%，**不应参与任何比较**。",
+   "`shape27`：K=27、p_max=0.5604（类 0）、eff=5.8；当前指标 P0/P1/P2a/P2b/P2c 门禁用 top1 ⇒ 已确认被 EMPTY 稀释 ⇒ **⚠ 已受影响**。",
+   "`shape10`：K=10、p_max=0.5604（类 0）、eff=4.4；当前指标 语义标签验证用 top1 ⇒ 同样受影响 ⇒ **⚠ 已受影响**。",
+   "`count5`：K=5、p_max=0.7062（类 0）、eff=2.2；当前指标 A2c alloc 指标不用 top1 ⇒ 未受影响 ⇒ **指标安全**。",
+   "`presence2`：K=2、p_max=0.7062（类 0）、eff=1.8；当前指标 Phase 3 用 AUC/BCE ⇒ 未受影响 ⇒ **指标安全**。",
+   "`tenpai2`：K=2、p_max=0.8526（类 0）、eff=1.5；当前指标 bayes_bound.tenpai_auc ⇒ 未受影响 ⇒ **指标安全**。",
+   "`riichi2`：K=2、p_max=0.9291（类 0）、eff=1.3；当前指标 辅助头 ⇒ 未受影响 ⇒ **指标安全**。",
+   "`called2`：K=2、p_max=0.8347（类 0）、eff=1.6；当前指标 辅助头 ⇒ 未受影响 ⇒ **指标安全**。",
+   "`shanten8`：p_max=0.2864、eff=5.0 ⇒ **⚠ 需双报**。"
+  ]
+ }
+}

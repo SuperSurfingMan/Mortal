@@ -30,21 +30,49 @@
 > A0 补分数/局况（2026-11-03）：120k +0.02pp（zero effect）⇒ “缺特征”也证伪。
 > 详见 `tile_presence/README.md` 与 `tile_presence/results/run3_d224_120k/`。
 >
-> **Phase 2 局部形状（2026-11-02）**：新目录 `tools/read_model/local_shape/`。P0 已跑完
-> （40000 样本 CPU 基线）：A2c 的 27 类局部形状 top1 仅比无信息先验高 0.4~1.4pp，
-> 立直 active_both 为负；pairwise AUC 0.72~0.84 说明边际有排序信息。P1 冻结骨干局部头
-> 已跑：active_any top1 **56.0% = 先验**、低于 A2c product 57.5%；active_both −0.85pp、
-> 立直 −1.35pp ⇒ **FAIL**，按预注册门禁停止冻结局部头。P2a 立直显式特征也已跑：
-> riichi active_both **0.659 vs A2c 0.669**（仍低于 A2c）⇒ **FAIL**。P2b `behave` 蒸馏
-> **PASS via CE**：riichi active_both top1 **0.667 vs A2c 0.669**（基本持平），
-> CE **1.006 vs 1.017**（优于 A2c）；但 top1 未超 A2c，只是校准/CE 的胜利。
-> P2c 受控解冻（最后 2 个 Block + H1 + head）已跑：riichi active_both top1 **0.6602 vs A2c
-> 0.6686**（strict top1 FAIL），CE **0.9386 vs 1.0173**（校准更好），但 alloc CE
-> **0.6807 vs 0.6516** 退化 ⇒ **FAIL**。P1/P2a/P2c 均未把 top1 推过 A2c ⇒
-> **按预注册门禁关闭局部形状线**，不跑 200k；P2b/P2c 的 CE 改善仅作风险校准参考。
-> 详见 `local_shape/README.md`、`local_shape/results/p1/P1_REPORT.md`、
-> `local_shape/results/p2/P2_REPORT.md`、`local_shape/results/p2b/P2B_REPORT.md`、
-> `local_shape/results/p2c/P2C_REPORT.md`。
+> **Phase 2 局部形状（2026-11-02 ~ 11-03，已收口：有条件成立、不重启 200k）**：
+> 新目录 `tools/read_model/local_shape/`，27 类三张窗口计数形状。
+>
+> **口径修正（最关键的一条）**：`active_any` 下最大类是 **EMPTY（空窗口）**，占 **56.04%**
+> ⇒ P0 以来的 **micro top1 全被「永远猜空」主导**。改用 cond 口径（筛非空 + 将 EMPTY
+> 置 0 重归一）后，A2c 的真实增益从 **3.2% → 11.1%**（归一化）；若只筛非空不重归一，
+> A2c 仅 8.7%（低于先验 27.5%）⇒ 它的能力主要是「判窗口有无牌」而非「判形状」。
+> 同理，`bayes_ceiling` 的 SIGNAL_SHALLOW 判定也基于 micro top1，需按 cond 重算。
+>
+> **各轮结果**：P0 基线（pairwise AUC 0.72~0.84，27 类 top1 仅 +0.4~1.4pp，后证实为口径
+> 所致）；P1 冻结头 FAIL；P2a 立直显式特征 FAIL（cond 下更差）；P2b behave 蒸馏 PASS via
+> CE；P2c 受控解冻 FAIL（strict top1 + alloc 退化 +0.029）。
+>
+> **cond 重算（549s，4 头 + A2c 统一评估）**：**分层互有胜负，不是单向超越**。
+> 相对 A2c（正 = 局部头更好，单位 pp）：
+>
+> | 模型 | all/any | all/both | riichi/both | clean/both | all/any CE |
+> |---|---:|---:|---:|---:|---:|
+> | P1 | −0.58 | −3.19 | −5.72 | −4.79 | +0.092 |
+> | P2a | −3.01 | −4.98 | −5.51 | −5.87 | −0.051 |
+> | P2b | +0.25 | −3.31 | −3.28 | −4.67 | +0.113 |
+> | **P2c** | **+1.20** | −1.74 | **+1.69** | −3.67 | **+0.177** |
+>
+> 更细：P2c 在 **riichi/all_centers +5.10pp、riichi/active_any +5.52pp**（立直层是其最大
+> 优势区）；A2c 只在「非立直 + 两端都手切」占优。
+>
+> **语义标签 NO-GO**：10 类语义结构角色因 `center` 已知而不增加信息，唯一收益是跨中心
+> 共享；实测压缩损失 **0.0539 nats** > 共享红利上限 **0.0500 nats**，不训练。
+>
+> **路由决策**：逐窗口路由（active_both→A2c）全局仅 **+0.07pp**（active_both 只占
+> active_any 的 5.63%）且需双模型推理 ⇒ 不实现；改为**按场景整批选**（`router.py`）：
+> 默认 P2c，仅「确认整批为非立直 active_both」才切 A2c。
+>
+> **标签诊断**（`label_diag.py`，8 个在读任务）：只有 **shape27 / shape10 / shanten8**
+> 真正被 top1 坑（标签集中且现用 top1/accuracy）；count5/presence2/tenpai2/riichi2/
+> called2 虽集中但用 AUC/CE/MAE，未受影响。另有 **5 个退化项**（标签恒定，如立直必听牌）
+> 应移出评估。
+>
+> **最终定位**：P2c = 立直层最优读牌器（+5pp）；P1/P2b = 概率校准组件（CE −0.18 nats）；
+> P2a 全面最差，立直显式特征路线证伪。**不重启 200k。**
+>
+> 详见 `local_shape/README.md`（§5b~§5d）、`memory/DESIGN_local_shape_cond_20261103.md`，
+> 以及 `results/{P0,P1,P2,P2B,P2C,BAYES_CEILING,SEMANTIC_LABEL,COND_RECHECK}_REPORT.md`。
 
 ## 0. 交付物与边界
 

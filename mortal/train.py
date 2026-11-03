@@ -628,6 +628,41 @@ def train():
         else:
             logging.info('extra_logs: 未配置（仅用人类数据）')
 
+        # ---- 数据质量加权：文件级重复（2026-11-02，P0-b 探针）----
+        # `dataset.strength_weight.table` 由 tools/training/build_strength_weights.py
+        # 生成：{'file_list': [...], 'repeats': uint8 tensor}，repeats 已按分位档位离线
+        # 算好。只扩增 file_list（不改损失、不动 file_index manifest），所有文件至少 1 次。
+        sw_cfg = config['dataset'].get('strength_weight') or {}
+        sw_table = sw_cfg.get('table')
+        if sw_table:
+            if not path.exists(sw_table):
+                raise FileNotFoundError(f'strength_weight table 不存在: {sw_table}')
+            tw = torch.load(sw_table, weights_only=True)
+            rep = dict(zip(tw['file_list'], tw['repeats'].tolist()))
+            max_rep = int(sw_cfg.get('max_repeat', 3))
+            before = len(file_list)
+            hist = {}
+            missing = 0
+            expanded = []
+            for filename in file_list:
+                k = int(rep.get(filename, 0))
+                if k == 0:
+                    k = 1
+                    missing += 1
+                k = max(1, min(k, max_rep))
+                hist[k] = hist.get(k, 0) + 1
+                expanded.extend([filename] * k)
+            file_list = expanded
+            mean_w = sum(k * v for k, v in hist.items()) / max(before, 1)
+            logging.info(
+                f'strength_weight: table={sw_table} '
+                f'命中={before - missing:,}/{before:,} '
+                f'重复直方图={dict(sorted(hist.items()))} mean={mean_w:.3f} '
+                f'→ file list {len(file_list):,}'
+            )
+            if missing:
+                logging.warning(f'strength_weight: {missing:,} 个文件不在表中（按 1 次处理）')
+
         logging.info(f'file list size: {len(file_list):,}')
 
         before_next_test_play = (test_every - steps % test_every) % test_every

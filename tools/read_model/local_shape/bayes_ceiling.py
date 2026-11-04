@@ -35,6 +35,18 @@ P1 / P2a / P2c 的局部形状头都 FAIL（27 类 top1 只比每中心先验高
 - mask：直接复用 ``eval_local_shape.strata`` / ``active_masks``。
 - 27 类标签：``local_shape.pattern_index``（计数截断 0/1/2+）。
 
+## 已知口径问题（2026-11-03，P0-a 发现）
+
+1. **micro top1 被 EMPTY 主导**：`active_any` 下最大类是空窗口（56.04%），
+   「永远猜空」即可得 56% ⇒ 本报告的所有 top1 对比都严重压缩了真实差异。
+   请配合 `p0a_bayes_cond.py` 的 cond 口径阅读。
+2. **Dirichlet α 语义错误**（旧结果）：`α=0.5` 作用在归一化到 1 的权重上，
+   相当于 33% 均匀混合，使 MC tier（counts_mc/hard/behave）的 CE 系统偏高
+   0.2~0.3 nats（与精确 counts 的 L1 距离 0.43）。top1 不受影响。
+   修正后按等效样本数计（`--alpha-mode count`，L1 0.04）。
+   因此旧报告里「CE 全部高于标签边缘熵 ⇒ 均匀子集假设被手切打破」的
+   归因**不完整**：主因是平滑口径，行为失配是次要项。
+
 ## 产物
 
 - ``results/bayes_ceiling.json``
@@ -435,11 +447,23 @@ def run_mc(z, index, masks, centers, active_any, active_both, args, m_list):
                         pat = LS.pattern_index(hm[:, tiles])       # [m,21]
                         wsum = float(wm.sum())
                         for ci in range(len(centers)):
-                            # Dirichlet(α/K) 平滑：防止 -log p̂ 在未采到类上爆炸
-                            cnt = np.bincount(pat[:, ci], weights=wm,
-                                              minlength=LS.NUM_PATTERNS)
-                            p = (cnt + args.alpha / LS.NUM_PATTERNS) \
-                                / (wsum + args.alpha)
+                            # Dirichlet(α/K) 平滑。α 的语义有两种口径：
+                            #   legacy：相对于归一化到 1 的权重 ⇒ α=0.5 相当于
+                            #           α/(1+α)=33% 的均匀混合，把分布压平，
+                            #           CE 系统偏移（与精确 counts 的 L1 达 0.43）。
+                            #   count ：相对于等效样本数 m ⇒ 真正的「α 个虚拟
+                            #           样本」，L1 降到 0.04。
+                            # top1 不受影响（加常数不改变 argmax）。
+                            if args.alpha_mode == 'count':
+                                cnt = np.bincount(pat[:, ci], weights=wm * m,
+                                                  minlength=LS.NUM_PATTERNS)
+                                p = (cnt + args.alpha / LS.NUM_PATTERNS) \
+                                    / (float(m) + args.alpha)
+                            else:
+                                cnt = np.bincount(pat[:, ci], weights=wm,
+                                                  minlength=LS.NUM_PATTERNS)
+                                p = (cnt + args.alpha / LS.NUM_PATTERNS) \
+                                    / (wsum + args.alpha)
                             ce, t1, t3, ent = scalar_metrics(p, Y[i, j, ci])
                             for layer in LAYERS:
                                 if not masks[layer][i, j]:
@@ -897,7 +921,11 @@ def main():
     ap.add_argument('--max-k', type=int, default=10)
     ap.add_argument('--tiers', default='counts,hard,behave')
     ap.add_argument('--alpha', type=float, default=0.5,
-                    help='MC 后验的 Dirichlet 平滑强度（每批总量）')
+                    help='Dirichlet 平滑强度（含义由 --alpha-mode 决定）')
+    ap.add_argument('--alpha-mode', choices=('legacy', 'count'),
+                    default='legacy',
+                    help='legacy=相对归一化权重（旧结果，等效 33%% 均匀混合）；'
+                         'count=相对等效样本数（推荐，与精确 counts 的 L1 0.04）')
     ap.add_argument('--boot', type=int, default=200)
     ap.add_argument('--seed', type=int, default=20261103)
     ap.add_argument('--index-cache', default='/tmp/bayes_ceiling_index.npz')
@@ -1064,6 +1092,7 @@ def main():
         'metric_samples': args.metric_samples, 'chains': args.chains,
         'iters': args.iters, 'beta': args.beta, 'max_k': args.max_k,
         'alpha': args.alpha,
+        'alpha_mode': args.alpha_mode,
         'seed': args.seed, 'alloc_match': bool(alloc_match),
         'counts_selfcheck': chk, 'centers': len(centers),
         'protocol': 'P0 eval 划分 + active_any/active_both mask；'

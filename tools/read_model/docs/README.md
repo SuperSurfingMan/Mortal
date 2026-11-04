@@ -45,7 +45,8 @@ token」的 alloc_ce 仅 **+0.0005**、删「立直前」**+0.0819**（R=0.006�
 > ⇒ P0 以来的 **micro top1 全被「永远猜空」主导**。改用 cond 口径（筛非空 + 将 EMPTY
 > 置 0 重归一）后，A2c 的真实增益从 **3.2% → 11.1%**（归一化）；若只筛非空不重归一，
 > A2c 仅 8.7%（低于先验 27.5%）⇒ 它的能力主要是「判窗口有无牌」而非「判形状」。
-> 同理，`bayes_ceiling` 的 SIGNAL_SHALLOW 判定也基于 micro top1，需按 cond 重算。
+> 同理，`bayes_ceiling` 的 SIGNAL_SHALLOW 判定也基于 micro top1，已在 **P0-a** 中
+> 按 cond 重算（见下）。
 >
 > **各轮结果**：P0 基线（pairwise AUC 0.72~0.84，27 类 top1 仅 +0.4~1.4pp，后证实为口径
 > 所致）；P1 冻结头 FAIL；P2a 立直显式特征 FAIL（cond 下更差）；P2b behave 蒸馏 PASS via
@@ -76,11 +77,30 @@ token」的 alloc_ce 仅 **+0.0005**、删「立直前」**+0.0819**（R=0.006�
 > called2 虽集中但用 AUC/CE/MAE，未受影响。另有 **5 个退化项**（标签恒定，如立直必听牌）
 > 应移出评估。
 >
+> **上限探针 P0-a（2026-11-03，91 分钟）**：`local_shape/p0a_bayes_cond.py` 把三层
+> tier 按 cond 重算（MC 采样顺序与 `bayes_ceiling` 逐位相同，只改累加口径）。
+> strict（精确 counts，无行为假设）的 tier 信息只有 **+0.023 nats**
+> （all/active_any）、**+0.129**（clean_t8/active_any）⇒ 任务信号确实稀薄；
+> **但 tier 不是上界**：在 **8 个“tier 优于 prior”的 cell** 上，A2c 的 CE 低
+> **0.135~0.209 nats**；其余 10 个 cell 的 prior 已优于所有 tier（TIER_MISFIT）。
+> 失配集中在 active_both / 立直 / called——这几层的 **mask 本身含信息**
+> （“这两张曾手切” ⇒ 窗口非空概率高），而 tier 的均匀子集假设不用 mask。
+> ⇒ **P1/P2a/P2c 的 FAIL 是 top1 门禁的判定，不是能力不足**：**P2c 在 15/18 个
+> cell 上 CE 最低**（3 个例外是 active_both 系的 oracle prior），P1/P2b 也全面
+> 优于 A2c。
+>
+> **副产品（必读）**：`bayes_ceiling.py` 的 Dirichlet α 语义错误——`α=0.5` 作用在
+> 归一化到 1 的权重上相当于 **33% 均匀混合**，MC tier 的 CE 偏高 **0.22~0.35 nats**
+> （与精确 counts 的 L1 距离 0.43 → 修正后 0.04）；**top1 不受影响**。
+> 所以 micro 时代「CE 全部高于边缘熵 ⇒ 均匀子集被手切打破」的归因不完整，
+> 主因是平滑口径。`bayes_ceiling.py` 已加 `--alpha-mode {legacy,count}`。
+> 详见 `local_shape/results/P0A_BAYES_COND_REPORT.md`。
+>
 > **最终定位**：P2c = 立直层最优读牌器（+5pp）；P1/P2b = 概率校准组件（CE −0.18 nats）；
 > P2a 全面最差，立直显式特征路线证伪。**不重启 200k。**
 >
-> 详见 `local_shape/README.md`（§5b~§5d）、`memory/DESIGN_local_shape_cond_20261103.md`，
-> 以及 `results/{P0,P1,P2,P2B,P2C,BAYES_CEILING,SEMANTIC_LABEL,COND_RECHECK}_REPORT.md`。
+> 详见 `local_shape/README.md`（§5b~§5e）、`memory/DESIGN_local_shape_cond_20261103.md`，
+> 以及 `results/{P0,P1,P2,P2B,P2C,BAYES_CEILING,P0A_BAYES_COND,SEMANTIC_LABEL,COND_RECHECK}_REPORT.md`。
 
 ## 0. 交付物与边界
 

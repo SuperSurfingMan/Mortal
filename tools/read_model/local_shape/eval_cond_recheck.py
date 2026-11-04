@@ -146,6 +146,11 @@ def evaluate(P, Y, masks, active, tag):
                 order = np.argsort(-pp, 1)
                 ce = -np.log(np.clip(pp[idx, yy], 1e-12, None))
                 # 先验（该中心该层该 act 的标签频率）
+                # 注意：这里按 **中心** 分 21 组（把三个目标家合并）；
+                # `bayes_ceiling.py` / `p0a_bayes_cond.py` 的 prior 按
+                # **(中心, 目标家)** 分 63 组（与 micro prior 同口径）。
+                # 细分组更强 ⇒ 63 组的 prior top1 更高（小样本 cell 上差
+                # 可达 0.3pp），两者的 norm_gain 不可混用。
                 yi = np.argwhere(m)                           # [N,3] → (i,j,ci)
                 pri_ce = np.zeros(len(yy), np.float32)
                 pri_top1 = np.zeros(len(yy), np.float32)

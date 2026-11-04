@@ -171,3 +171,77 @@ A2c 的真实增益从 3.23% 升到 11.08%，P2c 的 FAIL 判定翻正但**分�
 规则：**默认 P2c；只有「确认整批为非立直 active_both」才切 A2c。**
 
 实现：`router.select(scene)` 一行调用，决策集中在 `router.DECISION` 一处。
+
+## 11. P0-a：BAYES_CEILING 三层 tier 按 cond 重算（2026-11-03，5451s）
+
+目标：回答「P1/P2a/P2c 的 FAIL 是否属于后验本身接近均匀的预期结果」。
+
+实现：`local_shape/p0a_bayes_cond.py`。MC 采样顺序与 `bayes_ceiling.py` **逐位
+相同**（同 seed、同循环结构），只在累加时跳过 `y == 0` ⇒ cond 与 micro 是同一批
+后验样本的两种打分口径，可配对比较。counts 用精确多元超几何（全量，无 MC 误差）。
+自检 6/6（counts micro top1 与旧 JSON 逐位一致；cond prior 的 n 与
+`eval_cond_recheck.json` 完全相同）。
+
+### 11.1 主表（cond CE，越小越好）
+
+| cell | n | prior | counts | hard | behave | A2c | P2c | strict 信息 | 判定 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| all/all_centers | 168.7万 | 2.662 | 2.624 | **2.609** | 2.808 | 2.473 | **2.409** | +0.038 | INFO_NEGLIGIBLE |
+| all/active_any | 17.3万 | 2.272 | 2.249 | **2.209** | 2.496 | 2.036 | **1.858** | +0.023 | INFO_NEGLIGIBLE |
+| all/active_both | 5865 | **1.674** | 1.834 | 1.819 | 2.231 | 1.593 | **1.499** | −0.160 | TIER_MISFIT |
+| riichi/all_centers | 11.7万 | **2.429** | 2.805 | 2.502 | 3.977 | 2.494 | **2.192** | −0.376 | TIER_MISFIT |
+| riichi/active_any | 22672 | **2.022** | 2.513 | 2.167 | 3.370 | 2.257 | **1.847** | −0.490 | TIER_MISFIT |
+| riichi/active_both | 944 | **0.642** | 1.925 | 1.786 | 2.338 | 1.405 | 1.182 | −1.284 | TIER_MISFIT |
+| clean_t8/all_centers | 40.2万 | 2.750 | **2.665** | 2.675 | 2.961 | 2.467 | **2.408** | +0.084 | INFO_SMALL |
+| clean_t8/active_any | 80145 | 2.339 | **2.211** | 2.213 | 2.474 | 2.040 | **1.942** | +0.129 | INFO_SMALL |
+| clean_t8/active_both | 3321 | **1.630** | 1.799 | 1.766 | 2.171 | 1.660 | 1.633 | −0.168 | TIER_MISFIT |
+
+（粗体 = 该行最低。注意 `active_both` 系列与立直/`called` 层的 **prior 才是最低**。）
+
+### 11.2 四条结论
+
+1. **tier 信息确实很小，但不是零**：strict（精确 counts）在 all/active_any 只有
+   **+0.023 nats**，clean_t8/active_any **+0.129**，turn>=8/active_any **+0.076**。
+   ⇒ 「27 类形状在给定可观测信息下接近不可预测」的方向成立。
+2. **但 tier 不是上界**：在 **8 个“tier 优于 prior”的 cell** 上，A2c 的 CE 比最强
+   tier 低 **0.135~0.209 nats**（all/active_any 0.173、nonriichi/active_any 0.206、
+   turn>=8/all_centers 0.209）。其余 10 个 cell 的 prior 已优于所有 tier
+   （TIER_MISFIT），谈“tier 上界”无意义。
+3. **失配集中在 active_both / 立直 / called**（strict 信息 −0.08~−1.28）。原因：
+   这几层的 **mask 本身含信息**（「这两张曾被手切」⇒ 窗口非空概率极高），
+   而 tier 的均匀子集假设完全不用 mask ⇒ 条件化后分布错位。这反而是「tier 是
+   信息子集」的最直接证据：**mask 就是 tier 不知道的信息**。
+4. **P2c 在 15/18 个 cell 上 CE 最低**（3 个例外全是 active_both 系，那里
+   评估集 oracle prior 更低）；P1/P2b 也全面优于 A2c。
+   ⇒ **P1/P2a/P2c 的 FAIL 是 top1 门禁的判定，不是能力不足**；在 CE/校准口径
+   上它们已经超过 A2c。
+
+### 11.3 副产品：Dirichlet α 语义错误（`bayes_ceiling.py`，已修）
+
+旧实现 `p = (cnt + α/27)/(wsum + α)` 中 `wsum = 1`，`α=0.5` 相当于 **33% 均匀混合**：
+
+| cell | 精确 counts | MC（旧 α） | MC（新 α） |
+|---|---:|---:|---:|
+| all/active_any | 2.2486 | 2.4708 | 2.2514 |
+| all/active_both | 1.8338 | 2.1857 | 1.8395 |
+| clean_t8/active_any | 2.2105 | 2.4390 | 2.2151 |
+
+- 与精确 counts 的 **L1 距离 0.43 → 0.04**；MC tier 的 CE 偏高 **0.22~0.35 nats**。
+- **top1 不受影响**（加常数不改 argmax）⇒ §3 的 top1 结论仍有效，但其 CE 结论
+  （「CE 全部高于边缘熵 ⇒ 均匀子集被手切打破」）**归因不完整**：主因是平滑口径。
+- 修正：按**等效样本数**计，`bayes_ceiling.py` 加 `--alpha-mode {legacy,count}`
+  （默认 legacy 保旧结果可复现，新分析用 count）。
+
+### 11.4 限制与处置
+
+- **behave 未收敛**：M 收敛 Δ 达 0.157（riichi/active_both 0.494）⇒ M=4096 对 27 类
+  长尾不足，其 CE 有正偏（Jensen），**「behave 比 hard 差」有相当部分是采样偏差**。
+  behave 只作上界参考，不作判据。
+- **prior 分组口径**：本脚本按 (中心, 目标家) 分 **63 组**（与 micro prior 同口径）；
+  `eval_cond_recheck.py` 按中心分 **21 组**。细分组更强 ⇒ 小样本 cell 的 prior top1
+  差可达 0.3pp，两处的 `norm_gain` 不可混用。
+- **对「关闭」的处置**：原「按预注册门禁关闭」保留操作性（不重启 200k），但理由应改为
+  「**实现未达 A2c（top1 门禁），但上限未被证明**」，而不是「任务信号稀薄、已达天花板」。
+
+产物：`local_shape/results/P0A_BAYES_COND_REPORT.md` / `p0a_bayes_cond.json`；
+脚本 `p0a_bayes_cond.py` + `run_p0a.sh`。

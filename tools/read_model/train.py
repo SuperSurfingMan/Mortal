@@ -629,6 +629,11 @@ def main():
     ap.add_argument('--log-every', type=int, default=100)
     ap.add_argument('--seed', type=int, default=20261016)
     ap.add_argument('--resume', default=None)
+    ap.add_argument('--reset-base-lr', action='store_true',
+                    help='resume 时用 --lr 覆盖 ckpt 的 scheduler.base_lrs。'
+                         'ckpt 里的 base_lrs 是上一轮峰值（如 A2c 的 3e-4），'
+                         '直接沿用会让续训的 LR 尺度失控；配合把 --steps 给到'
+                         '足够大（abs_total=start+steps）才能得到期望的 LR。')
     ap.add_argument('--init', default=None,
                     help='仅加载模型权重（暖启探针：不加载 optimizer/scheduler，'
                          'start_step=0、best_val=inf；与 --resume 互斥且优先）')
@@ -771,6 +776,12 @@ def main():
             opt.load_state_dict(state['optimizer'])
         if 'scheduler' in state:
             sched.load_state_dict(state['scheduler'])
+            # ckpt 的 base_lrs 是上一轮峰值；续训若想用不同 LR 尺度，必须显式重置，
+            # 否则 --lr 静默无效（LR = 旧峰值 × 新 cosine）。
+            if args.reset_base_lr:
+                sched.base_lrs = [args.lr] * len(sched.base_lrs)
+                print(f'[resume] base_lrs 重置为 {args.lr}（原 '
+                      f'{state["scheduler"].get("base_lrs")}）', flush=True)
         start_step = int(state.get('step', 0))
         best_val = float(state.get('best_val', float('inf')))
         lr_ctx['abs_total'] = start_step + total_steps   # LR 基准改为绝对终点

@@ -1,0 +1,43 @@
+[data] 训练文件 813145，验证文件 15892
+[eval] 固定验证集 8192 样本（来自 15892 个候选文件）
+[plan] 阶段表 [(3, 15000)]（总 15000 步）
+[model] v2s | 参数量 1,346,576 | device=cuda | fp32 | channels=96 blocks=12 aux=True pool=- wait_head=tile tl_mode=pooled tile_order=False obs_river=keep nt_aux=0.2
+[loss] cfg={'w_shanten': 0.15, 'w_struct_shanten': 0.5, 'consist_head': 0.3, 'consist_decomp': 0.2, 'tenpai_tie': 0.1, 'wait_tenpai': 0.2, 'struct_balance': True, 'next_tedashi': 0.2, 'riichi_weight': 3.0, 'riichi_early_weight': 1.0}
+[init] /mnt/data8/mortal/Mortal/mortal/read_model_v2s_a2c/best.pth @ step 153000; optimizer/scheduler reset, lr=4e-05
+step 200 (stage 3) loss 2.6870 alloc 0.6084 wait 2.5645 w_ten 0.1525 aux 0.4991 struct_sh 1.1967 lr 1.07e-05 [131.2s]
+step 400 (stage 3) loss 2.5415 alloc 0.5832 wait 2.6404 w_ten 0.0937 aux 0.4593 struct_sh 0.9311 lr 2.14e-05 [252.4s]
+step 600 (stage 3) loss 2.8939 alloc 0.6065 wait 3.0016 w_ten 0.1223 aux 0.4699 struct_sh 1.1432 lr 3.21e-05 [371.6s]
+step 800 (stage 3) loss 2.5466 alloc 0.5875 wait 2.4753 w_ten 0.0791 aux 0.4685 struct_sh 1.0512 lr 4.00e-05 [499.9s]
+step 1000 (stage 3) loss 2.7468 alloc 0.6134 wait 2.6943 w_ten 0.0986 aux 0.4731 struct_sh 1.0048 lr 4.00e-05 [622.9s]
+step 1200 (stage 3) loss 2.6548 alloc 0.5381 wait 2.7551 w_ten 0.1154 aux 0.4791 struct_sh 1.0204 lr 3.99e-05 [749.1s]
+step 1400 (stage 3) loss 2.6519 alloc 0.5584 wait 2.5944 w_ten 0.1133 aux 0.4728 struct_sh 1.1089 lr 3.98e-05 [872.7s]
+[eval] step 1500: alloc_ce 0.6498 top1 0.7207 wait_ce35 2.7448 wait_ce34 2.7371 wait_hit1 0.1999 tenpai_frac 0.145 tenpai_auc 0.9709 meanP(ten) 0.1542 struct_sh_acc 0.5588 (ce 1.0359)
+[eval] new best val_score 2.060144 -> best.pth
+step 1600 (stage 3) loss 2.6613 alloc 0.5566 wait 2.7882 w_ten 0.0495 aux 0.4600 struct_sh 0.9627 lr 3.96e-05 [1002.6s]
+step 1800 (stage 3) loss 2.6801 alloc 0.5929 wait 2.7169 w_ten 0.0593 aux 0.4767 struct_sh 1.1029 lr 3.95e-05 [1132.4s]
+step 2000 (stage 3) loss 2.7854 alloc 0.6125 wait 2.7728 w_ten 0.1208 aux 0.4915 struct_sh 1.1340 lr 3.92e-05 [1258.6s]
+step 2200 (stage 3) loss 2.8405 alloc 0.6167 wait 2.7786 w_ten 0.1370 aux 0.4877 struct_sh 1.1843 lr 3.90e-05 [1378.2s]
+step 2400 (stage 3) loss 2.6594 alloc 0.5706 wait 2.6882 w_ten 0.1009 aux 0.4626 struct_sh 0.9783 lr 3.87e-05 [1508.3s]
+step 2600 (stage 3) loss 2.6176 alloc 0.5581 wait 2.4907 w_ten 0.2942 aux 0.4738 struct_sh 1.0448 lr 3.84e-05 [1635.0s]
+step 2800 (stage 3) loss 2.8587 alloc 0.5851 wait 2.9869 w_ten 0.1424 aux 0.4852 struct_sh 1.2066 lr 3.80e-05 [1758.0s]
+step 3000 (stage 3) loss 2.4864 alloc 0.5709 wait 2.3412 w_ten 0.1725 aux 0.4764 struct_sh 1.0477 lr 3.76e-05 [1881.0s]
+[eval] step 3000: alloc_ce 0.6493 top1 0.7210 wait_ce35 2.7392 wait_ce34 2.7318 wait_hit1 0.2005 tenpai_frac 0.145 tenpai_auc 0.9708 meanP(ten) 0.1563 struct_sh_acc 0.5606 (ce 1.0331)
+[eval] new best val_score 2.059031 -> best.pth
+step 3200 (stage 3) loss 2.7168 alloc 0.6202 wait 2.5771 w_ten 0.1792 aux 0.4925 struct_sh 1.2585 lr 3.72e-05 [2007.1s]
+step 3400 (stage 3) loss 2.9170 alloc 0.6293 wait 3.0381 w_ten 0.1670 aux 0.4733 struct_sh 1.1935 lr 3.67e-05 [2135.1s]
+step 3600 (stage 3) loss 2.7738 alloc 0.6159 wait 2.7402 w_ten 0.1044 aux 0.4859 struct_sh 1.1925 lr 3.62e-05 [2265.4s]
+step 3800 (stage 3) loss 2.7183 alloc 0.6425 wait 2.5338 w_ten 0.1705 aux 0.4806 struct_sh 1.1095 lr 3.56e-05 [2385.7s]
+step 4000 (stage 3) loss 2.6001 alloc 0.5685 wait 2.5075 w_ten 0.0976 aux 0.4746 struct_sh 1.0756 lr 3.51e-05 [2510.2s]
+step 4200 (stage 3) loss 2.8034 alloc 0.6024 wait 2.8288 w_ten 0.1570 aux 0.4759 struct_sh 1.0830 lr 3.45e-05 [2635.6s]
+step 4400 (stage 3) loss 2.5858 alloc 0.5411 wait 2.5857 w_ten 0.1832 aux 0.4840 struct_sh 1.0918 lr 3.39e-05 [2758.5s]
+[eval] step 4500: alloc_ce 0.6496 top1 0.7208 wait_ce35 2.7498 wait_ce34 2.7423 wait_hit1 0.1977 tenpai_frac 0.145 tenpai_auc 0.9706 meanP(ten) 0.1561 struct_sh_acc 0.5588 (ce 1.0389)
+step 4600 (stage 3) loss 2.6899 alloc 0.5907 wait 2.7334 w_ten 0.1214 aux 0.4568 struct_sh 0.9824 lr 3.32e-05 [2887.3s]
+step 4800 (stage 3) loss 2.6468 alloc 0.6136 wait 2.5029 w_ten 0.1636 aux 0.4710 struct_sh 1.0316 lr 3.25e-05 [3016.4s]
+step 5000 (stage 3) loss 2.7830 alloc 0.5925 wait 2.8420 w_ten 0.1327 aux 0.4655 struct_sh 1.0206 lr 3.18e-05 [3140.6s]
+step 5200 (stage 3) loss 2.6207 alloc 0.5688 wait 2.6369 w_ten 0.1749 aux 0.4728 struct_sh 1.0264 lr 3.11e-05 [3275.4s]
+step 5400 (stage 3) loss 2.6144 alloc 0.5514 wait 2.7267 w_ten 0.1409 aux 0.4675 struct_sh 0.9621 lr 3.04e-05 [3405.7s]
+step 5600 (stage 3) loss 2.5384 alloc 0.5505 wait 2.4339 w_ten 0.2037 aux 0.4954 struct_sh 1.1167 lr 2.96e-05 [3528.8s]
+step 5800 (stage 3) loss 2.6865 alloc 0.6159 wait 2.5394 w_ten 0.1146 aux 0.4847 struct_sh 1.2109 lr 2.88e-05 [3651.6s]
+step 6000 (stage 3) loss 2.9078 alloc 0.6394 wait 2.9486 w_ten 0.1539 aux 0.4786 struct_sh 1.0141 lr 2.80e-05 [3779.9s]
+[eval] step 6000: alloc_ce 0.6496 top1 0.7210 wait_ce35 2.7439 wait_ce34 2.7364 wait_hit1 0.1994 tenpai_frac 0.145 tenpai_auc 0.9706 meanP(ten) 0.1554 struct_sh_acc 0.5588 (ce 1.0327)
+step 6200 (stage 3) loss 2.7480 alloc 0.6201 wait 2.7099 w_ten 0.1699 aux 0.4833 struct_sh 0.9905 lr 2.72e-05 [3903.1s]

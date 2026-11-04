@@ -12,12 +12,17 @@
 #   * 汇总时把各进程的 rankings 相加，再算总 avg_rank / avg_pt。
 set -u -o pipefail
 
+# 判定臂必须固定 PCI 顺序：否则 CUDA_VISIBLE_DEVICES=0 会指到最快的 RTX 8000，
+# 而不是 nvidia-smi 的 0 号 P100（2026-11-04 实测踩到）。
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+
 PY=${PY:-/mnt/data8/miniconda3/envs/mortal/bin/python}
 cd "$(dirname "$0")"
 
 PROCS=${PROCS:-6}
 GPP=${GPP:-68}
 SEED_KEY=${SEED_KEY:-20261026}
+BASE_CFG=${BASE_CFG:-config.anchor_ako.toml}   # 基座配置（guard 开/关用不同副本）
 GPUS_CSV=${GPUS_CSV:-0,1}
 TAG=${TAG:-anchor1}
 
@@ -41,9 +46,9 @@ say () { echo "[$(date '+%F %T')] $*"; }
 say "锚点启动：$PROCS 进程 × $GPP 局 = $((PROCS*GPP)) 局（Mortal×1 vs akochan×3）"
 
 "$PY" - "$PROCS" "$GPP" "$SEED_KEY" "$TAG" "$NGPU" <<'EOF'
-import sys, pathlib
+import sys, pathlib, os
 procs, gpp, key, tag, ngpu = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], int(sys.argv[5])
-src = pathlib.Path('config.anchor_ako.toml').read_text()
+src = pathlib.Path(os.environ.get('BASE_CFG', 'config.anchor_ako.toml')).read_text()
 import re
 for i in range(procs):
     s = src

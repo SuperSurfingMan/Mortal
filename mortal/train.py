@@ -186,6 +186,13 @@ def train():
     extra_features, extra_channels = s6c_features.resolve(config['control'])
 
     online = config['control']['online']
+    # 在线自博弈（2026-11-07）：
+    # - online_max_steps：从本次启动起训满这么多步就停（0/缺省 = 不限，旧行为）；
+    #   不能用 max_train_steps 因为 online 的 steps 是从 ckpt 的 956k 继续累加的。
+    # - submit_round_interval：每隔多少个 epoch 才推一次新权重（缺省 1 = 每轮都推，旧行为）；
+    #   每轮只有 4 局，逐轮推会让策略每 4 局换一次，数据失去 on-policy 意义。
+    online_max_steps = config['control'].get('online_max_steps', 0)
+    submit_round_interval = config['online'].get('submit_round_interval', 1)
     batch_size = config['control']['batch_size']
     opt_step_every = config['control']['opt_step_every']
     save_every = config['control']['save_every']
@@ -562,6 +569,7 @@ def train():
     def train_epoch():
         nonlocal steps
         nonlocal idx
+        nonlocal round_count
 
         player_names = []
         if online:
@@ -1171,9 +1179,15 @@ def train():
         pb.close()
 
         if online:
-            submit_param(mortal, dqn, is_idle=True)
-            logging.info('param has been submitted')
+            round_count += 1
+            if submit_round_interval <= 1 or round_count % submit_round_interval == 0:
+                submit_param(mortal, dqn, is_idle=True)
+                logging.info(f'param has been submitted (round {round_count})')
+            else:
+                logging.info(f'round {round_count}: 保持旧权重（每 {submit_round_interval} 轮推一次）')
 
+    online_start_steps = steps
+    round_count = 0
     while True:
         train_epoch()
         gc.collect()
@@ -1182,6 +1196,22 @@ def train():
         if not online:
             # only run one epoch for offline for easier control
             break
+        if online_max_steps > 0 and steps - online_start_steps >= online_max_steps:
+            logging.info(
+                f'online 已达 {steps - online_start_steps} 步（目标 {online_max_steps}），停止：'
+                f'steps={steps}、rounds={round_count}'
+            )
+            # ⚠️ 不能用 break：外层是 Popen 自动重启循环（崩溃恢复），
+            # 子进程以 0 退出时父进程会 sleep 3 再起一个，导致 online 无限续跑。
+            # 写完成标记 + 非零退出码，让父进程也退出。
+            try:
+                flag = path.splitext(config['control']['state_file'])[0] + '.DONE'
+                path.dirname(flag) and os.makedirs(path.dirname(flag), exist_ok=True)
+                with open(flag, 'w', encoding='utf-8') as f:
+                    f.write(f'online_max_steps={online_max_steps} steps={steps} rounds={round_count}\n')
+            except OSError as exc:
+                logging.warning(f'写完成标记失败：{exc}')
+            sys.exit(1)
 
 def main():
     import os

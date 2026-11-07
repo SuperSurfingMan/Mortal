@@ -758,6 +758,71 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 
 **产物**：`memory/DESIGN_strength_weight_20261102.md`、`tools/training/build_strength_weights.py`、`mortal/config.strength_probe{,_smoke}.toml`、`mortal/run_strength_probe.sh`、`mortal/indexes/strength_weights_v1.pth`、`mortal/checkpoints/strength_probe/`、`mortal/logs/strength_probe_*.log`。
 
+### 3.20 在线自博弈（M5）：管线跑通，200k 步在跑（2026-11-07）
+
+**动机**：档 A 的**离线**自博弈（自生成 8k/35k 半庄再混入人类数据）两轮全零效应（§3.18），
+根因是“离线生成的样本对当前策略没有增量信息”。在线版把生成与训练耦合成循环，数据始终来自**当前策略**（+ boltzmann 探索）。
+
+**⚠️ 命名澄清（重要）**：`player.py` 的 `TrainPlayer` 实际是
+`OneVsThree.py_vs_py(challenger=学习者, champion=固定 baseline)` = **1 个学习者席位 vs 3 个固定卫冕者**。
+所以这条线的准确定义是「**on-policy 数据生成**」，不是“四个自己打”的对手共演化自博弈；
+真正的自博弈需要对手池，本仓库没有。
+
+**架构（原代码，配置里标“暂未启用”）**：
+
+| 组件 | 职责 |
+|---|---|
+| `mortal/server.py` | 参数服务器：`get_param` 下发权重 / `submit_replay` 收牌谱 / `submit_param` 收新权重 / `drain` 交付样本 |
+| `mortal/client.py` | 对局 worker：拉权重 → `TrainPlayer.train_play` 打 4 局 → 提交 |
+| `mortal/train.py` | 训练侧：`drain()` → `train_epoch()` → `submit_param()` |
+
+**修的 6 个问题**（全是“一开开关就坏”的）：
+
+| # | 位置 | 问题 | 修法 |
+|---|---|---|---|
+| 1 | `train.py` | online 时 `max_train_steps` 被 `if not online` 跳过 ⇒ **无终止条件** | 新增 `control.online_max_steps`，按**本次启动的增量**判断 |
+| 2 | `train.py` | **每轮（4 局）就推一次权重**，策略极度非平稳 | 新增 `online.submit_round_interval`（缺省 1 = 旧行为） |
+| 3 | `train.py` | 外层是 `Popen` **崩溃自动重启循环**，`break` 会导致无限续跑 | 写 `<state_file>.DONE` + `sys.exit(1)` 让父进程一起退 |
+| 4 | `client.py` | 权重未变时仍每轮重传+重载 41MB | 独立 `loaded_version` 变量，未变则 `skip load` |
+| 5 | `player.py` | **多 client 共用 `log_dir`**，各自启动时 `rmtree` 会删对方牌谱 | `MORTAL_WORKER_ID` 环境变量分流 |
+| 6 | `common.py` | `drain()` 空轮询 `sleep(5)`，白等占总墙钟 23% | 改 `sleep(1)`：1.85 → **2.54 步/秒** |
+
+附带：`recv_msg` 的 `MemoryError`（header 错位时 `bytearray(size)` 直接爆，堆栈看不到 header）改为明确的
+`protocol desync: header=... size=... peer=...`。
+
+**两个自己写出来的 bug（已修，留作教训）**：① `client.py` 首版用
+`param_version == rsp['param_version']` 判断，但前一行刚给它赋值 ⇒ 永远相等 ⇒ **永久冻结在初始权重**；
+② `train.py` 首版用 `Path(...)` 写标记，但 `train()` 里只导入了 `sys`/`os`/`path`，没有 `Path` ⇒ 停止时 NameError。
+
+**吞吐（实测，4 client + 1 trainer）**：
+
+| 项 | 数值 |
+|---|---|
+| 单 client | 4 局 / 63 秒 |
+| trainer | **2.54 步/秒**（≈9,150 步/小时） |
+| 每轮 | drain 到 4~16 个牌谱 → 30~152 步 |
+| **200k 步 ETA** | **≈22 小时** |
+| 产出规模 | ≈21,000 局（与档 A 第二轮 35,200 局同量级） |
+
+**启动（4 client）**：
+
+```bash
+cd mortal
+# server（不占卡）
+CUDA_DEVICE_ORDER=PCI_BUS_ID MORTAL_CFG=config.selfplay_smoke.toml python -u server.py
+# trainer（GPU0）
+CUDA_VISIBLE_DEVICES=0 ... python -u train.py
+# 4 client（GPU1-4）
+for i in 0 1 2 3; do
+  CUDA_VISIBLE_DEVICES=$((i+1)) MORTAL_WORKER_ID=$i ... python -u client.py
+done
+```
+
+**产物**：`mortal/config.selfplay_smoke.toml`（生产）、`mortal/config.selfplay_test.toml`（150 步冒烟）、
+`logs/selfplay_smoke/`（server + 4 client + trainer 日志）、`mortal/checkpoints/selfplay_m5/`。
+
+**判据（跑完才执行）**：holdout top1 ≥ 0.8167（不低于 S6c）+ 16k 双向臂 bootstrap CI 下界 > 0。
+
 ---
 
 ## 4. 现状与下一步
@@ -781,7 +846,8 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 | 推理期加性期望损失（`P(deal)×E[loss_pt]`） | ❌ 机制生效但交换率 10:1 < 平 λ 的 27.6:1 ⇒ **推理期线封顶** | §3.17b |
 | 容量/宽度（net2wider） | ❌ **前置诊断否证**（train≈holdout，无过拟合/欠拟合余量），不做 | §4.2 |
 | 泛化间隙诊断 | ✅ train(202512) top1 **0.8163** vs holdout(202609) **0.8161**（Δ=0.02pp），dqn_loss 0.352/0.343 ⇒ **BC 噪声地板，非容量瓶颈** | §4.2 |
-| 测量基建 | ✅ ladder 标准臂已固化（16000 sets/向）；akochan 锚点 **408 局完成**（+2.87，CI 含 0） | §3.16 |
+| 测量基建 | ✅ ladder 标准臂已固化（16000 sets/向）；akochan 锦点 **2,388 局完成**（pooled +0.00±1.68） | §3.16 |
+| **在线自博弈（M5）** | 🔄 **2026-11-07 15:26 启动，管线已跑通，200k 步在跑（4 client + 1 trainer，ETA ≈22 h）** | §3.20 |
 
 ### 4.2 下一步（只列未完成事项；已关闭项见 §4.1）
 
@@ -805,7 +871,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 | **P2** | RM10 轨迹级监督 | 读牌侧唯一新监督；需先解冻读牌模型，并说明它为何不同于 S6b 注入（坑 72：BC 不需要显式读牌） |
 | **P2** | 放铳率辅助头 | aux 预测本局放铳；风险是辅助头绕过主通路（坑 63） |
 | **P2** | 工程债 | 异地备份、上游 `git diff` 校准、两套 holdout 同分布口径、agari-guard holdout、kan-select 回放对照、optimizer 暖启消融、AMP 重开验证、文档对账 |
-| **P1** | 在线自博弈（M5）smoke | 2k~8k 局先验证管线：`online=true` + `freeze_bn.mortal=true` + 子进程隔离（已知卡死 bug）；看 holdout/行为 + 16k 短臂初判，通过再谈长期 |
+| **P1** 🔄 | 在线自博弈（M5）**已启动**（2026-11-07 15:26；4 client + 1 trainer，200k 步，ETA ≈22 h） | 管线已跑通（§3.20 记录了修的 6 个问题）；判据：holdout top1 ≥ 0.8167 + 16k 双向臂 bootstrap CI 下界 > 0 |
 | **P3** | 更强行为先验（若要继续压上界） | 读牌 README §9 的参考策略弱于 A2b；要回答「还剩多少」需 ukeire/安全度策略或学习型 policy，并保留 `hard` 下界 |
 
 ### 4.3 当前资产与基线

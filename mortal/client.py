@@ -30,7 +30,8 @@ def main():
         dqn.compile()
 
     train_player = TrainPlayer()
-    param_version = -1
+    param_version = -1        # 我知道的最新版本（随 get_param 响应更新）
+    loaded_version = -2       # 已真正装进模型的版本
 
     pts = np.array([90, 45, 0, -135])
     history_window = config['online']['history_window']
@@ -50,9 +51,17 @@ def main():
                     param_version = rsp['param_version']
                     break
                 time.sleep(3)
-        mortal.load_state_dict(rsp['mortal'])
-        dqn.load_state_dict(rsp['dqn'])
-        logging.info('param has been updated')
+        # 权重未变时跳过 load（2026-11-07）：trainer 现在每 N 轮才推一次权重，
+        # 而 client 每轮都会 get_param；不跳过的话每 58 秒白传/白 load 一次 41MB。
+        # 必须用独立的 loaded_version 判断：param_version 刚被赋成 server 的返回值，
+        # 拿它自比永远相等（首版就踩了这个坑，等于永久冻结在初始权重）。
+        if param_version == loaded_version:
+            logging.info(f'param unchanged (v{param_version}), skip load')
+        else:
+            mortal.load_state_dict(rsp['mortal'])
+            dqn.load_state_dict(rsp['dqn'])
+            loaded_version = param_version
+            logging.info(f'param has been updated to v{param_version}')
 
         rankings, file_list = train_player.train_play(mortal, dqn, device)
         avg_rank = rankings @ np.arange(1, 5) / rankings.sum()

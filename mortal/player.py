@@ -120,7 +120,11 @@ class TrainPlayer:
         self.chal_version = config['control']['version']
         # 挑战者（训练中的模型）用训练配置自己的特征族
         self.chal_extra_features, _ = s6c_features.resolve(config['control'])
-        self.log_dir = path.abspath(cfg['log_dir'])
+        # 多 worker 隔离（2026-11-07 在线自博弈）：每个 client 启动时会 rmtree(log_dir)，
+        # 多个 client 共用同一目录会互相删除对方刚写入的牌谱。用环境变量分流，
+        # 不设时行为与原来完全一致。
+        wid = os.environ.get('MORTAL_WORKER_ID', '')
+        self.log_dir = path.abspath(cfg['log_dir'] + (f'_w{wid}' if wid else ''))
         self.train_key = secrets.randbits(64)
         self.train_seed = 10000
 

@@ -175,7 +175,7 @@ def main():
     print(f'raw rankings = {rankings}')
     print(f'avg_rank = {stat.avg_rank:.4f}   avg_pt = {stat.avg_pt([90, 45, 0, -135]):.3f}')
     print(f'1st/2nd/3rd/4th = {stat.rank_1_rate:.3f} {stat.rank_2_rate:.3f} {stat.rank_3_rate:.3f} {stat.rank_4_rate:.3f}')
-    print(f'agari={stat.agari_rate:.3f} houjuu={stat.houjuu_rate:.3f} fuuro={stat.fuuro_rate:.3f} riichi={stat.riichi_rate:.3f}')
+    print(f'agari={stat.agari_rate:.3f} houjuu={stat.houjuu_rate:.3f} fuuro={stat.fuuro_rate:.3f} riichi={stat.riichi_rate:.3f} ryukyoku={stat.ryukyoku_rate:.3f}')
 
     meta = {
         'generated_at': datetime.now().isoformat(timespec='seconds'),
@@ -199,6 +199,8 @@ def main():
             'houjuu_rate': stat.houjuu_rate,
             'fuuro_rate': stat.fuuro_rate,
             'riichi_rate': stat.riichi_rate,
+            # 行为画像口径统一（2026-11-07）：补上流局率，否则无法与人类场同口径对比
+            'ryukyoku_rate': stat.ryukyoku_rate,
         },
     }
     meta_path = path.join(log_dir, 'run_meta.json')

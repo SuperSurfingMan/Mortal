@@ -607,7 +607,23 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 - **方向修正**：`ako_vs_py` 测的是 akochan，要测「Mortal vs 3 akochan」必须用 **`py_vs_ako`**；已在 `one_vs_three.py` 加 `[1v3] mortal_vs_ako = true`，此时 `challenger rankings` 才是 Mortal 自己的名次/uma pt。
 - **进程数暴涨 → 已修**：`run_anchor.sh` 起初 6 进程 × 68 局时 akochan 进程涨到 **1224**（≈17 sets × 12 席 × 6 进程）、负载 20+，全部 kill；根因是 `py_vs_ako` 的 champion 分组有 12 个 player_id 且每个 set 都重建 agent（`Drop` 不及时）。commit `e557a87` 改用 `iters=N, games_per_iter=4`（每 iter 重建并 drop）→ **1224→72**（6 进程 × 12）。
 - **✅ anchor1 已完成（2026-10-27 01:32 UTC，历时 23.7 h）**：6 进程 × 68 局 = **408 局**（102 sets，各进程 RC=0）。结果：名次分布(1..4) **[85, 117, 119, 87]**（均匀期望 102）、**avg_rank 2.510**、**avg_pt +2.87**（uma 90/45/0/−135，3×akochan 人均 −0.96）；朴素 SE 4.06 / CI **[−5.1, +10.8]**，按 ICC≈0.19 修正后 SE≈5.1 / CI≈**[−7.1, +12.9]**。⇒ 点估计略强于 3×akochan，但 **CI 跨 0（不显著）**；与人类标尺（均值 −5.44 / 中位 −2.61 / p95 +9.29）的关系不唯一。要分辨「+3 vs 0」需 ~1600 局（SE≈2，约 4 天）。汇总：`python agg_anchor.py --dir logs/anchor1`。
-- **人类场标尺**：`player_ratings_2022_2026H1_v3.csv` 的 `avg_pt` 与 `one_vs_three.py` 的 uma 口径（90/45/0/−135）同尺度：全样本均值 **−5.44** / 中位 **−2.61** / p95 **+9.29**（5,356 人）。⇒ 若 Mortal vs 3 akochan 的 avg_pt 明显高于 +9.3，可判「高于人类 p95」；落在 −5 附近则「与人类均值同档」。
+- **人类场标尺（2026-11-07 修正口径）**：`player_ratings_2022_2026H1_v3.csv` 的玩家级 `avg_pt` 与 `one_vs_three.py` 的 uma（90/45/0/−135）同尺度，但**必须分组看**：
+
+  | 口径 | 人数 | 均值 | 中位 | p95 | SD |
+  |---|---|---:|---:|---:|---:|
+  | 全部（含几局游） | 5,356 | −5.44 | −2.61 | +9.29 | 19.6 |
+  | ≥100 局 | 3,658 | −2.17 | −1.56 | +5.62 | 5.33 |
+  | **≥500 局（常客）** | **1,717** | **+0.08** | **0.00** | **+5.38** | **3.18** |
+
+  旧口径拿「全部 5,356 人」的 −5.44 当基准，会把 Mortal 相对抬高 5.5 pt（多数玩家只打几十局、长期均值为负）。**常客基准是 +0.08 / p95 +5.38**。
+  另：`houou_games.csv` 的**真实**每局 pt（含段位补正）零和、SD **36.4**、中位 −6.7 —— 与 uma 的理论 SD 84 不是一回事，勿混。
+- **✅ anchor3 已完成（2026-11-05 02:12 → 11-07 09:17，约 55 h，5 卡 × 10 进程）**：
+  - phase1（S6c + λ=10）**1,588 局**：名次 [376,387,453,372]、avg_rank **2.517**、avg_pt **+0.65**、SE 2.06、CI **[−3.4,+4.7]**
+  - phase2（S6c 无守卫）**800 局**：名次 [170,213,225,192]、avg_rank **2.549**、avg_pt **−1.29**、SE 2.90、CI **[−7.0,+4.4]**
+  - 两臂差 Δ=**+1.94**、SE 3.56、CI [−5.04,+8.92]、t=0.54 ⇒ **守卫无显著增益**，与 risk 口径修正后 ladder 四臂 NO-CONCLUSION 独立一致
+  - **pooled（2,388 局，同 ckpt）avg_pt = +0.00 ± 1.68，CI [−3.3,+3.3]** ⇒ **Mortal(S6c) vs 3×akochan 完全均势**；对照常客基准 +0.08 可知 **Mortal ≈ 凤凰场常客平均**，未达 p95（+5.38）
+  - 执行事故：p1 在第 38 批遇 akochan C++ `std::bad_alloc` 早退（RC=1），少 12 局（0.75%，不影响结论）
+  - 产物：`mortal/logs/anchor3/summary.txt`、`mortal/logs/anchor3_noguard/summary.txt`、`mortal/start_anchor3.sh`（预检+两阶段+自动汇总）
 - **产物**：`mortal/run_anchor.sh`、`mortal/agg_anchor.py`、`mortal/config.anchor_ako.toml`、`tools/akochan_build_notes.md`、`backups/libriichi_20261025/`（改前源码 + `.so` + 回滚说明）。
 
 ### 3.17 Guard-P2：状态依赖押し引き（2026-10-27，离线否证，不烧 ladder）

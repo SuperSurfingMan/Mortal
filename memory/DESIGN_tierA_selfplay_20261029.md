@@ -143,3 +143,48 @@ python train.py --config config.s6c.toml --init checkpoints/s6c/mortal.pth \
 - 臂：`logs/arm_tierA.log`、`logs/arm_tierA/summary.log`、`logs/arm_tierA2.log`、`logs/arm_tierA2/summary.log`
 - 训练：`logs/tierA_train.log`、`logs/tierA2_train.log`、`checkpoints/tierA/`、`checkpoints/tierA2/`
 - 配置/脚本：`mortal/config.tierA.toml`、`mortal/config.tierA2.toml`、`mortal/watch_arm2.sh`
+
+---
+
+# 附录：自博弈线的终局（2026-11-08）
+
+档 A 之后，自博弈又走了两次，都结案：
+
+| 轮次 | 形态 | 对手 | 规模 | 结果 |
+|---|---|---|---:|---|
+| 档 A（离线） | 生成牌谱混入人类数据 | 自己 | 8k/35k 半庄 + 200k/400k 步 | **零效应**（δ −0.024 / +0.072） |
+| M5（在线，假自博弈） | `py_vs_py`，champion = 固定 baseline | 3×旧模型 | 200k 步 | **坍塌**（LR 未随 batch 缩放，−57.5pp）；LR 修正后 10k 步 = **中性**（−0.45pp） |
+| **4M（在线，真自博弈）** | `champion = 'self'`，4 席都是当前策略 | 自己 | 14,000 步（52 min） | 4000 步 **−0.59pp** / 14000 步 **−1.34pp**，但 dqn_loss −18%、R2 +35% |
+
+## 4M 的实现（不改 Rust）
+
+`OneVsThree::py_vs_py(challenger, champion, ...)` 原本就是一个学习者席位 + 3 个对手席位，
+只要把 champion 也做成「当前策略的 engine」就是真自博弈。两处关键：
+
+1. **权重同步**：champion engine 与 challenger **共享同一份 `(mortal, dqn)` 引用**，
+   不复制模型 ⇒ trainer 每步更新权重时对手自动跟随。
+2. **样本 4 倍**：两个 engine 的 `name` 都设 `'trainee'` ⇒ mjai 日志 `start_game.names`
+   是 4 个 `'trainee'` ⇒ `libriichi/src/dataset/gameplay.rs::load_events` 的
+   `player_names_set.contains(name)` 过滤会把**同一局的 4 个席位全部展开成样本**
+   （实测每轮步数 30 → 121~2000）。
+
+配置开关：`[train_play].champion = 'baseline' | 'self'`（默认 `baseline`，旧行为不变）。
+
+## 为什么仍然失败
+
+4 席同策略互打是**严格零和**：一家的收益就是另一家的损失，
+每局期望 reward = 0 ⇒ **梯度的一阶信号为零，只剩方差**。
+
+可观测的后果：
+- `dqn_loss` 持续下降（0.3397 → 0.2778）、`var_q/var_t` 从 1.12/1.62/1.27 收敛到 0.78/1.19/0.88、
+  `R2` 从 −1.078 升到 −0.699 —— 模型越来越**自洽**；
+- 同时 holdout `top1` 单调下降（0.8198 → 0.8064）—— 但这个"自洽"的解**不是人类的策略分布**。
+
+⇒ 结论与档 A 一致，并补上一个关键排除：**「对手是否更新」不是变量，
+「数据来自自己 vs 来自人」才是**。自博弈要有效，必须叠加
+① 与人类数据混合；② 强对手（akochan/搜索）；③ batch 512 —— 5 卡上 3~4 天起，
+历史证据（三次尝试）均指向"不是杠杆"。
+
+**产物**：`mortal/config.selfplay_4m{,_smoke}.toml`、`mortal/player.py`、
+`logs/selfplay_4m/`（含 `holdout_compare.log`、`holdout_960k.log`）、
+`mortal/checkpoints/selfplay_4m/`。

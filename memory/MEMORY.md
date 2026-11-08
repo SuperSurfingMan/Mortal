@@ -776,7 +776,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 | `mortal/client.py` | 对局 worker：拉权重 → `TrainPlayer.train_play` 打 4 局 → 提交 |
 | `mortal/train.py` | 训练侧：`drain()` → `train_epoch()` → `submit_param()` |
 
-**修的 6 个问题**（全是“一开开关就坏”的）：
+**修的 7 个问题**（前 6 个是“一开开关就坏”；第 7 个是原作者留了 5 年的卡死）：
 
 | # | 位置 | 问题 | 修法 |
 |---|---|---|---|
@@ -789,6 +789,26 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 
 附带：`recv_msg` 的 `MemoryError`（header 错位时 `bytearray(size)` 直接爆，堆栈看不到 header）改为明确的
 `protocol desync: header=... size=... peer=...`。
+
+**#7 原作者 5 年未解的 `test_play` 后卡死（2026-11-08 修掉）**：
+原代码在 `test_play` 后留了 `if online: sys.exit(0)`，注释写
+“BUG: unknown reason ... the process will get stuck here ... this is the reason why main spawns a sub process”。
+
+- **根因（高置信）**：`test_play` 在本进程里初始化了 **CUDA context** 与 **libriichi 的 rayon 全局线程池**
+  （`stat.rs:17 use rayon`、`agent/mortal.rs:259 rayon::spawn` + `Arc<Mutex<SyncFields>>` + `WaitGroup`）；
+  随后 `DataLoader(num_workers=8, pin_memory=True)` 用 **fork** 起 worker——子进程继承了这些线程的**锁状态**
+  但**线程本身不随 fork 复制** ⇒ 子进程可能永远等在某个锁上。Python 3.12 对此有明确告警：
+  `DeprecationWarning: This process is multi-threaded, use fork() may lead to deadlocks in the child.`
+- **为何 offline 不卡**：只跑一个 epoch 就 `break`，不会在 `test_play` 之后再 fork。
+  **为何 online 每 20k 步必卡**：`test_every == save_every == 20000`，每次 save 之后立即踩雷。
+- **修法**：online 模式强制 `num_workers = 0`（每轮只 4~16 个牌谱，单进程加载 < 2 s），从源头消除 fork。
+- **验证（连续 5.7 小时）**：`loaded:` 从“每 2 小时 1 次”变成 **全程 1 次**；`round` 从“反复回到 5~9”
+  变成 **连续 1505**；跨过 1,100,000 的 test 点无重启（`mortal_step_001100000.pth` 已生成）；0 错误。
+- **诚实边界**：三次简化复现（单独 rayon / 单独 CUDA / 单独 `pin_memory`）**都不卡** ⇒ 死锁是概率性竞态，
+  根因不能 100% 确证；但 `num_workers=0` 消除了 fork 这个**必要条件**，逻辑上充分。若将来又观察到卡死，
+  恢复 `if online: sys.exit(0)` 作为临时绕过即可（注释已留在原处）。
+- **附带**：终止条件改为 `control.online_target_steps`（**绝对**步数）。原来的增量口径
+  `online_max_steps` 在每次重启后重置，永远达不到目标。
 
 **两个自己写出来的 bug（已修，留作教训）**：① `client.py` 首版用
 `param_version == rsp['param_version']` 判断，但前一行刚给它赋值 ⇒ 永远相等 ⇒ **永久冻结在初始权重**；

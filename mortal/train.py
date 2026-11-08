@@ -189,9 +189,14 @@ def train():
     # 在线自博弈（2026-11-07）：
     # - online_max_steps：从本次启动起训满这么多步就停（0/缺省 = 不限，旧行为）；
     #   不能用 max_train_steps 因为 online 的 steps 是从 ckpt 的 956k 继续累加的。
+    # - online_target_steps：**绝对**目标步数，优先于 online_max_steps。
+    #   必需：原作者在 test_play 后 `sys.exit(0)` 绕过卡死 bug，父进程 Popen 循环重启，
+    #   所以 online_start_steps 每 2 小时重置一次（每 20k 步 save + test 后），
+    #   增量口径永远达不到目标。绝对口径不受重启影响。
     # - submit_round_interval：每隔多少个 epoch 才推一次新权重（缺省 1 = 每轮都推，旧行为）；
     #   每轮只有 4 局，逐轮推会让策略每 4 局换一次，数据失去 on-policy 意义。
     online_max_steps = config['control'].get('online_max_steps', 0)
+    online_target_steps = config['control'].get('online_target_steps', 0)
     submit_round_interval = config['online'].get('submit_round_interval', 1)
     batch_size = config['control']['batch_size']
     opt_step_every = config['control']['opt_step_every']
@@ -269,6 +274,15 @@ def train():
     file_batch_size = config['dataset']['file_batch_size']
     reserve_ratio = config['dataset']['reserve_ratio']
     num_workers = config['dataset']['num_workers']
+    # online 模式下强制单进程加载（2026-11-08）：
+    # test_play 会在本进程里初始化 CUDA context + libriichi 的 rayon 全局线程池；
+    # 随后 DataLoader(num_workers>0) 用 fork 起 worker，子进程继承了这些线程的锁状态
+    # 但线程本身不随 fork 复制 ⇒ 子进程可能永远等在某个锁上。这就是原作者注释里
+    # "the process will get stuck here" 的最可能成因（Python 3.12 对此有明确
+    # DeprecationWarning：multi-threaded + fork() may deadlock in the child）。
+    # online 每轮只加载 4~16 个牌谱，单进程开销 < 2 s，远低于排查成本。
+    if online:
+        num_workers = 0
     num_epochs = config['dataset']['num_epochs']
     enable_augmentation = config['dataset']['enable_augmentation']
     augmented_first = config['dataset']['augmented_first']
@@ -565,6 +579,31 @@ def train():
     all_q = torch.zeros((save_every, batch_size), device=device, dtype=torch.float32)
     all_q_target = torch.zeros((save_every, batch_size), device=device, dtype=torch.float32)
     idx = 0
+
+    def _online_reached(steps_now):
+        """online 是否已达到停止点。绝对口径优先（重启后仍有效）。"""
+        if online_target_steps > 0:
+            return steps_now >= online_target_steps
+        if online_max_steps > 0:
+            return steps_now - online_start_steps >= online_max_steps
+        return False
+
+    def _finish_online(steps_now):
+        """写完成标记并非零退出——外层是 Popen 自动重启循环，
+        子进程以 0 退出会被再起一个，导致无限续跑。"""
+        logging.info(
+            f'online 已达停止点：steps={steps_now}、rounds={round_count}、'
+            f'target={online_target_steps or "-"}、max_steps={online_max_steps or "-"}'
+        )
+        try:
+            flag = path.splitext(config['control']['state_file'])[0] + '.DONE'
+            path.dirname(flag) and os.makedirs(path.dirname(flag), exist_ok=True)
+            with open(flag, 'w', encoding='utf-8') as f:
+                f.write(f'steps={steps_now} rounds={round_count} '
+                        f'target={online_target_steps} max_steps={online_max_steps}\n')
+        except OSError as exc:
+            logging.warning(f'写完成标记失败：{exc}')
+        sys.exit(1)
 
     def train_epoch():
         nonlocal steps
@@ -1135,12 +1174,13 @@ def train():
                             f'saving to {best_state_file}'
                         )
                         shutil.copy(state_file, best_state_file)
-                    if online:
-                        # BUG: This is a bug with unknown reason. When training
-                        # in online mode, the process will get stuck here. This
-                        # is the reason why `main` spawns a sub process to train
-                        # in online mode instead of going for training directly.
-                        sys.exit(0)
+                    if online and _online_reached(steps):
+                        _finish_online(steps)
+                    # 注：原开发者此处**无条件** sys.exit(0)，靠外层 Popen 循环重启来绕过
+                    # "test_play 后卡死"。2026-11-08 起 online 模式强制 num_workers=0，
+                    # 从源头消除 fork（多线程进程 fork 才可能死锁），因此不再需要重启。
+                    # 若将来又观察到卡死，把下面这行恢复作为临时绕过：
+                    # if online: sys.exit(0)
                 pb = tqdm(total=save_every, desc='TRAIN')
 
                 if not online and max_train_steps > 0 and steps >= max_train_steps:
@@ -1196,22 +1236,8 @@ def train():
         if not online:
             # only run one epoch for offline for easier control
             break
-        if online_max_steps > 0 and steps - online_start_steps >= online_max_steps:
-            logging.info(
-                f'online 已达 {steps - online_start_steps} 步（目标 {online_max_steps}），停止：'
-                f'steps={steps}、rounds={round_count}'
-            )
-            # ⚠️ 不能用 break：外层是 Popen 自动重启循环（崩溃恢复），
-            # 子进程以 0 退出时父进程会 sleep 3 再起一个，导致 online 无限续跑。
-            # 写完成标记 + 非零退出码，让父进程也退出。
-            try:
-                flag = path.splitext(config['control']['state_file'])[0] + '.DONE'
-                path.dirname(flag) and os.makedirs(path.dirname(flag), exist_ok=True)
-                with open(flag, 'w', encoding='utf-8') as f:
-                    f.write(f'online_max_steps={online_max_steps} steps={steps} rounds={round_count}\n')
-            except OSError as exc:
-                logging.warning(f'写完成标记失败：{exc}')
-            sys.exit(1)
+        if online and _online_reached(steps):
+            _finish_online(steps)
 
 def main():
     import os

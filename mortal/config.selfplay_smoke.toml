@@ -34,10 +34,11 @@ enable_compile = false
 batch_size = 32
 opt_step_every = 1
 save_every = 20000
-test_every = 20000
+test_every = 100000
 submit_every = 1000000
 max_train_steps = 200000
-online_max_steps = 200000
+online_max_steps = 0
+online_target_steps = 1156125   # 956125 + 200000：绝对目标，不受每次 test_play 后重启影响
 snapshot_every = 100000
 seed = 20261012
 # 一次性令牌：首层手术后必须丢弃父代 optimizer/scheduler（形状不匹配 + 动量口径不同）

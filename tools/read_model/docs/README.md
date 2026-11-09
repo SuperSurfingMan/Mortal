@@ -381,7 +381,7 @@ ALL PASS（新增 `meld_counts`/`dora_indicators` 两个公开信息样本字段
 训练语义零变化）。
 
 **一键复跑**：`bash tools/read_model/run_a3.sh`（标定复跑 → 诊断 → 三方对决，
-日志 `mortal/logs/read_model/a3_eval_compare.log`）。
+日志输出到 `mortal/logs/read_model/`；2026-10 的 `a3_eval_compare.log` 已清理，结论见本节）。
 
 ## 0bis. 首版训练结果（2026-10-16，15000 步 / 768 万样本 / 77 分钟 @ 8 workers）
 

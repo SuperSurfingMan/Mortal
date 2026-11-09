@@ -1,6 +1,6 @@
 # 读牌模型诊断脚本
 
-`tools/read_model/README.md` **§11**（旧 `MEMORY.md` §3.15，2026-10-19 已随读牌记录整体迁出）全部数字的**可复现来源**。本目录所有脚本一律**只读**：
+`tools/read_model/docs/README.md` **§11**（旧 `MEMORY.md` §3.15，2026-10-19 已随读牌记录整体迁出）全部数字的**可复现来源**。本目录所有脚本一律**只读**：
 不改 `mortal/`、不改 `libriichi/`、不写训练产物，只往 `results/` 落 json。
 
 ## 约定

@@ -226,10 +226,10 @@ export RAYON_NUM_THREADS=8                   # 必须启动前设；rayon 池只
 ### 1.8 Git、备份与权重
 
 - **远端**：`origin = ssh://git@github.com/SuperSurfingMan/Mortal.git`；本地/远端主分支 `master`；`~/.ssh/config` 将 github.com 重写为 `ssh.github.com:443`，密钥 `~/.ssh/id_ed25519` 已登记。
-- **当前状态（2026-10-26）**：`master` 领先 `origin/master` **10 个提交**（`3d615c3..90f8660`：D2 判决、EV 重排、测量基建、akochan 四项修复 + 进程数修复、gitignore）。推送前先 `git status -sb`；SSH 主机键缺失会让 push 静默挂起（§5.2-14，用 `timeout` 包裹）。
+- **当前状态（2026-11-09）**：`master` 与 `origin/master` **已同步**（`d547318`）。推送前先 `git status -sb`；SSH 主机键缺失会让 push 静默挂起（§5.2-14，用 `timeout` 包裹）。
 - **忽略规则**：`dataset/`、`mortal/checkpoints|indexes/*.pth`、`mortal/libriichi.so`、`target/`、`backups/`、`mortal/runs/`、`mortal/logs/`、`tools/tenhou_data/logs/`、`*.bak/*.so/*.dll/*.exe/*.tar`；**保留 `memory/` 与 `tools/`**（唯一文档）。
 - **基线**：首提交 `33e63bc`（460 文件/4.0 MB），tag `round1-complete`；文档同步提交 `5a1867f`；防泄漏校验 `dataset` 跟踪数 0、敏感扩展名 0；git 2.17.1（不支持 `init -b`/`switch`）。
-- **备份**：`backups/ckpt_round1/`（8 个 R1 ckpt）、`backups/code_docs_20261009.tar.gz`、`backups/libriichi_20261025/`（akochan 改动前源码 + `.so` + 回滚说明）、`Mortal_valuable_with_ckpts_20261013.zip`（全量含 ckpt）；体量见 §6.3。
+- **备份**：`backups/libriichi_20261025/`（akochan 改动前源码 + `.so` + 回滚说明）、`backups/cleanup_20261028/`（10-28 归档删除清单 + tar）。⚠️ 2026-11-09 核实：`backups/ckpt_round1/` 与 `code_docs_20261009.tar.gz` **已不存在**（早前已清），台账已同步（§6.3）。
 - **权重**：`mortal/checkpoints/` 下 R1–R5、reward_ablation、hp_ablation、IQL、S6a 隔离区、`s6c`、`mix_v1`(D1)、`d2_2026`、`inject_s6b` 等；`.pth` 约 130 MB（fp32）。**逐目录路径与体量见 §6.3**（不在此重复）。
 
 ---
@@ -432,14 +432,14 @@ v3 重建后玩家池 4,883→**5,356**，合格（≥400 局且 avg_pt≥2）47
 - 执行：首次误选 GPU0 P100，fp32 仅 2.48 batch/s；换 GPU2 RTX 8000 后 4.36 batch/s，训练从 12.8h 降到 7.3h。**主训固定 GPU2**。
 - 判定：δ=−0.605，解析 SE 0.594、t=−1.02、CI[−1.77,+0.56]；bootstrap SE 0.508、CI[−1.61,+0.36]，ρ≈+0.185 → **无结论、方向偏负**（未出现 C 组式干净反对称，不能称确证变弱）。
 - 结论：top200 席位只有 top400 的 ~45%，“少而精”未兑现；连同 R3/R4/消融 A，“同分布层面挪数据”已连续 5 次否掉 → **数据 reshuffle 路线到头**。现役最强仍 round4/645k。
-- 资产：`checkpoints/round5/mortal.pth`(870k)+best(850k)+step_800/850k；`logs/ladder_r5/`；`logs/round5_chain.log`。
+- 资产：`checkpoints/round5/mortal.pth`(870k)+best(850k)+step_800/850k；`logs/ladder_r5/`；`mortal/logs/train/round5_chain.log`。
 
 ### 3.8 hp_ablation（2026-10-13~14）
 
 - 设计：三条分支从 `round4/645k` 暖启、`reset_optimizer`、top400_v2/B 配方，+111k→756k；只改一个旋钮：`cql_min1`（cql=1）、`cql_min10`（cql=10）、`aux_next0`（aux=0）；控制组 = B 本身（cql5/aux0.2）；新种子 140000/150000。
 - 结果：aux0 +0.59（CI[−0.42,+1.61]）、cql1 +0.05（CI[−0.97,+1.06]）、cql10 −0.07（CI[−1.09,+0.99]）→ 全部无结论；holdout 0.812–0.817，R² 全负；var_q/dqn_loss 随 cql 升高（0.29→0.44→0.51）但不转化为强度。
 - 插曲：GPU1 热降频至 607 MHz（同温 GPU0 1240 MHz），cql_min10 从 4.3→1.2 batch/s；kill 原链后原地续训到凉卡（cql_min10→GPU2 RTX，cql_min1→GPU4 P100），reset 令牌已消费不会二次触发。
-- 结论：**超参不是瓶颈**，排除“只是超参没扫对” → 直接支持目标形式改造。资产：`mortal/hp_ablation/<tag>/`、`logs/hp_resume_chain.log`、`prepare_hp_ablation.py`、`run_hp_ablation.sh`、`resume_and_judge_hp.sh`。
+- 结论：**超参不是瓶颈**，排除“只是超参没扫对” → 直接支持目标形式改造。资产：`mortal/hp_ablation/<tag>/`、`mortal/logs/ablation/hp_resume_chain.log`、`prepare_hp_ablation.py`、`run_hp_ablation.sh`、`resume_and_judge_hp.sh`。
 
 ### 3.9 IQL Stage A：跨局信用分配（2026-10-14）
 
@@ -447,7 +447,7 @@ v3 重建后玩家池 4,883→**5,356**，合格（≥400 局且 avg_pt≥2）47
 - 代码：`dataloader.py` 加 `credit_mode/gamma` 与后缀和；`train.py` 把 `credit_mode` 进 `_ENV_REWARD_KEYS` 守卫，game 模式不再乘 `γ^steps_to_done`；`holdout_metrics.py` 透传；`test_credit_modes.py` 五层 ALL PASS（闭式恒等 8.9e-16、GRP 终局 one-hot、telescope、kyoku 回归等价、γ=0.5 生效、守卫）。冒烟 7/7。
 - 执行：B/756k 暖启→867k，7.25h，4.52 batch/s（后缀和零 GPU 成本）；holdout top1 0.8118、R²−0.3734、var_q/var_t 0.92/2.42。
 - 判定：A 方向 −1.435（SE 0.847），B 方向 +0.621（SE 0.837）→ δ=−1.028，解析 t=−1.73；解析 CI[−2.20,+0.14] 跨 0；bootstrap SE 0.517、CI[−2.06,−0.02] 不跨 0，工具判“变弱”，但上界仅 −0.02 属**边际显著**。
-- 结论：不采纳；产物 `checkpoints/iql_a`(867k) 归档、不替代基线；代码不回滚（默认 kyoku 与历史逐位等价）。**“把整场回报回传给早期动作”的 MC/控制变量路线关闭**；瓶颈不在信用分配视界，而在没有价值传播/策略改进。资产：`mortal/iql_a/`、`logs/iql_a_chain.log`、`config.iql_a{,_smoke}.toml`、`run_iql_a{,_smoke}.sh`。
+- 结论：不采纳；产物 `checkpoints/iql_a`(867k) 归档、不替代基线；代码不回滚（默认 kyoku 与历史逐位等价）。**“把整场回报回传给早期动作”的 MC/控制变量路线关闭**；瓶颈不在信用分配视界，而在没有价值传播/策略改进。资产：`mortal/iql_a/`、`mortal/logs/iql/iql_a_chain.log`、`config.iql_a{,_smoke}.toml`、`run_iql_a{,_smoke}.sh`。
 
 ### 3.10 IQL Stage B：真 IQL（2026-10-15~16）
 
@@ -469,7 +469,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 
 **归因（基于实测的推断）**：① B 基线每局平均 16 个决策点、γ=0.997 → 局内折扣 0.997^16≈0.95，`kyoku_rewards` 本就近全权重回传，A/B 真正改的只有跨局视界；② 终局 pts 共同分量 std≈1.2 被 ~190 个决策分享，单决策因果效应 ~±0.1 → SNR≈1:10，跨局信号噪声太大；③ AWR 在近最优专家数据上权重≈均匀（top1 0.8167，与专家分歧只剩 ~18%，多为合理方差）；④ 与 R3/R4/R5/hp_ablation 的 null 一致：**瓶颈是数据分布的信息天花板，不在目标函数/优化维度**。
 
-**资产**：`checkpoints/iql_b_v3/`(867k+best+step_800/850k)；`iql_b_v3/{train,holdout_202609,ladder_summary}.log`；判定牌谱 `iql_b_v3/ladder/`；`logs/iql_b_v3_chain.log`；`config.iql_b_v3.toml`+`run_iql_b_v3.sh`；v2 产物 `checkpoints/iql_b_v2/`（漂移轮，不作基线）。
+**资产**：`checkpoints/iql_b_v3/`(867k+best+step_800/850k)；`iql_b_v3/{train,holdout_202609,ladder_summary}.log`；判定牌谱 `iql_b_v3/ladder/`；`mortal/logs/iql/iql_b_v3_chain.log`；`config.iql_b_v3.toml`+`run_iql_b_v3.sh`；v2 产物 `checkpoints/iql_b_v2/`（漂移轮，不作基线）。
 
 ### 3.11 S6 特征注入：S6a（紧迫度）与 S6c（自家速度）
 
@@ -1318,7 +1318,7 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 - **判定基线**：B/756k（`reward_ablation/B_rank_pt_aligned/mortal.pth`，top400_v2 + `[2,1,0,−3]` + aug）。
 - **绝对锚点已测**：anchor3 两臂共 2,388 局（S6c+λ=10 1,588 / S6c 无守卫 800）⇒ pooled **+0.00 ± 1.68**（§3.16）。
 - **读牌归档**：A2c best@153k（`tools/read_model/checkpoints/`），真实收敛 ≈2.060；不再注入主模型。
-- **自博弈产物（全部未采纳，保留复核）**：`selfplay_m5/`（含 `mortal_COLLAPSED_1140000.pth` 坍塌证据）、`selfplay_lr/`、`selfplay_4m{,_expl,_top5}/`、`selfplay_top5_bl/`、`selfplay_top5_blpool/`、`selfplay_blpool_e10/`、`selfplay_top5_blcql/`。
+- **自博弈产物（全部未采纳，保留复核）**：`selfplay_m5/`（含 `mortal_COLLAPSED_1140000.pth` 坍塌证据）、`selfplay_lr/`、`selfplay_4m{,_expl,_top5}/`、`selfplay_top5_bl/`、`selfplay_top5_blpool/`、`selfplay_blpool_e10/`、`selfplay_top5_blcql/`（各目录仅留 `mortal.pth` + 必要的 960k/970k/1100k 快照；见 §6.3b）。
 - **其它归档**：`tierA/1,140k`、`tierA2/1,340k`（档 A）、`strength_probe/1,056k`（数据质量加权）、`og/`（Oracle Guiding 1,056k）。
 - **判定牌谱**：保留在对应 `ladder/` 或 `logs/ladder_r*/`，可事后重算/bootstrap；路径台账见 §6.3。
 
@@ -1490,7 +1490,7 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 | `tools/training/prepare_iql_b_v3.py` | `--fix tau05` 一键生成 v3 配置（生成物已归档，工具保留） |
 | `tools/training/prepare_hp_ablation.py` / `run_hp_ablation.sh` / `resume_and_judge_hp.sh` | 超参消融/挪卡续训**（两个 run 脚本已归档 10-28）** |
 | `tools/read_model/` | **读牌模型全部工具**：v1/v2/v2s/v2x/A2b/**A2c(200k 结项 + 官方验收全通过)**/**A2d 20k 探针（RM12 v1 / RM14 aux，均 FAIL）**/A3 + 86 项回归 + ONNX 导出 + A3 规则法（`rule_baseline`/`a3_eval`/`compare_a3`/`calibrate_a3`）+ Bayes 上界（`bayes_bound`/`shanten_fast`）+ 注入探针（`inject_p0`/`precompute_danger`/`eval_s6b_arms`）+ 验收链 `run_a2c_acceptance.sh`（四任务并行）+ 诊断脚本 `diagnostics/`。逐条清单与用法见 `tools/read_model/docs/README.md` §15 与 `diagnostics/README.md` |
-| `s6a_isolated/`（`tools/expand_ckpt_v5.py`、`tools/test_urgency_features.py`、`run_s6a{,_smoke}.sh`、`patches/v5_obs_features.patch`） | S6a 隔离工作区：v4→v5 手术、回归、冒烟、正式链 |
+| `s6a_isolated/`（`s6a_isolated/tools/expand_ckpt_v5.py`、`s6a_isolated/tools/test_urgency_features.py`、`run_s6a{,_smoke}.sh`、`patches/v5_obs_features.patch`） | S6a 隔离工作区：v4→v5 手术、回归、冒烟、正式链 |
 
 ### 6.2 关键文件（Linux 路径）
 
@@ -1537,24 +1537,48 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 | `dataset/mjai/houou4_names/` | 2026 names 补丁树（130,407 文件） | 607.6 MiB |
 | `dataset/tenhou_hf/` | 18 个 HF 年度 tar | 17 GB |
 | `dataset/raw/`、`dataset/index/` | 2026 原始 mjlog；清单/榜单/manifest | 1.2 GB / 197 MB |
-| `mortal/checkpoints/` | R1–R5、reward_ablation A/B/C、hp_ablation×3、iql_a、iql_b_v2/v3、grp×3、baseline | ≈5 GB+ |
-| `mortal/checkpoints/{s6c,mix_v1,d2_2026}` | S6c 956k+best+init；D1 856k；D2 856k+best（各含 step 快照） | 1.6 GB / 874 MB / 874 MB |
+| `mortal/checkpoints/` | R1–R5、reward_ablation A/B/C、hp_ablation×3、iql_a、iql_b_v2/v3、grp×3、baseline；每目录只留 `mortal.pth` + `best.pth`（step 快照已于 2026-11-09 清理） | **12 GB / 96 个 .pth** |
+| `mortal/checkpoints/{s6c,mix_v1,d2_2026}` | S6c 956k+best+init；D1 856k；D2 856k+best（step 快照已清理） | 375 MB / 250 MB / 250 MB |
 | `mortal/checkpoints/inject_s6b/` | S6b 四臂 A0~A3（A1~A3 需 checkout `27632a2`）+ `B756k_v6_init.pth` | 见目录 |
 | `mortal/read_model_bayes/`、`mortal/read_model_v2s_a2b/`、`mortal/read_model_v2s_a2c/`、`mortal/logs/read_model/a2c_accept_20261021/`、`tools/read_model/diagnostics/results/` | 读牌全部产物（Bayes 上界 / A2b 对照 / **A2c 注入基线 best(153k)+last(200k)+train_log.jsonl+三份验收报告** / 验收日志与 A2b 回归 / 诊断 json） | 台账见 README §15.3；json 272 KB |
 | `mortal/read_model_v2s_a2d_probe20k/`、`mortal/read_model_v2s_a2d_nt_probe20k/`、`tools/read_model/diagnostics/results/rm12_*_20261021.json` | P1b 两版 20k 探针（RM12 v1 / RM14 aux）ckpt + train_log + order_metrics | 见 README §13.5~§13.7 |
 | `mortal/logs/ladder_r{2,3,4,5}/`、`mortal/{reward_ablation,hp_ablation,iql_a,iql_b_v2,iql_b_v3}/ladder*/` | 各轮判定牌谱（每轮约 20,000 局） | 每轮 ≈0.8 GB |
 | `mortal/logs/{s6c,mix_v1,d2_2026}/` | 各探针 SUMMARY、holdout、ladder 牌谱与 bootstrap 日志 | ≈0.83 GB 每个 |
 | `mortal/logs/guard_pipeline/` | 守卫剂量曲线各 λ 的双向牌谱/汇总 | 见目录 |
-| `mortal/checkpoints/{tierA,tierA2}/`、`mortal/logs/selfplay/` | 档 A 两轮 ckpt（tierA 1,140k；tierA2 1,356k+20k 快照）；自博弈数据 8 目录共 35,200 半庄（生成种子 700000~715100） | 1.5 GB / 2.7 GB / 1.5 GB |
+| `mortal/checkpoints/{tierA,tierA2}/`、`mortal/logs/selfplay/` | 档 A 两轮 ckpt（tierA 1,140k；tierA2 1,340k，**该 step 作为判定对象保留**）；自博弈数据 8 目录共 35,200 半庄（生成种子 700000~715100） | 250 MB / 375 MB / 1.5 GB |
 | `mortal/checkpoints/strength_probe/`、`mortal/indexes/strength_weights_v1.pth` | 数据质量加权探针 ckpt（1,056k + 20k 快照 + best）与权重表（492,810 文件；min avg_pt 分档 ×1/×2/×3，mean 1.350） | 874 MB / 50 MB |
 | `mortal/logs/anchor1/` | akochan 锚点 408 局日志（已完成） | 28 KB |
 | `mortal/logs/anchor_ako_*.log` | 早期锚点冒烟/排障日志（t9~t11、full） | 顶层历史，见 §5.3 例外 |
 | `s6a_isolated/code/{checkpoints/s6a,s6a,logs,runs}` | S6a 隔离产物（867k+best+step_800/850k、判定牌谱、TB、链日志） | ≈1 GB |
 | `mortal/logs/tb_archive/` | TB 坏段取证 | 72 KB |
 | `mortal/indexes/` | 各轮文件索引（`main_r2_whitelist_v1.pth` 等） | 248 MB |
-| `backups/ckpt_round1/`、`backups/code_docs_20261009.tar.gz`、`backups/libriichi_20261025/` | R1 ckpt 副本 8 个；代码/文档备份；akochan 改动前源码+.so | 592 MB / 32 MB / 24 MB |
+| `backups/cleanup_20261028/`、`backups/libriichi_20261025/` | 10-28 归档删除清单 + tar；akochan 改动前源码+.so | 52 KB / 24 MB |
 | `tools/akochan_src/` | akochan 源码与 `system.exe`（`NPROCS=2` 构建） | 124 MB |
-| `Mortal_valuable_with_ckpts_20261013.zip` | 全量打包（697 entries，含 README） | 6.83 GiB |
+### 6.3b 空间管理：2026-11-09 清理（释放 21.4 GB）
+
+按「保守档」执行（用户选：前代权重全留、判定牌谱全留）：
+
+| 已删 | 量 | 理由 |
+|---|---:|---|
+| `mortal/checkpoints/**/mortal_step_*.pth` 中的 **141 个** | 15.85 GB | 训练中间态；每目录的 `mortal.pth` 经 mtime 校验均为最新 save 点 |
+| `mortal/danger_cache/` | 5.17 GB | A2c 后验 .npz 缓存，`tools/read_model/precompute_danger.py` 可重算（无代码引用此目录） |
+| `mortal/runs/style/` | 0.39 GB | 风格实验的 TB/牌谱；配置里只是 `tensorboard_dir`（输出目录，会自建） |
+| `__pycache__` × 4 | — | 可重建 |
+
+**保留的 5 个 step（全部被文档/配置引用，删前逐个核对）**：
+
+| 路径 | 引用方 |
+|---|---|
+| `checkpoints/mortal_step_000200000.pth` | **168 处配置**的 `[baseline].state_file`（早期 baseline 权重） |
+| `checkpoints/tierA2/mortal_step_001340000.pth` | `DESIGN_tierA_selfplay` 的「判定对象」 |
+| `checkpoints/selfplay_4m/mortal_step_000960000.pth` | MEMORY §3.21b（同步数对比） |
+| `checkpoints/selfplay_4m/mortal_step_000970000.pth` | MEMORY §3.21（最终态副本） |
+| `checkpoints/selfplay_m5/mortal_step_001100000.pth` | MEMORY §3.20（跨 test 点证据） |
+
+**引用完整性**：删前对全仓 `*.py/*.sh/*.toml/*.md` 做了 `checkpoints/` 路径扫描——代码与配置只引用 `mortal.pth` / `best.pth` / `mortal_step_000200000.pth`，**无一处引用被删的 step**；文档引用的 5 个 step 与保留清单完全重合。故本次删除**未产生任何悬空引用**。
+
+**仍可回收但按用户选择保留的**（下次要腾空间优先看这里）：
+`mortal/logs/s6c77k` 13 GB、`mortal/logs/guard_s6c` 11 GB、`logs/arm_tierA{,2}` 26 GB、`mortal/runs/guard_*` 22 GB、`mortal/runs/guard_fix` 11 GB、`s6a_isolated` 1.9 GB、`MortalSimulator_20261023.zip` 652 MB、`dist/` 400 MB。这些都是**可重跑重生成**的牌谱/包（seed 与 ckpt 均在），不影响已入库的 δ/CI 结论。
 
 ### 6.4 外部链接
 

@@ -100,7 +100,7 @@ w_score = clip( (∂E[rank-pt]/∂score) / (∂E[rank-pt]/∂score)|_even , 0.7,
 | `mortal/mortal.py` / `ladder.py` | CLI/env 开关：`--guard-mode statewise`、`--guard-lambda0`、`--guard-w-*` |
 | `tools/read_model/eval_defense_guard.py` | 扩展为可传 `--guard-mode/--v-riichi/--v-open/--w-*`，同一 20k 集输出 frontier（change / deal_top1 / risk / `p_win` / `ev_norm`） |
 | `mortal/ladder_arm.sh` | 已支持 `--guard-lambda`；新增 `--guard-mode` 与 `--guard-extra` 透传 |
-| 新回归 | `tools/test_guard_statewise.py`：`w_state` 恒等（全 0 立直、中巡、无点差 ⇒ 1.0）、单调性（立直家数↑ ⇒ w↑）、clamp、`mode='fixed'` 与原实现逐位一致 |
+| 新回归 | `tools/test_guard_state.py`：`w_state` 恒等（全 0 立直、中巡、无点差 ⇒ 1.0）、单调性（立直家数↑ ⇒ w↑）、clamp、`mode='fixed'` 与原实现逐位一致 |
 
 **obs 依赖**（一次性探针确认，做法同 S6c）：
 - 立直标记：`OFF_RIICHI=7`（现守卫已在用，`river` 块里）；

@@ -595,6 +595,16 @@ def train():
             f'online 已达停止点：steps={steps_now}、rounds={round_count}、'
             f'target={online_target_steps or "-"}、max_steps={online_max_steps or "-"}'
         )
+        # 2026-11-08：停机点不落在 save_every 上时会**静默丢弃**最后一段训练
+        # （实测 4M-expl：target=966,000、save 点只有 960,000 ⇒ 8,339 步没落盘，
+        #  事后只剩 960k 的 ckpt）。这里给明确告警 + 下次怎么设。
+        if save_every > 0 and steps_now % save_every != 0:
+            logging.warning(
+                f'⚠️ 停机点 {steps_now:,} 不是 save_every({save_every:,}) 的倍数：'
+                f'最后 {steps_now % save_every:,} 步未保存到 state_file；'
+                f'可用的是最近一次 save 点 {steps_now - steps_now % save_every:,}。'
+                f'下次把 control.online_target_steps 设成 {save_every:,} 的倍数可避免。'
+            )
         try:
             flag = path.splitext(config['control']['state_file'])[0] + '.DONE'
             path.dirname(flag) and os.makedirs(path.dirname(flag), exist_ok=True)

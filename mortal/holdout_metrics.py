@@ -185,4 +185,7 @@ def main():
         evaluate(ckpt.split('/')[-1], ckpt, batches, bs)
 
 
-main()
+if __name__ == '__main__':
+    # 2026-11-09：原来裸调 main()，任何 `import holdout_metrics` 都会把 argv
+    # 当成 ckpt 列表去跑（诊断脚本无法 import collect/evaluate）。
+    main()

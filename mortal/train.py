@@ -211,6 +211,13 @@ def train():
     #   用于解救 top-5 探索造成的“Q 方差坍缩 + argmax 不稳”（MEMORY §3.21c）。
     #   0 = 关闭（旧行为）。只在 objective=cql_mc 下生效。
     baseline_v_weight = float(config['control'].get('baseline_v_weight', 0.0))
+    # online 时是否也启用 CQL（2026-11-09）：
+    #   原代码是 `if not online: cql_loss = ...` ⇒ 自博弈全程无 CQL。
+    #   而 CQL 的 `logsumexp(Q) − Q(s,a_data)` 正好在做“抬高被采样动作、压低其余”
+    #   ⇒ 它是维持 Q 区分度（top1−top2 的 gap）的唯一现成机制。
+    #   诊断（MEMORY §3.21e）显示自博弈训练把 gap 从 2.24 压到 1.05，
+    #   信噪比 2.59→1.56，这是 top1 下降的直接原因。
+    cql_online = bool(config['control'].get('cql_online', False))
     next_rank_weight = config['aux']['next_rank_weight']
     # 训练目标族（2026-10-15，IQL Stage B）：'cql_mc' = 现状（MC/CQL 回归，默认，与 env.credit_mode
     # 搭配）；'iql' = 真 IQL（next_obs bootstrap + expectile V + AWR 政策提取，CQL 关闭）。
@@ -957,7 +964,7 @@ def train():
                         v_loss = 0.5 * mse(v, q_target_mc)
                     dqn_loss = 0.5 * mse(q, q_target_reg)
                     cql_loss = 0
-                    if not online:
+                    if (not online) or cql_online:
                         cql_loss = q_out.logsumexp(-1).mean() - q.mean()
 
                     next_rank_logits, = aux_net(phi)
@@ -988,7 +995,7 @@ def train():
                     stats['dqn_loss'] += dqn_loss
                     if v_net is not None:
                         stats['v_loss'] += v_loss
-                    if not online:
+                    if (not online) or cql_online:
                         stats['cql_loss'] += cql_loss
                 stats['next_rank_loss'] += next_rank_loss
                 all_q[idx] = q
@@ -1100,6 +1107,13 @@ def train():
                     )
                     writer.flush()
                     raise SystemExit(1)
+
+                # 2026-11-09：stats 原来只写 tensorboard，日志里看不到 loss 量级，
+                # 导致调 CQL/baseline 权重时只能“跑完才知道”。存盘点打一行。
+                _shown = ('dqn_loss', 'cql_loss', 'v_loss', 'next_rank_loss')
+                logging.info('loss: ' + ' '.join(
+                    f'{k}={float(stats[k]) / max(save_every, 1):.4f}'
+                    for k in _shown if k in stats))
 
                 for k in stats:
                     stats[k] = 0

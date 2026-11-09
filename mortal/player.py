@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import os
+import random
 import shutil
 import secrets
 import logging
@@ -99,10 +100,17 @@ class TrainPlayer:
         self.champ_boltzmann_epsilon = float(cfg.get('champ_boltzmann_epsilon', 0.0))
         self.champ_boltzmann_temp = float(cfg.get('champ_boltzmann_temp', 1.0))
         self.champ_top_p = float(cfg.get('champ_top_p', 1.0))
+        # 代际对手池（2026-11-09）：champion='pool' 时每轮从这些 ckpt 里抽一个当对手。
+        # 动机：4M 的 4 席同权重是严格零和（期望 reward = 0），数据分布无新信息；
+        # 跨代对手能提供真实的策略差异，是唯一“改变数据分布”而不只是改损失的手段。
+        self.champion_pool = list(cfg.get('champion_pool', []))
         logging.info(f'[train_play] champion = {self.champion_mode}')
-        assert self.champion_mode in ('baseline', 'self'), self.champion_mode
+        assert self.champion_mode in ('baseline', 'self', 'pool'), self.champion_mode
+        if self.champion_mode == 'pool':
+            assert self.champion_pool, 'champion=pool 需要 [train_play].champion_pool 列表'
 
         self.baseline_engine = None
+        self.pool_engines = []
         if self.champion_mode == 'baseline':
             baseline_cfg = config['baseline']['train']
             device = torch.device(baseline_cfg['device'])
@@ -134,6 +142,31 @@ class TrainPlayer:
                 extra_features = base_extra_features,
                 name = 'baseline',
             )
+        elif self.champion_mode == 'pool':
+            # 预加载池里的所有对手（各自一份 Brain/DQN，共享不了权重）
+            dev = torch.device(config['baseline']['train']['device'])
+            for p in self.champion_pool:
+                st = torch.load(p, weights_only=True, map_location=torch.device('cpu'))
+                c = st['config']
+                ver = c['control'].get('version', 1)
+                ef, ex = s6c_features.resolve(c['control'])
+                b = Brain(version=ver, conv_channels=c['resnet']['conv_channels'],
+                          num_blocks=c['resnet']['num_blocks'], extra_channels=ex).eval()
+                d = DQN(version=ver).eval()
+                b.load_state_dict(st['mortal'])
+                d.load_state_dict(st['current_dqn'])
+                self.pool_engines.append(MortalEngine(
+                    b, d,
+                    is_oracle = bool(getattr(b, 'is_oracle', False)),
+                    version = ver,
+                    device = dev,
+                    enable_amp = True,
+                    enable_rule_based_agari_guard = True,
+                    extra_features = ef,
+                    name = 'baseline',
+                ))
+                logging.info(f'[train_play] 对手池 += {p} (v{ver}, ef={ef!r})')
+            logging.info(f'[train_play] 对手池共 {len(self.pool_engines)} 个模型')
         else:
             logging.info('[train_play] 纯四 Mortal：跳过 baseline 加载，champion 复用当前策略')
 
@@ -197,6 +230,9 @@ class TrainPlayer:
             )
         else:
             engine_champ = self.baseline_engine
+
+        if self.champion_mode == 'pool':
+            engine_champ = random.choice(self.pool_engines)
 
         if path.isdir(self.log_dir):
             shutil.rmtree(self.log_dir)

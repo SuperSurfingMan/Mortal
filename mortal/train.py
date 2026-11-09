@@ -205,6 +205,12 @@ def train():
     submit_every = config['control']['submit_every']
     test_games = config['test_play']['games']
     min_q_weight = config['cql']['min_q_weight']
+    # baseline V(s) 降方差（2026-11-09，自博弈线）：
+    #   Q 目标改为**优势** A(s,a) = q_target − V(s)，V 用同一套 MC 回报回归。
+    #   V 与 a 无关 ⇒ argmax 不变、策略语义不变；但减去状态均值后梯度方差大降，
+    #   用于解救 top-5 探索造成的“Q 方差坍缩 + argmax 不稳”（MEMORY §3.21c）。
+    #   0 = 关闭（旧行为）。只在 objective=cql_mc 下生效。
+    baseline_v_weight = float(config['control'].get('baseline_v_weight', 0.0))
     next_rank_weight = config['aux']['next_rank_weight']
     # 训练目标族（2026-10-15，IQL Stage B）：'cql_mc' = 现状（MC/CQL 回归，默认，与 env.credit_mode
     # 搭配）；'iql' = 真 IQL（next_obs bootstrap + expectile V + AWR 政策提取，CQL 关闭）。
@@ -311,7 +317,8 @@ def train():
     mortal = Brain(version=version, extra_channels=extra_channels, **config['resnet']).to(device)
     dqn = DQN(version=version).to(device)
     aux_net = AuxNet((4,)).to(device)
-    if objective == 'iql':
+    # IQL 与 cql_mc+baseline 都需要 VHead；后者的 V 只用作 Q 的 baseline（不参与 argmax）
+    if objective == 'iql' or baseline_v_weight > 0:
         v_net = VHead().to(device)
         all_models = (mortal, dqn, aux_net, v_net)
     else:
@@ -348,6 +355,9 @@ def train():
     logging.info(f'aux params: {parameter_count(aux_net):,}')
     if objective == 'iql':
         logging.info(f'v_net params: {parameter_count(v_net):,}')
+    elif v_net is not None:
+        logging.info(f'v_net params: {parameter_count(v_net):,} '
+                     f'(baseline 降方差，weight={baseline_v_weight})')
 
     mortal.freeze_bn(config['freeze_bn']['mortal'])
 
@@ -528,6 +538,14 @@ def train():
                 'iql: 父代 ckpt 缺 v_net/EMA target 键 → VHead 随机初始化、EMA=online 复制'
                 '（首次从 cql_mc 暖启时属预期，恰好 1 条）'
             )
+    elif v_net is not None:
+        # cql_mc + baseline：V 只用于降方差，缺失时从零学（不影响 Q 的 argmax 语义）
+        saved = loaded_state if isinstance(loaded_state, dict) else {}
+        if 'v_net' in saved:
+            v_net.load_state_dict(saved['v_net'])
+            logging.info('baseline: 已从 checkpoint 恢复 v_net')
+        else:
+            logging.info('baseline: 父代 ckpt 无 v_net → VHead 从零初始化')
 
     if not online and max_train_steps > 0 and steps >= max_train_steps:
         logging.info('training budget already reached')
@@ -574,6 +592,7 @@ def train():
         stats = {
             'dqn_loss': 0,
             'cql_loss': 0,
+            'v_loss': 0,
             'next_rank_loss': 0,
         }
     all_q = torch.zeros((save_every, batch_size), device=device, dtype=torch.float32)
@@ -926,7 +945,17 @@ def train():
                                  else invisible_obs * og_alpha)
                     q_out = dqn(phi, masks)
                     q = q_out[range(batch_size), actions]
-                    dqn_loss = 0.5 * mse(q, q_target_mc)
+                    v_loss = 0
+                    q_target_reg = q_target_mc
+                    if v_net is not None:
+                        # baseline 降方差：Q 回归 **优势** A(s,a) = r − V(s)。
+                        # v.detach() 很关键：V 只能从自己的 v_loss 学，不能通过 Q 的
+                        # 均方误差走捷径（否则 V 会学成"让 Q 误差最小"而非 E[r|s]）。
+                        # 因 V 与 a 无关，argmax_a A(s,a) ≡ argmax_a Q(s,a)。
+                        v = v_net(phi).squeeze(-1)
+                        q_target_reg = q_target_mc - v.detach()
+                        v_loss = 0.5 * mse(v, q_target_mc)
+                    dqn_loss = 0.5 * mse(q, q_target_reg)
                     cql_loss = 0
                     if not online:
                         cql_loss = q_out.logsumexp(-1).mean() - q.mean()
@@ -938,6 +967,7 @@ def train():
                         dqn_loss,
                         cql_loss * min_q_weight,
                         next_rank_loss * next_rank_weight,
+                        v_loss * baseline_v_weight,
                     ))
 
             scaler.scale(loss / opt_step_every).backward()
@@ -956,11 +986,13 @@ def train():
                     stats['agreement_batch'] += (q_out.argmax(dim=-1) == actions).float().mean()
                 else:
                     stats['dqn_loss'] += dqn_loss
+                    if v_net is not None:
+                        stats['v_loss'] += v_loss
                     if not online:
                         stats['cql_loss'] += cql_loss
                 stats['next_rank_loss'] += next_rank_loss
                 all_q[idx] = q
-                all_q_target[idx] = q_target_mc
+                all_q_target[idx] = q_target_reg if v_net is not None else q_target_mc
 
             steps += 1
             idx += 1
@@ -1080,8 +1112,9 @@ def train():
                     'mortal': mortal.state_dict(),
                     'current_dqn': dqn.state_dict(),
                     'aux_net': aux_net.state_dict(),
+                    # v_net 在 iql 与 cql_mc+baseline 两种模式下都存在；后者只用于降方差
+                    **({'v_net': v_net.state_dict()} if v_net is not None else {}),
                     **({
-                        'v_net': v_net.state_dict(),
                         'ema_mortal': ema_mortal.state_dict(),
                         'ema_dqn': ema_dqn.state_dict(),
                         **({'v_ema': v_ema.state_dict()} if v_ema is not None else {}),

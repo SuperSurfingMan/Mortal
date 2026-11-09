@@ -6,10 +6,12 @@
 #        [--blocks 16] [--sets 500] [--seed-a 400000] [--seed-b 420000] \
 #        [--guard-lambda 0] [--guard-risk-mode fixed|legacy] [--gpus 0,1,2,4] [--tag name]
 #
-# 约定（与 §4.2 判定纪律一致）：
-#   * 1 块 = 1 个种子 × 500 sets = 500 半庄；A 向 = 挑战者当庄家位，B 向 = 轮换，
-#     δ = (A_avg_pt − B_avg_pt)/2；**双向同号且 bootstrap CI 下界 > 0 才算赢**。
-#   * 默认 16 块/向（16000 sets = 64000 半庄）→ 解析 SE ≈ 0.30、可分辨 δ ≈ 0.6。
+# 约定（与 MEMORY §2.4 评测纪律一致）：
+#   * 1 块 = 1 个种子 × 500 sets；**1 set = 4 局**（四个席位各坐一次）⇒ 500 sets = 2000 半庄。
+#     A 向 = 挑战者当庄家位，B 向 = 轮换；δ = (A_avg_pt − B_avg_pt)/2；
+#     **双向同号且 bootstrap CI 下界 > 0 才算赢**。
+#   * 默认 16 块×500 = **8000 sets/向**（双向 16000 sets = 64000 半庄）
+#     ⇒ 解析 SE≈**0.33**、可分辨 δ≈**0.66**（标定：5000 sets 双向 = 2500/向，SE 0.594）。
 #     预算不足时脚本会打印「该预算能分辨的最小 δ」，避免拿 5000 sets 判 +0.3。
 #   * 种子块一旦用过即消费；新实验必须换 SEED_A/SEED_B（台账见 MEMORY §4.2 备注）。
 set -u -o pipefail
@@ -50,17 +52,17 @@ IFS=',' read -r -a GPUS <<< "$GPUS_CSV"
 NGPU=${#GPUS[@]}
 mkdir -p "$OUT"
 
-# 预算 → 分辨率（用 5000 sets 的 SE≈0.59 做标定：SE ∝ 1/√N）
+# 预算 → 分辨率（标定：5000 sets 双向 = 2500 sets/向时 SE≈0.594；SE ∝ 1/√N）
 "$PY" - "$BLOCKS" "$SETS" <<'EOF'
 import sys, math
 blocks, sets = int(sys.argv[1]), int(sys.argv[2])
-n = blocks * sets
-se = 0.594 * math.sqrt(5000 / n)          # 解析 SE（经验标定）
+n = blocks * sets                         # 每向 sets（1 set = 4 局）
+se = 0.594 * math.sqrt(2500 / n)          # 解析 SE（经验标定，按每向）
 min_d = 2 * se                             # 2σ 可分辨的最小 |δ|
-print(f'[arm] {blocks} 块×{sets} sets = {n} sets / {2*n} 半庄/向 '
-      f'→ 解析 SE≈{se:.2f}，可分辨 |δ|≈{min_d:.2f} pt')
-if n < 16000:
-    print(f'[arm] ⚠️ 低于 16000 sets/向：只能看见 |δ|≥{min_d:.2f}，'
+print(f'[arm] {blocks} 块×{sets} sets = {n} sets / {4*n} 半庄/向 '
+      f'（双向 {2*n} sets / {8*n} 半庄）→ 解析 SE≈{se:.2f}，可分辨 |δ|≈{min_d:.2f} pt')
+if n < 8000:
+    print(f'[arm] ⚠️ 低于 8000 sets/向（双向 16000）：只能看见 |δ|≥{min_d:.2f}，'
           f'小于该值的效应请勿下结论')
 EOF
 

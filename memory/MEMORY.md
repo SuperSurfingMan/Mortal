@@ -1,8 +1,8 @@
 # Mortal 项目上下文记忆文档
 
 > **用途**：沉淀项目历史、关键结论、可复现配置与坑位，供新会话快速接手。
-> **本版**：2026-11-02 数据质量加权探针结案（第五版）。相较 11-01 第四版：新增 §3.19（局内 4 人强度加权 100k 探针：top1 −0.26pp 在带内、dqn_loss +5.6% 超门禁 ⇒ 不烧 76k 臂，关闭该轴）；§3.1 总表补一行；§0.1/§0.2、§4.1/§4.2/§4.3、§6.3 同步（数据侧机制全部关闭，下一步 anchor3 + M5 smoke）。
-> **上一版全文**：`git show 9ff2453:memory/MEMORY.md`（2026-11-02 编辑前）。
+> **本版**：**2026-11-09 第六版（全量梳理）**。相较 11-02 第五版：新增 **§3.19b**（Oracle Guiding 100k 探针，GATE FAIL）与 **§3.20/§3.21**（在线自博弈 M5 + 真自博弈 4M + 七个变体，全部 = 起点）；§3.12 补读牌线收口（续训/校准/P0-a）；§3.13 守卫 +0.78 **正式撤回**；§3.16 补 anchor3（2,388 局，**+0.00±1.68**）与行为画像口径修正；§5.2 新增坑 **74~81**；§6 工具/配置/代码台账同步。**§0/§4 已全面重写**（旧版仍写「守卫 λ=10 已采纳」「现役最强 = S6c+守卫」，与 §3.13 矛盾）。
+> **上一版全文**：`git show 8478e9a:memory/MEMORY.md`（2026-11-09 整理前）。
 > **可靠性标注**：✅ 已实测/已读源码　🔶 官方文档或作者声明　⬜ 未验证
 
 **目录**：0 快速接手 · 1 项目与系统 · 2 数据与评测 · 3 训练与实验史 · 4 现状与下一步 · 5 工程规范与坑位 · 6 工具/文件/产物 · 7 附录
@@ -17,20 +17,23 @@
 |---|---|
 | 项目 | Mortal（凡夫），开源日本麻将 AI；Rust 规则引擎 + Python/PyTorch 训练 |
 | 代码/运行目录 | `/mnt/data8/mortal/Mortal`；训练必须在 `mortal/` 下执行（§1.7） |
-| 现役最强 | **S6c/956k + 守卫 λ=10**（2026-10-28 换代；v4 obs + 2 行速度特征，obs 1014）；历史称法 round4/645k 已退役 |
+| 现役最强 | **S6c/956k**（2026-10-28 换代；v4 obs + 2 行速度特征，obs 1014）——**守卫 λ=0**（2026-11-03 口径修正后默认关闭，§3.13）；历史称法 round4/645k 已退役 |
 | 判定基线 | B/756k：`reward_ablation/B_rank_pt_aligned/mortal.pth`（top400_v2 + `pts=[2,1,0,-3]` + augmentation） |
-| 已采纳增益 | ① R2 数据选择 **+2.86±0.59**（§3.3）；② 推理期守卫 G3 **λ=10，+0.78**（§3.13；S6c 上复验 +0.348、8/8 正号）；③ S6c 换代 **+0.422**（77k sets 臂，§4.2）。其余方向全部关闭（§4.1）；档 A 自博弈 2026-11-01 结案（§3.18）、数据质量加权 2026-11-02 结案（§3.19） |
-| 当前主线 | 数据侧机制全部关闭（含 11-02 数据质量加权探针，§3.19）；下一步 = anchor3 绝对强度（P0）+ M5 在线自博弈 smoke（P1）；推理期线已封顶（§3.17） |
-| 在跑任务 | **无**。数据质量加权探针 11-02 10:36 UTC 完成（100k 步，门禁未过，§3.19）；GPU 全部空闲 |
+| 已采纳增益 | **只有两个**：① R2 数据选择 **+2.86±0.59**（§3.3）；② S6c 换代 **+0.422**（77k sets 臂，CI[+0.15,+0.69]，§3.11）。⚠️ 守卫 G3 的 +0.78 **已撤回**（risk 双乘 P(听) 旧口径，修正后四臂 NO-CONCLUSION，§3.13） |
+| 绝对强度 | **+0.00 ± 1.68**（anchor3，2,388 局 vs 3×akochan，CI[−3.3,+3.3]）⇒ **≈ 凤凰场常客平均**（常客基准 +0.08，p95 +5.38）；距「强」还有 **+5.4 pt**（§3.16） |
+| 当前主线 | **没有在跑的主线**。训练侧（§3.4~§3.19）、推理期（§3.14/§3.17）、自博弈（§3.18/§3.20/§3.21）全部结案；读牌线已收口归档（§3.12）。剩余候选见 §4.2，唯一未探的只有「玩家风格」与「手切信息显式化」 |
+| 在跑任务 | **无**。最后一次训练 = 4M-top5-blcql（2026-11-09，**956k→960k**，§3.21f）；5 张卡全部空闲（选卡规则 §1.7） |
 | 数据 | 全树 2,630,640 局（200902~202610，16 GB）；训练窗 813,145 局；holdout = 202609+（§2.5） |
 | 硬件 | Ubuntu 18.04 容器，56 线程，251 GB 内存，4×P100-16GB + 1×RTX 8000-48GB |
 
-### 0.2 三句话结论
+### 0.2 结论（六条）
 
-- **三个已采纳的增益**：R2「top400 + GRP h128」（§3.3）、推理期守卫 G3 λ=10（§3.13）、S6c 表示/换代（+0.422，§3.11/§4.2）；其余数据 reshuffle、奖励改造、超参、IQL、S6a/S6b、读牌注入、数据扩窗、**档 A 自博弈（两轮全零效应，§3.18）**、**数据质量加权（100k 探针 dqn_loss +5.6%，§3.19）** 均为 null 或负——数据侧机制至此全部关闭。
+- **只采纳过两个增益**：R2「top400 + GRP h128」（**+2.86±0.59**，§3.3）与 S6c 换代（**+0.422**，CI[+0.15,+0.69]，§3.11）。其余数据 reshuffle、奖励改造、超参、IQL、S6a/S6b、读牌注入、数据扩窗、数据质量加权、守卫 G3、EV 重排、Guard-P2 **全部 null 或负**（§4.1）。
+- **「我们多强」已有答案**：anchor3 打完 **2,388 局**（vs 3×akochan），**avg_pt +0.00 ± 1.68**，CI[−3.3,+3.3] ⇒ **≈ 凤凰场常客平均**（+0.08），距 p95（+5.38）还差 **5.4 pt**（§3.16）。
+- **「模型太保守」被证伪**：按 `stat.rs` 同一定义实测人类凤凰场（126,288 人·局）——和了 21.14% / 放铳 12.65% / **副露局占比 32.63%** / 立直 18.25% / 流局 16.00%；S6c 四项均在 **±1.6pp** 内。旧的「人类副露 48.26%」是错误口径（§2.5、`BEHAVIOR_PROFILE_20261107.md`）。
+- **自博弈线彻底关闭**：在线七变体（M5 / 4M / 4M-expl / 4M-top5 / A / B2 / C）+ 档 A 离线两轮，强度**全部等于起点**；机制已查清——真实动作差异 < 单次回报噪声 SD≈0.59（§3.18/§3.20/§3.21e）。
 - **读牌侧已冻结**：A2c 作为归档资产保留，不再注入主模型；S6b 四臂证明「同源信息注入」无行为效应，代码已回退（§3.12）。
-- **测量基建（已落地）**：5000 sets 的 CI ±0.6~1.0 看不见 +0.3 的改进，且「我们到底多强」一直没有答案 → ladder 已扩到 16000 sets 标准臂，akochan 绝对锚点 408 局已完成（§3.16）。
-- **纪律**：单变量；全新种子块；双向同牌山；block bootstrap CI 下界 >0 才算赢（§2.4、§5.1）。
+- **纪律**：单变量；全新种子块；双向同牌山；block bootstrap CI 下界 >0 才算赢（§2.4、§5.1）；**holdout 对比必须同 seed 同 batch**、**单组 2000 局对打（SE 2.0）的 ±4 全是噪声**（§3.21b/c）。
 
 ### 0.3 三条命令
 
@@ -53,7 +56,10 @@ python3 ladder.py <challenger> <champion> <seed> 500 <log_dir>   # 单卡判定
 | 守卫 G3 / EV 重排 / 数据扩窗 / 测量基建 | §3.13–§3.16 |
 | 档 A 自博弈两轮终局（为何关闭） | §3.18 |
 | 数据质量加权探针（为何关闭） | §3.19 |
-| 现在该做什么、哪些路线已死 | §4 |
+| **在线自博弈管线**（server/client/trainer 怎么起、修过哪些坑） | §3.20 |
+| **自博弈七变体 + Q 排序诊断**（gap/RMSE/信噪比、为何强度不变） | §3.21、`mortal/diag_q_rank.py` |
+| 行为画像口径（人类 vs Mortal，唯一真源 `stat.rs`） | §2.5、`memory/BEHAVIOR_PROFILE_20261107.md`、`tools/behavior_profile.py` |
+| 现在该做什么、哪些路线已死 | §4（§4.1 状态表 / §4.2 剩余候选） |
 | 踩过的坑、日志规范 | §5 |
 | 工具、文件、产物在哪 | §6 |
 | 种子块台账（下一块用什么） | §2.4 |
@@ -486,7 +492,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 读牌模型的实验记录、判决依据、复核修正、改进路线（RM1~RM16）、坑位与产物台账自 2026-10-19 起统一维护在 **`tools/read_model/docs/README.md`**；诊断脚本与原始数字在 `tools/read_model/diagnostics/`。旧章节号（§3.12/§3.14/§3.15.x）对照见该 README **§16**。这里只留四件事：
 
 1. **基线是 A2c**（v2s + RM4/RM5，best@153k）：官方 20000 固定集（seed 20261016）全项通过——tenpai AUC **0.9698**（≥0.9685）、标定 **1.0364**（∈[0.95,1.05]）、cond_ce **2.7532**（≤2.896）、hit@1 **0.1993**（≥0.16）、立直 **0.1724**（≥0.135）、val_score **2.0524**（< A2b 2.0924）。A2c 取代 A2b 成为注入基线，特征口径冻结；A2b 归档作对照。对 A3 规则法：alloc/cond_ce/tenpai_AUC/hit@1 全面显著胜，立直 hit@1 **0.1724 vs 0.1121**，nlt 由 rule 胜转为打平。**A2c 模型本身从未注入 `mortal/`**（S6b 只注入其 2 行后验且已回退），强度只认「注入 + ladder」在线验收，离线指标仅诊断。
-2. **两条旧判决被推翻**（零训练成本）：① 「P(听牌) 过标定 6.3×」实为读错输出——BCE 标定的是 logit 而项目读 softmax，换 `1−sigmoid(wait_logits[34])` 后标定比值 **0.998**、AUC **0.9461→0.9685**（显著胜 A3 规则法 0.9468）；② wait_ce 的「+0.758 nats 优势」**71% 是听牌因子伪影**，真实待牌条件分布优势仅 **+0.217** ⇒「读侧已近天花板」证据不足；实测空间在输出层参数化、H2 缺逐牌列特征（冻结骨干探针 hit@1 相对 +35%）与训练规模（只用了全量数据的 **4.05%**）。P0 零成本项落地后回归 **52 项 ALL PASS**；口径纪律：报 `wait_ce_active` 必须同时给 `−logP(t)` 与 `cond_ce`（README §11.2）。⚠️ **2026-11-04 更正**：上述三项里“训练规模”已探完且为负结论——从 best@153k 续训四组配置（init 1.2e-4 跑 86k 步 / init 8e-5 / init 4e-5 / resume 4e-5）**全部退化 +0.008~+0.018**，resume（保 optimizer 动量）不改变结论 ⇒ **A2c 的 2.0524 是 cosine 末端噪声低谷，真实收敛水平 ≈2.060**；“val 单调降”是 LR 退火效应而非数据不足。立直层温度校准也仅能回收 ≈16%（0.011/0.065 nats，见 `local_shape/README.md` §5f）。**加训练/加校准两条线均关闭**，详见 `tools/read_model/docs/README.md` 文首两段。
+2. **两条旧判决被推翻**（零训练成本）：① 「P(听牌) 过标定 6.3×」实为读错输出——BCE 标定的是 logit 而项目读 softmax，换 `1−sigmoid(wait_logits[34])` 后标定比值 **0.998**、AUC **0.9461→0.9685**（显著胜 A3 规则法 0.9468）；② wait_ce 的「+0.758 nats 优势」**71% 是听牌因子伪影**，真实待牌条件分布优势仅 **+0.217** ⇒「读侧已近天花板」证据不足；实测空间在输出层参数化、H2 缺逐牌列特征（冻结骨干探针 hit@1 相对 +35%）与训练规模（只用了全量数据的 **4.05%**）。P0 零成本项落地后回归 **52 项 ALL PASS**；口径纪律：报 `wait_ce_active` 必须同时给 `−logP(t)` 与 `cond_ce`（README §11.2）。⚠️ **2026-11-04 更正**：上述三项里“训练规模”已探完且为负结论——从 best@153k 续训四组配置（init 1.2e-4 跑 86k 步 / init 8e-5 / init 4e-5 / resume 4e-5）**全部退化 +0.008~+0.018**，resume（保 optimizer 动量）不改变结论 ⇒ **A2c 的 2.0524 是 cosine 末端噪声低谷，真实收敛水平 ≈2.060**；“val 单调降”是 LR 退火效应而非数据不足。立直层温度校准也仅能回收 ≈16%（0.011/0.065 nats，见 `local_shape/README.md` §5f）。**加训练/加校准两条线均关闭**，详见 `tools/read_model/docs/README.md` 文首两段。③ **2026-11-04 P0-a（cond 口径重算 bayes_ceiling 三层 tier）**：strict tier 信息 only **+0.023 nats**（all/active_any）、**+0.129**（clean_t8/active_any）⇒ 任务信号确实稀薄；但在 8 个「tier 优于 prior」的 cell 上 **A2c 低 0.135~0.209 nats** ⇒ **tier 不是上界**；失配集中在 active_both/立直/called（mask 本身含信息）；**P2c 在 15/18 cell 的 cond CE 最低** ⇒ 早先 P1/P2a/P2c 的 FAIL 是 top1 门禁判定，不是能力不足。详见 `local_shape/results/P0A_BAYES_COND_REPORT.md`、`memory/DESIGN_local_shape_cond_20261103.md` §11。
 3. **集合级充分、顺序级非立直层约 8 成、立直层仍缺口**：集合级局部推断 A2b 已学 **75~79%**（A3 仅 13~19%）；真顺序盲地板（`rule_predict(order_blind=True)`）下 A2b 扣地板复现率 66.6% / 非立直 81.9% / 立直 +31.0%，A2c 验收后重测为全样本 **85%**、非立直 **92.7%**、立直 **+66.2%**；区域级（同色 ±2）all +0.0062（CI 跨 0）/ 非立直 +0.0155（CI>0）已转正，但**立直窗口仍显著为负（−0.0656，CI[−0.1134,−0.0142]）**、反事实斜率仅 **b=0.0093** ⇒ 「逐牌列通路被激活、时序注意力仍空转」。P1b 两版（RM12 v1 b=0.0131、RM14 next-tedashi aux b=0.0038）20k 均 FAIL，不启动 200k；原计划的显式 order 特征/输入消融（README §13.5~§13.7）未再启动，读牌侧随后冻结（第 4 点）。
 4. **注入 P0 GO → P1 四臂 20k FAIL，读牌侧冻结**：P0-A 冻结主模型 `phi` 探针 5-fold by file——linear alloc_ce **0.7761±0.0012** / hit@1 **0.0785±0.0089** / AUC **0.7273±0.0078**；mlp128 **0.7588±0.0014 / 0.0775±0.0182 / 0.7993±0.0049**，A2c 同批 **0.6517 / 0.2003 / 0.9701** ⇒ 主模型表示缺读牌（探针 train hit@1 0.42 vs val 0.08 ⇒ 只在训练分布内可解码）；P0-B 主模型 top-1 点炮 **1.32%** ≈ 人类 **1.40%**、A2c 最安全 **0.27%**，与 A2c 最安全牌一致率 **28.5%**，`fixable` **1.20%（239/20000，30/30 文件，turn≥8 2.28% / 有立直家 2.59% / turn<8 0.49%）**；P0-C 20k `deal_pure` **0.0108**（≈16 个事件）vs 100k **0.0147**，**差 36%** ⇒ deal 类判据一律 ≥100k；P0-D 零 `tl_tokens` 只掉 2.5% ⇒ 可复用主模型 obs 预计算。**注入形态 = 2 行 obs**（1012 = 三家 union 危险度 `Σ_j P(听_j)P(待牌_j=t)`，1013 = `P(至少一家听牌)`），不是 102 维后验。P1 四臂（A0 基线 / A1 真特征 / A2 同批 shuffle 安慰剂 / A3 turn<8 置零）同数据同种子 20261022，756k→776k：`deal_top1` 0.0120/0.0121/0.0118/0.0123、holdout top1 0.8135/0.8143/0.8156/0.8136，**A1≈A2（全部 <1σ）**；新通道 `abs(w)` 均值 A1 **0.0158** vs A2 **0.0062** ⇒ 权重长起来但行为不变，**信息效应为零** ⇒ S6b 关闭、不再跑 100k/200k（完整记录 README §13.14.8）。`mortal/{model,dataloader,train,holdout_metrics,ladder}.py` 已恢复为注入前 `3a793a1`（commit `7bb5b7d`），`config.s6b_*` 删除；B/756k holdout top1=0.8223 / dqn_loss=0.3881 / agari 29/29 与注入前一致。读牌侧自此**冻结为归档资产**。
 
@@ -595,7 +601,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 
 - 一条命令跑完一个双向臂：`bash ladder_arm.sh <challenger> <champion> <out> --blocks 16 --sets 500 --seed-a S --seed-b T --gpus 0,1,2,4 --guard-lambda 0 [--tag 名]`。
 - 默认 **16 块×500 sets/向 = 8000 sets/向 = 32000 半庄/向（双向共 16000 sets / 64000 半庄）** ⇒ 解析 SE≈**0.33**、可分辨 |δ|≈**0.66**（标定基准：历史 5000 sets = 2500/向，SE 0.594）；预算不足时明确警告。
-- ⚠️ **脚本单位笔误（待修）**：`ladder_arm.sh` 头部注释与打印把「双向总量」当成了「每向」（会打印 `16000 sets/向`、`SE≈0.47` 并误告警「低于 16000」）；按 1 set=4 局的真实口径以上一条为准，下次改脚本时一并修正。
+- ✅ **脚本单位笔误已修（2026-11-09）**：原 `ladder_arm.sh` 把「双向总量」当成了「每向」——SE 标定基数写成 5000 而非 **2500**（会打印 0.47 而非 0.33）、半庄数按 `2×sets` 而非 `4×sets`、告警阈值写成 16000。三处已修正（**1 set = 4 局**），并在头部注释里写清默认臂的分辨率。
 - GPU 轮转 4 并行、块级 `wait`，产物 + `summary.log`。
 - 末尾直接给判定行（正则已用 D2 真实 summary 验证：`δ=-0.283 SE=0.594 t=-0.48 CI=[-1.26,+0.74] → NO-CONCLUSION`）。
 - **空臂自检（B vs B，2×100 sets，λ=0）**：A 向两块 `avg_rank 2.5000 / avg_pt 0.000`（完全对称）。
@@ -757,6 +763,27 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 **边界**：① 无同预算不加权对照，dqn_loss 上升可能混入续训漂移（但 tierA 200k 是 −4.7%，更可能归因加权）；② 评分表为全窗口静态值，早期牌局有轻微未来信息泄漏；③ 重复条目降低 100k 内的唯一牌谱数（~16 万 vs 父代 220k），本探针只回答“该方案是否值得继续”，不等于“机制必然无效”；④ `best.pth` 因 reset 不可与父代比较。
 
 **产物**：`memory/DESIGN_strength_weight_20261102.md`、`tools/training/build_strength_weights.py`、`mortal/config.strength_probe{,_smoke}.toml`、`mortal/run_strength_probe.sh`、`mortal/indexes/strength_weights_v1.pth`、`mortal/checkpoints/strength_probe/`、`mortal/logs/strength_probe_*.log`。
+
+### 3.19b Oracle Guiding：训练期特权信息 + 退火（2026-11-03~04，GATE FAIL → 关闭）
+
+**动机**：文献（Suphx / Kanachan）里最强的单点技巧之一——训练时把「对手暗牌」这类推理期拿不到的特权信息喂进网络（`invisible_obs`，217 通道），配合 α 线性退火到 0，让模型在推理期（α=0）也能利用其学到的推断。理论上它改善的是**学习效率**，不是天花板。
+
+**实现**：`control.oracle = true` + `[oracle]` 的 α 调度（10k 步保持 1 → 50k 线性 → 0 → 后 40k 恒 0）；只支持 `objective='cql_mc'`（IQL 需要 `next_invisible_obs`，dataloader 未提供，已加断言）；旧 ckpt（无 `is_oracle`）逐位不变，oracle ckpt 在 engine/ladder/one_vs_three/test_play 一律零填充。文件：`config.og_{smoke,probe}.toml`、`run_og.sh`、`memory/DESIGN_oracle_guiding_20261103.md`。
+
+**100k 探针（2026-11-04 01:03 UTC 完成，956k→1,056k，同一 12,288 样本）**：
+
+| step | α | top1 | Δ vs 父代 | dqn_loss | Δ |
+|---:|---:|---:|---:|---:|---:|
+| 956k（父代 S6c） | — | 0.8167 | — | 0.3613 | — |
+| 1,000k | 0.40 | 0.8141 | −0.26pp | 0.3693 | +2.2% |
+| 1,040k | 0.00 | 0.8158 | −0.09pp | 0.3581 | −0.9% |
+| **1,056k（终点）** | 0.00 | **0.8118** | **−0.49pp** | **0.3529** | **−2.3%** |
+
+**判定 GATE FAIL**：终点 top1 −0.49pp 超出 −0.3pp 容差（dqn_loss 那一半通过；5 点均值 −0.28pp 压在容差线上）。
+
+**关键判读——不是崩溃，而是方向偏了**：1,050k 的 test_play（800 局）为 和了 21.63% / 放铳 **9.83%** / 副露 **27.57%** / 立直 18.40%，对照 S6c 的 21.67% / **12.27%** / **31.09%** / 18.55% ⇒ **和了持平、放铳 −2.4pp、副露 −3.5pp**。即 oracle 没有提供新的可学信号，却把 Q 景观推向更保守的一侧 ⇒「Q 拟合更好（loss −2.3%）+ 人类一致性下降（top1 −0.49pp）」同时成立。这与 §3.13 守卫、§3.21 自博弈的结论同构：**只要改动是「换一个 frontier 上的点」，指标可以变好，强度不变**。
+
+**结论**：按预注册停止，不上 16k 臂。若将来要检验「更保守是否更强」，可用 1,040k 快照（−0.09pp）跑臂，但属于协议例外，需接受多重比较代价。产物：`mortal/checkpoints/og/`、`logs/og/`。
 
 ### 3.20 在线自博弈（M5）：管线跑通 + 卡死修复，效果中性（2026-11-07~08）
 
@@ -1019,7 +1046,7 @@ fuuro 28.10% / riichi 20.98% / avg_rank 2.461（比 4M 的 fuuro 26.74% 更接�
 下次把 `online_target_steps` 设成 `save_every` 的倍数。
 
 **产物**：`mortal/config.selfplay_4m_expl.toml`、`logs/selfplay_4m_expl/`（含 `holdout.log`）、
-`logs/arena_expl_vs_4m.log`、`logs/arena_4m_vs_s6c.log`、`mortal/checkpoints/selfplay_4m_expl/`。
+`logs/arena/arena_expl_vs_4m.log`、`logs/arena/arena_4m_vs_s6c.log`、`mortal/checkpoints/selfplay_4m_expl/`。
 
 #### 3.21c top-5 探索（4M-top5）：Q 方差坍缩，top1 降最多，强度仍无差异（2026-11-09）
 
@@ -1070,7 +1097,7 @@ logits 全部掩成 -inf，再 softmax 采样）；臂：`boltzmann_epsilon 0.30
 4. 行为画像反而更接近人类（agari 21.48%/人类 21.14%、fuuro 29.68%/32.63%），但与强度无关。
 
 **产物**：`mortal/config.selfplay_4m_top5.toml`、`mortal/engine.py`（`boltzmann_top_k`）、
-`logs/selfplay_4m_top5/`（含 `holdout.log`）、`logs/arena_top5_*.log`、`mortal/checkpoints/selfplay_4m_top5/`。
+`logs/selfplay_4m_top5/`（含 `holdout.log`）、`logs/arena/arena_top5_*.log`、`mortal/checkpoints/selfplay_4m_top5/`。
 
 #### 3.21d baseline 降方差 + 代际对手池（2026-11-09）
 
@@ -1133,7 +1160,7 @@ logits 全部掩成 -inf，再 softmax 采样）；臂：`boltzmann_epsilon 0.30
 
 **产物**：`mortal/config.selfplay_top5_bl{.toml,}`、`config.selfplay_top5_blpool.toml`、
 `config.selfplay_blpool_e10.toml`、`logs/selfplay_top5_bl*/`、`logs/selfplay_blpool_e10/`、
-`logs/arena_b2_*.log`、`mortal/checkpoints/selfplay_top5_bl/`、`selfplay_top5_blpool/`、`selfplay_blpool_e10/`。
+`logs/arena/arena_b2_*.log`、`mortal/checkpoints/selfplay_top5_bl/`、`selfplay_top5_blpool/`、`selfplay_blpool_e10/`。
 
 #### 3.21e Q 排序诊断：为什么“top5 里有最优动作”仍然救不了探索（2026-11-09）
 
@@ -1236,7 +1263,7 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 两者叠加 ⇒ 无论怎么调损失，策略都不会变强。
 
 **产物**：`mortal/config.selfplay_top5_blcql.toml`、`logs/selfplay_top5_blcql/`（含 `holdout.log`）、
-`logs/arena_c_*.log`、`mortal/checkpoints/selfplay_top5_blcql/`。
+`logs/arena/arena_c_*.log`、`mortal/checkpoints/selfplay_top5_blcql/`。
 
 ---
 
@@ -1254,14 +1281,15 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 | 超参（cql/aux） | ❌ 非瓶颈 | §3.8 |
 | 信用/目标形式（IQL A/B） | ❌ 两子路线全部关闭 | §3.9、§3.10 |
 | 表示注入 | S6a/S6b ❌ 关闭；S6c ✅ 已采纳（77k 臂 **+0.422**、CI[+0.15,+0.69]，2026-10-28 换代） | §3.11、§4.2 |
-| 读牌模型（注入上游） | 🧊 冻结为归档资产（A2c） | §3.12 |
-| 推理期守卫 G3 | ✅ 已采纳 λ=10（R2 后唯一新增增益） | §3.13 |
+| 读牌模型（注入上游） | 🧊 冻结为归档资产（A2c）；**2026-11-04 收口**：续训全线退化（真实收敛 ≈2.060，2.0524 是 cosine 末端噪声低谷）、立直层温度校准只回收 16% ⇒ **加训练/校准两条线均关**，仅余「手切信息显式化」未探 | §3.12 |
+| 推理期守卫 G3 | ❌ **已撤回（2026-11-03）**。旧 +0.778 是 risk 双乘 P(听) 的口径错误；修正后全新种子四臂 **NO-CONCLUSION**（legacy λ=10 −0.184、CI[−0.61,+0.27]）⇒ 默认 **λ=0** | §3.13 |
 | 推理期 EV 重排 | ❌ 离线否证（结构冗余），不进 ladder | §3.14 |
 | 推理期状态依赖守卫（Guard-P2） | ❌ 离线否证（7 配置全无支配，与固定 λ 同 frontier），不烧 ladder | §3.17 |
 | 推理期加性期望损失（`P(deal)×E[loss_pt]`） | ❌ 机制生效但交换率 10:1 < 平 λ 的 27.6:1 ⇒ **推理期线封顶** | §3.17b |
 | 容量/宽度（net2wider） | ❌ **前置诊断否证**（train≈holdout，无过拟合/欠拟合余量），不做 | §4.2 |
 | 泛化间隙诊断 | ✅ train(202512) top1 **0.8163** vs holdout(202609) **0.8161**（Δ=0.02pp），dqn_loss 0.352/0.343 ⇒ **BC 噪声地板，非容量瓶颈** | §4.2 |
-| 测量基建 | ✅ ladder 标准臂已固化（16000 sets/向）；akochan 锚点 **2,388 局完成**（pooled +0.00±1.68） | §3.16 |
+| 测量基建 | ✅ ladder 标准臂已固化（双向共 16000 sets）；akochan 锚点 **anchor3 完成 2,388 局**（pooled +0.00±1.68）；**行为画像口径已统一**（§2.5） | §3.16、§2.5 |
+| **Oracle Guiding + 退火** | ❌ **2026-11-04 关闭**：100k 探针 holdout top1 **0.8118（−0.49pp，容差 −0.3pp）**、GATE FAIL；dqn_loss −2.3% 虽过门禁，但方向错误（放铳 12.27→9.83%、副露 31.09→27.57%、和了持平 ⇒ 用和了换放铳且没换到） | §3.19b |
 | **在线自博弈（M5）** | ⏸️ **2026-11-08 结案：中性**。管线已跑通、修了 7 个问题（含原作者 5 年的卡死）；但 200k 步那次因 LR 未随 batch 缩放而坍塌（−57.5pp），LR 修正后 10k 步 = 中性（行为对齐、holdout −0.45pp 在噪声内） | §3.20 |
 | **纯四 Mortal 自博弈（4M）** | ❌ **2026-11-08 结案：不优于起点**。4 席全是当前策略（names=4×trainee ⇒ 4 倍样本）；4000 步 holdout **−0.59pp**、14000 步 **−1.34pp**（3 seed 均值），而 dqn_loss 降至 0.2778、R2 改善 35% ⇒ **越拟合自己、越偏离人类**。真/假自博弈在此规模下无差异 ⇒ **纯自博弈线关闭** | §3.21 |
 | **探索 + 纯 MC（4M-expl）** | ❌ **2026-11-08 结案：Q 变准，策略不变**。`eps 0.05→0.30`、`temp 0.1→1.0`：dqn_loss **0.3461→0.2647（−23.5%）**、R2 **−1.118→−0.620（+45%）**，但 top1 **0.8139→0.8137**、对打 **+0.58±2.0**（2000 局）⇒ 探索只改变 Q 的**幅度**不改变**排序**。⚠ 另：纯 MC 早就生效（online 时 cql_loss≡0），原来所谓 5% 探索因 temp=0.1 名存实亡 | §3.21b |
@@ -1272,38 +1300,27 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 
 ### 4.2 下一步（只列未完成事项；已关闭项见 §4.1）
 
-| 优先级 | 事项 | 要点/判据 |
+| 优先级 | 事项 | 要点 / 判据 |
 |---|---|---|
-| **P0** ✅ | akochan 绝对锚点 408 局（**已完成**） | anchor1：**+2.87 pt/半庄**（CI[−7.1,+12.9]，含组内相关修正），名次 [85,117,119,87]、avg_rank 2.510； 人类标尺 −5.44/+9.29 **只是 uma 单位参照，对手场不同，不能读成人类百分位**；作为外部标尺使用，需 ~1600 局才能判 +3 级差异 |
-| **P0** 🔜 | **anchor3：部署组合 S6c+λ=10 vs 3×akochan ~1600 局**（同协议补 800 局 S6c 无守卫） | 2~4 天（CPU）；SE≈2，回答“+3 vs 0”；**不用于验证守卫 +0.78**（§3.16） |
-| **P0** | 下一轮改进的判定预算 | 用 `ladder_arm.sh --blocks 16`（双向共 16000 sets，SE≈0.33）；**新种子块取 §2.4 的「下一块」**；候选排序见 `memory/NEXT_STEPS_ANALYSIS.md` §4；δ 的 bootstrap CI 下界 >0 才采纳 |
-| **P1** ❌ | 推理期**状态依赖**守卫（Guard-P2，**已否证 2026-10-27**） | 20k 上 7 个配置全部 `p_win` 不升（−0.1~−0.2%）、无支配；最好 `w_opp×turn` 的交换率 25:1 ≈ 固定守卫自身 27:1 ⇒ 只是沿同一 frontier 移动（Q 已按局面定价）⇒ **不烧 ladder**；实现与回归保留为基建（§3.17，设计 `memory/DESIGN_guard_statewise_20261027.md`） |
-| **P0** 🔄 | ~~S6c 77k 复判（2026-10-27 02:52 进行中，已由下行结论取代）~~ | 臂：`checkpoints/s6c/mortal.pth`(956k) vs B/756k，λ=0，**双向 76 块×500 sets = 76,000 sets / 152,000 半庄**，种子块 **400000–437500 / 420000–457500**（首次使用）；`CUDA_DEVICE_ORDER=PCI_BUS_ID` + `--gpus 2,2,2,2`（4 并发于 GPU2 Quadro RTX 8000，3.7 GB/100%）；解析 SE≈0.22、δ_min≈0.43（比预估好，因为总量是双向 76k）； 产物 `logs/s6c77k/`；ETA ≈ 9~14 h。**⚠️ 坑：不设 `CUDA_DEVICE_ORDER=PCI_BUS_ID`  时 CUDA 索引 ≠ nvidia-smi 索引（cuda:2 = P100 而非 RTX 8000），会静默跑到别的卡上** |
-| **P0** ✅ | **守卫 λ=10 在 S6c 上复验（8 副本完成，确认有效）** | **+0.402 / +0.046 / +0.523 / +0.176 / +0.629 / +0.489 / +0.385 / +0.135 → 均值 +0.348、8/8 正号**；理论 SE 0.162 ⇒ **t=2.15、CI[+0.03,+0.67]**；经验跨副本 SD 0.194 ⇒ SE 0.068、t=5.09、CI[+0.21,+0.48]。对照 B/756k 同协议 **+0.78** ⇒ 守卫在 S6c 上仍有效，幅度约为 B 的 **45%**。**按预注册判据（均值≥+0.25 且理论 t≥2）⇒ 部署组合 = `S6c/956k + guard λ=10`**；种子 440000~580000 已消费；产物 `logs/guard_s6c/`（8 个副本 + `wave2.log`） |
-| ~~旧记录（第二波进行中）~~ | `run_guard_s6c_wave2.sh`：同协议再加 4 副本（seed 520000/540000 → 560000/580000，两波各 2 并发于 GPU2），凑满 **8 副本 × 8000 sets = 64,000 sets（256,000 局）**，理论 SE≈0.16、经验跨副本 SD 0.187 时 SE≈0.066；ETA ≈ 7~8 h（北京 ~23:30）；产物 `logs/guard_s6c/l10_5*.log` + `wave2.log` |
-| **P0** ⚠️ | **守卫 λ=10 在 S6c 上复验（首 4 副本，结论：偏弱/临界）** | **+0.402 / +0.046 / +0.523 / +0.176，4/4 正号，均值 +0.287**；理论 SE 0.229 ⇒ t=1.25（不显著），而跨副本观测 SD 仅 0.187（4 副本 df=3 ⇒ 经验 t≈3.1、p≈0.05）⇒ **临界**。对照 B/756k 同协议 **+0.78** ⇒ 守卫在 S6c 上的边际增益约为 B 的 **1/3**。**不做部署结论**；要定论需 16k sets 标准臂（S6c+guard vs S6c） |
-| **P0** ⚠️ | **anchor2：S6c+守卫 vs 3×akochan（89 sets / 356 局，完成 2026-10-28）** | 名次 [82,86,100,88]、avg_rank 2.545、**avg_pt −1.77**（SE≈4.35，CI[−10.3,+6.7]）；对照 anchor1（B 无守卫，408 局）**+2.87**（CI[−7.1,+12.9]）⇒ 点估计 **低 4.6**，但差值的 SE≈5.9、**无统计结论**。**注意**：p1 因 akochan EOF 崩掉（少 13 sets，89/102），且守卫在弱对手场（akochan << 人类）里可能过度弃和 —— anchor 场与 ladder 场强度不同，不可直接互推 |
-| ~~旧记录~~ | **已完成两副本：+0.402（seed 440000）/ +0.046（seed 460000）→ 均值 +0.224、SE≈0.32（t≈0.7，不显著）**；对照 B/756k 同协议 +1.226/+0.330（均值 +0.78）⇒ 守卫在 S6c 上的边际增益疑似缩水到 1/3。**2026-10-28 01:55 追加 r3/r4（seed 480000/500000）于 GPU2**，4 副本合计 SE≈0.23，用于分辨「真缩水」还是噪声 |
-| ~~旧记录~~ | 沿用剂量曲线协议：challenger=champion=`checkpoints/s6c/mortal.pth`、`--guard-lambda 10`（**只作用于挑战者席**），**两个独立副本**（seed 440000 / 460000，各 8000 sets=32,000 半庄）并行于 GPU2；判据=两副本同号且均值明显 >0（B 上是 +1.226/+0.330→+0.78）；SE≈0.46/副本。汇总看 `logs/guard_s6c/l10_*.log` 的 avg_rank/avg_pt |
-| **P0** ✅ | S6c 77k 复判（**转正**） | **δ=+0.422、bootstrap CI[+0.15,+0.69]**（A +0.447 / B −0.398，双向同号）；主模型换代为 **S6c/956k**；**待办：守卫 λ=10 在 S6c 上复验**（λ 是在 B 上扫的）+ 锚点重测（可选） |
-| **P0** ❌ | ~~档 A：自博弈 + MC 回报~~ **两轮均零效应，2026-11-01 关闭** | 第一轮（3.1%/200k，76k sets 双向）：δ=**−0.024**、t=−0.16、bootstrap CI[−0.29,+0.25]；第二轮（12.5%/400k，76k sets 双向）：δ=**+0.072**、t=+0.47、CI[−0.17,+0.33] ⇒ 无梯度、CI 全跨 0；追 +0.07 需 ~138 万 sets（18 倍）不划算。详见 §3.18 与 `memory/DESIGN_tierA_selfplay_20261029.md` §7 |
-| **P0** ❌ | ~~容量探针（net2wider 192→256）~~ **诊断否证，不做** | 2026-10-27 前置诊断：同口径 30,720 样本下 **train(202512) top1 0.8163 vs holdout(202609) 0.8161**（Δ=0.02pp）、dqn_loss 0.352 vs 0.343 ⇒ 无泛化间隙、已到 BC 噪声地板，加宽无余量；审计另确认：全仓 48 个 toml 均为 192ch/40blocks，唯一容量变动是 GRP h64→h128（与 R2 数据变更混杂） |
-| **P0** ❌ | ~~数据质量加权（局内 4 人强度）~~ **100k 探针门禁未过，2026-11-02 关闭** | top1 **0.8141**（−0.26pp，带内）、dqn_loss **0.3816（+5.6% > +1% 门禁）**、R2 变差 0.129、var_q +8.1%、agari 149/149 ⇒ 不烧 76k 臂，关闭该轴；详见 §3.19 |
-| **P2** | RM10 轨迹级监督 | 读牌侧唯一新监督；需先解冻读牌模型，并说明它为何不同于 S6b 注入（坑 72：BC 不需要显式读牌） |
-| **P2** | 放铳率辅助头 | aux 预测本局放铳；风险是辅助头绕过主通路（坑 63） |
+| **P1** | **玩家风格建模**（唯一未被证伪的新信息源） | `names → embedding`，1~2 天探针；先回答「同段位内的风格差异是否大于 BC 噪声地板」，否则只会学到噪声。必须做泄漏检查（名字与实力/年代相关） |
+| **P2** | **手切信息显式化**（读牌线唯一未探项） | P0-a 证明 tier 不是上界、A2c 在 8 个 tier 占优的 cell 上低 0.135~0.209 nats ⇒ 仍有空间；但 S6b 已证明「同源注入」无效，必须先过 RM11 门禁。2~3 天 |
+| **P2** | RM10 轨迹级监督 | 读牌侧唯一新监督；需先解冻读牌模型，并说明它为何不同于 S6b（§5.2-72） |
+| **P2** | 放铳率辅助头 | aux 预测本局放铳；风险是绕过主通路（§5.2-72） |
+| **P2** | **状态级 rollout**（唯一能给自博弈注入新信息的手段） | 需给 `BatchGame` 加「从指定事件序列继续 + 强制首步」，约半天 Rust；但 §3.21e 已量化真实动作差异 < 回报噪声 SD≈0.59 ⇒ **性价比存疑，暂不做** |
 | **P2** | 工程债 | 异地备份、上游 `git diff` 校准、两套 holdout 同分布口径、agari-guard holdout、kan-select 回放对照、optimizer 暖启消融、AMP 重开验证、文档对账 |
-| **P1** ⏸️ | 在线自博弈（M5）**已结案：中性**（纯 on-policy、无人类混合）。1 个真实收获：原作者 5 年的 `test_play` 后卡死被修掉（`num_workers=0`）；剩下两个是坑：LR 必须随 batch 缩放、holdout 对比必须同 seed | §3.20 | 若要重试：人类:自博弈 = 8:1 + batch 512 + 强对手；否则不再烧卡 |
 | **P3** | 更强行为先验（若要继续压上界） | 读牌 README §9 的参考策略弱于 A2b；要回答「还剩多少」需 ukeire/安全度策略或学习型 policy，并保留 `hard` 下界 |
+
+**统一判据（任何新臂）**：`ladder_arm.sh --blocks 16`（双向 16,000 sets，解析 SE≈0.33、δ_min≈0.66）+ **全新种子块**（下一块 1080000/1100000）+ 双向同牌山 + block bootstrap CI 下界 >0。holdout 只作门禁（**必须同 seed 同 batch**），不作强度判据；对打验证单组 2000 局的 ±4 全是噪声，必须 3 组不同牌山再合并。
 
 ### 4.3 当前资产与基线
 
-- 现役最强（历史称法）：`round4/645k`（fp32，0 非有限张量）；**实际部署与判定基线是 B/756k**（相对 R4 的消融 B 组，见 §3.6）。
-- 判定基线：B/756k（`reward_ablation/B_rank_pt_aligned/mortal.pth`，top400_v2 + `[2,1,0,−3]` + aug）；推理默认加载守卫 λ=10。
-- 已封存不续用：`iql_b`(v1)、`iql_b_smoke`、`iql_b_smoke_v2`、`iql_b_v2`（漂移轮）；`inject_s6b/A1~A3` 需 checkout `27632a2` 才能加载。
-- 可用但非基线：`round5/870k`、`iql_a/867k`、`iql_b_v3/867k`、`s6a/867k`、`s6c/956k`、`d2_2026/856k`、`mix_v1/856k`（D1）。
-- 档 A 产物（均未采纳，保留复核）：`tierA/1,140k`、`tierA2/1,340k`（判定对象；末次落盘 1,356k）。
-- 数据质量加权探针（未采纳，保留复核）：`strength_probe/1,056k`（top1 0.8141、dqn_loss 0.3816，§3.19）。
-- 判定牌谱均保留在对应 `ladder/` 或 `logs/ladder_r*/`，可事后重算/bootstrap；路径台账见 §6.3。
+- **现役最强**：`mortal/checkpoints/s6c/mortal.pth`（956k，v4 obs + 2 行速度特征；**守卫 λ=0**）。换代依据 δ=+0.422、CI[+0.15,+0.69]（§3.11）。
+- **判定基线**：B/756k（`reward_ablation/B_rank_pt_aligned/mortal.pth`，top400_v2 + `[2,1,0,−3]` + aug）。
+- **绝对锚点已测**：anchor3 两臂共 2,388 局（S6c+λ=10 1,588 / S6c 无守卫 800）⇒ pooled **+0.00 ± 1.68**（§3.16）。
+- **读牌归档**：A2c best@153k（`tools/read_model/checkpoints/`），真实收敛 ≈2.060；不再注入主模型。
+- **自博弈产物（全部未采纳，保留复核）**：`selfplay_m5/`（含 `mortal_COLLAPSED_1140000.pth` 坍塌证据）、`selfplay_lr/`、`selfplay_4m{,_expl,_top5}/`、`selfplay_top5_bl/`、`selfplay_top5_blpool/`、`selfplay_blpool_e10/`、`selfplay_top5_blcql/`。
+- **其它归档**：`tierA/1,140k`、`tierA2/1,340k`（档 A）、`strength_probe/1,056k`（数据质量加权）、`og/`（Oracle Guiding 1,056k）。
+- **判定牌谱**：保留在对应 `ladder/` 或 `logs/ladder_r*/`，可事后重算/bootstrap；路径台账见 §6.3。
 
 ### 4.4 新会话接手三步
 
@@ -1338,8 +1355,8 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 | 6 | 数据 | 2026 年度 zip 未生成；今年数据靠 7 天窗口滚动，必须定期归档 |
 | 7 | 训练 | `GameplayLoader` 必须在 `build_iter()` 而非 `__init__` 构造 GRP（Windows 下失效） |
 | 8 | 训练 | 训练依赖 GRP 权重先存在（`[grp].state_file`），否则 dataloader 失败 |
-| 9 | 训练 | CQL 损失仅离线模式生效；在线模式只有 DQN+aux |
-| 10 | 训练 | 在线模式有已知卡死 bug，源码用子进程 + `sys.exit(0)` 规避，勿“修复” |
+| 9 | 训练 | CQL 默认只在离线生效（`cql_loss = 0; if not online: ...`）；在线需要时开 `control.cql_online`（§3.21f）。⚠️ CQL 是维持 Q 区分度（top1−top2 的 gap）的现成机制，关掉后自博弈把 gap 从 2.24 拉到 1.05 |
+| 10 | 训练 | ~~在线模式有已知卡死 bug，用子进程 + `sys.exit(0)` 规避，勿“修复”~~ → **2026-11-08 已修掉**：根因是 `test_play` 留下 CUDA context + rayon 线程池，随后 `DataLoader(num_workers>0)` fork ⇒ 子进程死锁；修法 = online 时 `num_workers=0`（§3.20）。`sys.exit(0)` 已删除，200k 步 0 重启验证 |
 | 11 | 训练 | `save_every % opt_step_every == 0`、`test_every % save_every == 0` 等断言必须满足 |
 | 12 | 训练 | `avg_pt([90,45,0,−135])` 仅显示/最优判定，从不参与训练 |
 | 13 | 数据 | 旧本机 D 盘是 exFAT 簇 256 KiB，海量小文件膨胀 64×；历史数据只留年度 tar；服务器 NTFS 无此问题，但本机→服务器传输必须先打包 |
@@ -1378,6 +1395,14 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 | 71 | 工程 | **暖启训练的 `state_file` 绝不能指向基线/共享起手 ckpt**（2026-10-22 S6b 实证）：train.py 每个 `save_every` 会把训练中权重**原地写回** `control.state_file`。A0 臂直接指向 `reward_ablation/B_rank_pt_aligned/mortal.pth`（判定基线），2000 步后基线被覆盖（mtime 04:19、steps 756000→758000）。可精确恢复的唯一原因：`inject_s6b/B756k_v6_init.pth` 是手术前从基线复制的，首层前 1012 通道逐位相同（手术自检 phi diff=0），裁掉新增 2 通道即还原。处置：每个实验臂先复制一份独立起手 ckpt（A0.pth/A1.pth/...），`state_file` 指向副本；基线只作只读父代 |
 | 72 | 建模 | **「权重长起来」+「行为不变」= 信息冗余，不是学习不足**（2026-10-22 S6b 四臂实证）：2 行读牌危险度注入后，A1 新通道 `abs(w)` 均值 **0.0158**（A2 安慰剂 0.0062，2.5×），但 `deal_top1` 0.0121 vs 0.0118、holdout top1 0.8143 vs 0.8156，全部 <1σ。合并 S6a（6 行紧迫度 null）与坑 64（显式 order 权重涨但反事实 b 不动）：**当注入特征与 obs 已有信息同源时，权重增长只反映「无害正则」，不构成行为改变的证据**。判据必须是 **A1 vs A2（安慰剂）的配对差**，而不是「权重是否非零」；同信息注入的天花板由「BC 目标是否需要它」决定，不由「表示里有没有它」决定（P0-A 的 0.80 vs 0.97 与 P1 的 null 同时成立） |
 | 73 | 训练 | **`dataset.strength_weight.table` 必须与当前 `file_index` 同源**：换索引/白名单/数据版本后不重建权重表，命中率会下降，缺失文件按 1 次处理（只 warning），加权会静默退化为“部分生效”；开跑后核对日志里的 `命中=...` 与重复直方图 |
+| 74 | 训练 | **online 的 LR 必须随 batch 缩放**（2026-11-08 M5-A 实战）：`[optim.scheduler] peak=1e-4` 是 **batch-512** 口径，改成 `batch_size=32` 后等效 LR 放大 16 倍 ⇒ **45 分钟内 top1 0.8167→0.2417、agari 21.7%→0.55%、avg_rank 3.89**。规则：`lr_new = lr_old × batch_new / 512`。叠加因子：`train.py` 的 `if not online or state[...]['online']` 在 online 时**整块跳过** optimizer/scheduler 加载 ⇒ LR 是全新 warmup，不是父代末端值 |
+| 75 | 训练 | **online 的终止条件必须用绝对步数 + 落在 save 点**：① 重启后 `online_start_steps` 重置，增量口径 `online_max_steps` **永远达不到**（实测 11 h 重启 7 次）⇒ 用 `control.online_target_steps`（绝对）；② 停机点不是 `save_every` 倍数时**最后一段静默丢失**（4M-expl 丢 8,339 步，事后只剩 960k）⇒ 现已加告警，配置时就把 target 对齐 |
+| 76 | 评测 | **holdout 对比必须同 seed 同 batch**：跨 seed 比较可把 −0.8pp 伪装成 **+1.2pp**（1,920 样本的 seed 方差 ≈±1.5pp）。做过的错：拿 M5 的 seed-20261009 比 S6c 的历史值。正确做法：同 seed 跑两模型，≥ 3 个 seed 取均值 |
+| 77 | 评测 | **单组 2000 局对打（SE 2.0）的 ±4 全是噪声**：top5 vs S6c 单组 **+3.62** → 三组 −1.44/+0.36/+3.62、合并 **+0.85±1.2**。验证强度至少 **3 组不同牌山再合并**；单组只能当冒烟 |
+| 78 | 训练 | **高探索率 + 外部固定对手 = 正反馈坍塌**（2026-11-09 臂 B）：`eps=1.0` 的 challenger 对 3 个 greedy 旧模型，**620 局 0% 第 1 名、avg_pt −69.1** ⇒ Q 学到“我做什么都输” ⇒ agari 4.9%。探索只能在「自己打自己」（对手同源）时放大；外部对手下必须 **ε≤0.1** |
+| 79 | 训练 | **`--resume` 的 LR 会被 ckpt 的 `scheduler.base_lrs` 覆盖**：绝对值调度下 `abs_total = start_step + steps`，cosine 立即归零（实测 **lr 1.39e-09**，参数静默冻结）。续训用 `--init`（重置 optimizer/scheduler）或 `--reset-base-lr`（2026-11-04 新增） |
+| 80 | 工程 | **多个 client 共用 `[train_play].log_dir` 会互相删除牌谱**：`TrainPlayer` 启动时 `rmtree(log_dir)`；多 worker 必须用 `MORTAL_WORKER_ID` 分流（§3.20）。同理 `ladder.py` 并发也需独立 `log_dir`（坑 21） |
+| 81 | 工程 | **模块级 `main()` 会让 `import` 执行训练**：`holdout_metrics.py` 原来文件末尾裸调 `main()`，任何 `import holdout_metrics`（想复用 `collect`）都会把 argv 当 ckpt 列表跑。脚本一律 `if __name__ == '__main__':` |
 
 ### 5.3 日志归置规范（强制执行）
 
@@ -1403,6 +1428,9 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 | `mix_v1/` | D1 数据混入 | `SUMMARY.md`、`ladder/` |
 | `d2_2026/` | D2 数据补量 | `SUMMARY.md`、`ladder/` |
 | `anchor1/` | akochan 锚点（按 tag） | `p0.log`…`p5.log` |
+| `arena/` | 自博弈两模型对打（位置对称 `py_vs_py`，每组 2000 局） | `arena/b2_s6c_r1.log`、`arena/c_a_r2.log` |
+| `og/` | Oracle Guiding 链 | `og_probe.log`、`holdout.log` |
+| `selfplay_{m5,lr,4m,4m_expl,4m_top5,top5_bl,blpool_e10,top5_blcql}/` | 在线自博弈各臂 | `trainer*.log`、`client_w*.log`、`holdout.log`、`server.log` |
 | `monitor/` | 训练监控/估算 | `progress_*`、`r2_monitor` |
 | `misc/` | 其它 | `pack_zip`、`tensorboard` |
 | `s6a_isolated/code/logs/` | S6a 隔离区（不在 `mortal/logs/`） | `s6a_chain.log`、`s6a/{train,holdout,ladder_summary}.log` |
@@ -1420,7 +1448,11 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 | 工具 | 用途 |
 |---|---|
 | `mortal/env_check.py` | 开跑前自检：目录遮蔽/环境变量/选卡/config/globs |
-| `mortal/holdout_metrics.py` | 未见月 top1、Q 校准、R²、和了 top1 |
+| `mortal/holdout_metrics.py` | 未见月 top1、Q 校准、R²、和了 top1（2026-11-09 修：加 `__main__` 保护，可被诊断脚本 import） |
+| `mortal/diag_q_rank.py` | **Q 排序诊断**（2026-11-09 新增）：人类动作的 rank 分布 / `gap=top1−top2` / Q 的 RMSE / 信噪比；判断「argmax 靠不靠谱」不再靠猜。用法 `MORTAL_CFG=<cfg> python diag_q_rank.py <ckpt> [month] [seed]` |
+| `tools/behavior_profile.py` | **行为画像口径统一**（2026-11-07 新增）：按 `stat.rs` 唯一定义算人类凤凰场五率，与 Mortal 的 `riichi.Stat` 同尺度对比 |
+| `mortal/start_anchor3.sh` | akochan 绝对锚点一键跑（预检 5 卡空闲 → phase1 守卫臂 → phase2 无守卫臂 → 自动汇总）；`agg_anchor.py` 做聚合 |
+| `mortal/run_og.sh` + `config.og_{smoke,probe}.toml` | Oracle Guiding 链（冒烟→ 100k 探针→holdout）；**已关闭**（§3.19b） |
 | `mortal/ladder.py` + `mortal/run_ladder_r3.sh` | 单对/批量双向同牌山对抗；并发必传 log_dir（`run_ladder_r3.sh` 已归档 10-28） |
 | `mortal/ladder_arm.sh` | **标准双向臂**：16 块×500 sets/向（可换种子/守卫 λ），自动打印分辨率与判定行 |
 | `tools/training/agg_ladder.py` | 分块 δ/SE/t/95%CI/所需 sets；`--logs-root` 做 block bootstrap |
@@ -1465,11 +1497,11 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 | 类别 | 文件 |
 |---|---|
 | Python 训练/模型 | `mortal/model.py`（Brain/DQN/GRP/Aux/VHead）、`train.py`、`dataloader.py`、`reward_calculator.py`、`holdout_metrics.py`、`ladder.py`、`env_check.py`、`player.py` |
-| 推理/实验钩子 | `mortal/mortal.py`（推理入口 + 守卫默认 λ=10）、`defense_guard.py`、`ev_rerank.py`、`s6c_features.py`、`one_vs_three.py`（含 `py_vs_ako`）、`agg_anchor.py` |
-| Python 入口 | `mortal/server.py`/`client.py`（在线，暂未用）、`train_grp.py` |
+| 推理/实验钩子 | `mortal/mortal.py`（推理入口，**守卫默认 λ=0**，`MORTAL_GUARD_LAMBDA` 可开）、`defense_guard.py`、`ev_rerank.py`、`s6c_features.py`、`one_vs_three.py`（含 `py_vs_ako`）、`agg_anchor.py`、`diag_q_rank.py`（Q 排序诊断）、`holdout_metrics.py`、`behavior_profile.py`（在 `tools/`） |
+| Python 入口 | `mortal/server.py`/`client.py`（**在线自博弈已跑通**，§3.20；默认 `online=false`）、`train_grp.py`、`start_anchor3.sh`（锚点一键） |
 | Rust 核心 | `libriichi/src/{lib.rs,consts.rs,state/,dataset/,arena/,algo/,mjai/,agent/,bin/}`（`agent/akochan.rs` 为锚点客户端） |
-| 配置（现存 15） | `mortal/config.example.toml`、`config.round{2,3,4,5}.toml`、`config.offline.toml`、`config.grp_h128.toml`、`config.s6c{,_base,_probe,_smoke}.toml`、`config.anchor_ako.toml`、`config.iql_b_v2.toml`、`config.iql_b_v3.toml`、`config.mix_v1.toml`（留存原因：仍被仓库内工具/文档当输入引用；+ 生成物 `config.style_*.toml` 5 个） |
-| 脚本（现存 7） | `mortal/run_round{4,5}.sh`、`run_s6c.sh`、`run_s6c_chain.sh`、`run_guard_s6c_wave2.sh`、`ladder_arm.sh`、`run_anchor.sh` |
+| 配置（现存 **59**：历史 15 + 自博弈 11 + anchor3 22 + OG/strength 4 + style 5 等） | 主链：`config.round{2,3,4,5}.toml`、`config.s6c{,_base,_probe,_smoke}.toml`、`config.offline.toml`、`config.grp_h128.toml`；实验：`config.tierA{,2}.toml`、`config.mix_v1.toml`、`config.strength_probe{,_smoke}.toml`、`config.og_{smoke,probe}.toml`、`config.iql_b_v{2,3}.toml`；在线：`config.selfplay_{smoke,test,lr,4m,4m_smoke,4m_expl,4m_top5,top5_bl,top5_blpool,blpool_e10,top5_blcql}.toml`；锚点：`config.anchor_ako.toml` + `config.anchor3{,_noguard}{,_p0..p9}.toml`；生成物 `config.style_*.toml` 5 个 |
+| 脚本（现存 11） | `mortal/run_round{4,5}.sh`、`run_s6c.sh`、`run_s6c_chain.sh`、`run_guard_s6c_wave2.sh`、`ladder_arm.sh`、`run_anchor.sh`、`start_anchor3.sh`、`run_og.sh`、`run_strength_probe.sh`、`run_selfplay_8k.sh` |
 | 文档 | `memory/MEMORY.md`（本文）、`memory/NEXT_STEPS_ANALYSIS.md`、`tools/training/TRAINING_MANUAL.md`、`tools/training/ENV_SETUP_P100.md`、`tools/tenhou_data/TASKLIST.md`、`tools/read_model/docs/README.md`、`tools/akochan_build_notes.md` |
 | 数据索引 | `dataset/index/{player_ratings_*.csv,top_players_*.txt,repair_names_report.json}`；`mortal/indexes/*.pth` |
 
@@ -1477,14 +1509,17 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 
 | 文件 | 主要改动 |
 |---|---|
-| `mortal/train.py` | `max_train_steps` 预算自停、`snapshot_every` 编号快照、索引读 `start.get('names',[])`、`best_perf` 重置+一次性令牌、file_index manifest、奖励口径守卫、`credit_mode`、IQL 三损失/EMA/`iql scale:`/`iql_v_target_decay`/`iql_value_clip`、`extra_features` 解析 |
+| `mortal/train.py` | `max_train_steps` 预算自停、`snapshot_every` 编号快照、索引读 `start.get('names',[])`、`best_perf` 重置+一次性令牌、file_index manifest、奖励口径守卫、`credit_mode`、IQL 三损失/EMA/`iql scale:`/`iql_v_target_decay`/`iql_value_clip`、`extra_features` 解析；**在线/自博弈（2026-11-07~09）**：`online_max_steps` / `online_target_steps` / `submit_round_interval` / online 时 `num_workers=0`（修卡死）/ `cql_online` / `baseline_v_weight`（优势回归）/ `--reset-base-lr` / 存盘点 loss 日志 |
+| `mortal/engine.py` | **`boltzmann_top_k`**（采样前把第 k 名之后掩成 −inf，默认 0 = 旧行为）；`boltzmann_epsilon/temp/top_p` 原有 |
+| `mortal/common.py` | `drain()` 轮询 5s→1s（吞吐 +37%）；`recv_msg` 协议错位诊断（`protocol desync: header=... size=... peer=...`，代替 `MemoryError`） |
+| `mortal/client.py` | `loaded_version` 跳过重复权重加载（权未变时不传/不 load 41MB） |
 | `mortal/dataloader.py` | `reward_mode/reward_scale/always_include_kan_select`；`credit_mode/gamma` 后缀和；`objective='iql'` 7 元组；`r_t` 仅 `dones[i]` 非零；S6c `extra_features` 批内拼行 |
 | `mortal/model.py` | 新增 `VHead(1024→256 Mish→1)`；`Brain(extra_channels)`（S6c=2）；v5 `case 5`（隔离区） |
 | `mortal/defense_guard.py` | 新增：G3 守卫 `Q'=Q−λ·max(risk−τ,0)`，A2c 后验，仅改打牌 0..33 |
 | `mortal/ev_rerank.py` | 新增：SP 前瞻 + risk 的 EV 重排（离线已否证，未接入默认路径） |
 | `mortal/s6c_features.py` | 新增：向听/有效牌 2 行特征 + ckpt 自解析（`resolve`） |
 | `mortal/holdout_metrics.py` | 奖励/信用/IQL 口径透传；`worker_init_fn` + 真随机种子；iql ckpt 只出 top1/agari/lse；`extra_features` 透传 |
-| `mortal/player.py` | `enable_amp`/`agari_guard` 从 `[test_play]` 读；固定评测种子块（仅趋势） |
+| `mortal/player.py` | `enable_amp`/`agari_guard` 从 `[test_play]` 读；固定评测种子块（仅趋势）；**自博弈**：`champion` = `baseline` / `self` / `pool`（4 席同策略 / 代际对手池）、`boltzmann_top_k`、`MORTAL_WORKER_ID` 隔离 `log_dir` |
 | `mortal/ladder.py` | 第 5 个参数 `log_dir`；执行参数 `CLI>[1v3.ladder]>默认`、双侧一致、`run_meta.json`、ckpt sha256/steps；守卫与 `extra_features` 钩子 |
 | `mortal/one_vs_three.py` | `[1v3] mortal_vs_ako` 开关（`py_vs_ako`），供绝对锚点用 |
 | `mortal/train_grp.py` | `grp.control.max_train_steps`、`grp_best.pth` 按 val loss、固定验证种子、`est. %` 日志 |

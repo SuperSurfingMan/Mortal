@@ -1,0 +1,209 @@
+# S6c 正式轮（2026-10-23）：B/756k 暖启 + obs 尾部 2 行「自家速度」特征
+#
+# 唯一实质变量（vs B 组 checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth, 756k）：
+#   ★ S6c 特征注入：extra_features = 's6c'（自家向听/8 + 实战有效牌数/136，34 列广播）
+#   → 首层 Conv1d 1012 → 1014（新通道零初始化，暖启瞬间与 B 组逐位等价）
+# 其它全部沿用 B/756k 口径：pts [2,1,0,-3]、top400_v2、2022-2026H1 训练窗、
+# batch 512、fp32（§16.20 AMP 事故后保持关闭）、seed 20261012。
+#
+# 判据（README §13.16）：
+#   1) 暖启 ckpt 的 holdout 必须与 B/756k 完全一致（管线透明）
+#   2) 20k 探针（config.s6c_probe.toml）：holdout top1 ≥ 0.8223 + 首层新通道被使用
+#   3) 200k 正式轮后：holdout 不退 + 双向 5000 sets ladder（λ=0 隔离模型变量）
+#
+# 运行（tmux 承载）：bash run_s6c.sh formal  /  bash run_s6c.sh probe / ladder
+
+# 在线自博弈 smoke（2026-11-07）：验管线，不求增益。
+# 关键差异 vs 离线档 A：数据由**当前策略**（+boltzmann 探索）生成，边打边训。
+# 对手仍是固定 baseline（`TrainPlayer` = 1 学习者 vs 3 卫冕者，见 player.py）。
+# 启动：
+#   GPU0: CUDA_VISIBLE_DEVICES=0 python -u server.py
+#   GPU1: CUDA_VISIBLE_DEVICES=1 python -u train.py   （trainer，先于 client）
+#   GPU2: CUDA_VISIBLE_DEVICES=2 python -u client.py
+
+[control]
+version = 4
+online = true
+state_file = 'checkpoints/selfplay_4m_top5/mortal.pth'
+best_state_file = 'checkpoints/selfplay_4m_top5/best.pth'
+tensorboard_dir = 'runs/selfplay_4m_top5'
+device = 'cuda:0'                # 物理卡由 CUDA_VISIBLE_DEVICES 指定（训练用 GPU2 RTX 8000）
+enable_cudnn_benchmark = true
+enable_amp = false               # 与 B 组一致（fp32）
+enable_compile = false
+batch_size = 32
+opt_step_every = 1
+save_every = 10000
+test_every = 10000
+submit_every = 1000000
+max_train_steps = 200000
+online_max_steps = 0
+online_target_steps = 960000
+snapshot_every = 10000
+seed = 20261012
+# 一次性令牌：首层手术后必须丢弃父代 optimizer/scheduler（形状不匹配 + 动量口径不同）
+reset_optimizer = 's6c-v1'
+reset_best_perf = 's6c-v1'
+# ★ S6c：obs 尾部注入的特征族（'' = 关闭；行数由 s6c_features.resolve 推导为 2）
+extra_features = 's6c'
+
+[train_play.default]
+games = 4
+log_dir = 'runs/train_play_4m_top5'
+boltzmann_epsilon = 1.0
+boltzmann_temp = 1.0
+boltzmann_top_k = 5          # 只在本模型自己的 top-5 候选里采样
+top_p = 1.0
+repeats = 1
+# 纯四 Mortal 自博弈（2026-11-08）：champion 用**当前训练中的策略**而不是固定 baseline。
+# player.py 会为 champion 再建一个 MortalEngine，共享同一份 (mortal, dqn) 引用，
+# 且 name 也设 'trainee' ⇒ start_game.names 是 4×trainee ⇒ 每局产出 4 份训练样本。
+champion = 'self'
+# champion 席位的探索：0 = 纯 greedy（对手按当前策略的 argmax 行动）。
+# 设成与 challenger 相同的 0.05 可增加局面多样性，但会让 3/4 的样本带探索噪声。
+champ_boltzmann_epsilon = 0.0
+champ_boltzmann_temp = 1.0
+champ_top_p = 1.0
+
+[test_play]
+games = 2000
+log_dir = 'runs/test_play_4m_top5'
+enable_amp = false
+enable_rule_based_agari_guard = true
+
+[dataset]
+globs = [
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202[2-5]??/**/*.json.gz',
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/20260[1-8]/**/*.json.gz',
+]
+player_names_files = ['../dataset/index/top_players_400_v2.txt']
+file_index = 'indexes/reward_ablation_r4_v2.pth'   # 与 B/756k 同一份文件表（数据未变）
+data_version = 'reward-ablation-r4-v2'
+file_batch_size = 16
+reserve_ratio = 0.0
+num_workers = 8
+num_epochs = 1
+enable_augmentation = true      # 与 B 组一致；增强样本的 S6c 特征按增强后的 obs 重算
+augmented_first = true
+
+[env]
+gamma = 1
+pts = [2.0, 1.0, 0.0, -3.0]    # B 口径：对齐天凤点数（第 4 名重罚）
+reward_mode = 'rank_pt'
+reward_scale = 1.0
+
+[resnet]
+conv_channels = 192
+num_blocks = 40
+
+[cql]
+min_q_weight = 5
+
+[aux]
+next_rank_weight = 0.2
+
+[freeze_bn]
+mortal = false                  # 离线 false；未来在线必须 true
+
+[optim]
+eps = 1e-8
+betas = [0.9, 0.999]
+weight_decay = 0.1
+max_grad_norm = 5.0
+
+[optim.scheduler]
+peak = 6.25e-6
+final = 6.25e-6
+warm_up_steps = 2000
+max_steps = 2000                # 暖启后恒定 1e-4（reset_optimizer 后重新 warmup 2k 步）
+
+[baseline.train]
+device = 'cuda:0'
+enable_compile = false
+state_file = 'checkpoints/reward_ablation/B_rank_pt_aligned/mortal.pth'
+
+[baseline.test]
+device = 'cuda:0'
+enable_compile = false
+state_file = 'checkpoints/mortal_step_000200000.pth'   # 与 B 组一致，best_perf 可比
+
+[online]
+history_window = 50
+enable_compile = false
+submit_round_interval = 10   # 每 10 轮（≈40 局）才推一次新权重，避免策略每 4 局一换
+
+[online.remote]
+host = '127.0.0.1'
+port = 5434
+
+[online.server]
+buffer_dir = '../logs/selfplay_4m_top5/buffer'
+drain_dir = '../logs/selfplay_4m_top5/drain'
+sample_reuse_rate = 0
+sample_reuse_threshold = 0
+capacity = 2000
+force_sequential = false
+
+[1v3]
+seed_key = -1
+games_per_iter = 2000
+iters = 500
+log_dir = 'runs/1v3_s6c'
+
+[1v3.challenger]
+device = 'cuda:0'
+name = 'mortal'
+state_file = 'checkpoints/s6c/mortal.pth'
+stochastic_latent = false
+enable_compile = false
+enable_amp = true
+enable_rule_based_agari_guard = true
+
+[1v3.champion]
+device = 'cuda:0'
+name = 'baseline'
+state_file = 'checkpoints/mortal_step_000200000.pth'
+stochastic_latent = false
+enable_compile = false
+enable_amp = true
+enable_rule_based_agari_guard = true
+
+[1v3.ladder]
+device = 'cuda:0'
+enable_amp = false
+enable_rule_based_agari_guard = true
+
+[1v3.akochan]
+enabled = false
+dir = '/path/to/akochan'
+tactics = '/path/to/tactics.json'
+
+[grp]
+state_file = 'checkpoints/grp_h128.pth'
+
+[grp.network]
+hidden_size = 128
+num_layers = 3
+
+[grp.control]
+device = 'cuda:0'
+enable_cudnn_benchmark = true
+tensorboard_dir = 'runs/grp_v2'
+batch_size = 512
+save_every = 2000
+val_steps = 200
+max_train_steps = 60000
+
+[grp.dataset]
+train_globs = [
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202[2-5]??/**/*.json.gz',
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/20260[1-8]/**/*.json.gz',
+]
+val_globs = [
+    '/mnt/data8/mortal/Mortal/dataset/mjai/houou4/202609/**/*.json.gz',
+]
+file_index = 'indexes/grp_recent_v1.pth'
+file_batch_size = 50
+
+[grp.optim]
+lr = 1e-4

@@ -25,6 +25,7 @@ class MortalEngine:
         boltzmann_epsilon = 0,
         boltzmann_temp = 1,
         top_p = 1,
+        boltzmann_top_k = 0,
     ):
         """extra_features：obs 尾部特征族（'s6c'；默认 '' 行为不变）。
 
@@ -51,6 +52,7 @@ class MortalEngine:
         self.boltzmann_epsilon = boltzmann_epsilon
         self.boltzmann_temp = boltzmann_temp
         self.top_p = top_p
+        self.boltzmann_top_k = int(boltzmann_top_k)
 
     def react_batch(self, obs, masks, invisible_obs):
         try:
@@ -97,6 +99,14 @@ class MortalEngine:
         if self.boltzmann_epsilon > 0:
             is_greedy = torch.full((batch_size,), 1-self.boltzmann_epsilon, device=self.device).bernoulli().to(torch.bool)
             logits = (q_out / self.boltzmann_temp).masked_fill(~masks, -torch.inf)
+            if self.boltzmann_top_k > 0:
+                # top-k 探索（2026-11-09）：探索动作只从**当前模型自己的 top-k 候选**中抽，
+                # 而不是在全部 ~30 个合法动作上抽。动机：Q 分布本来就平、大量动作近似等价，
+                # 全域采样抽到的多是"稍差"动作（只降低 dqn_loss，不产生新策略）；
+                # 限定 top-k 则把反事实样本集中在"质量相近"的动作上，单位样本信息量更高。
+                k = min(self.boltzmann_top_k, logits.size(-1))
+                kth = logits.topk(k, dim=-1).values[:, -1:]
+                logits = logits.masked_fill(logits < kth, -torch.inf)
             sampled = sample_top_p(logits, self.top_p)
             actions = torch.where(is_greedy, q_out.argmax(-1), sampled)
         else:

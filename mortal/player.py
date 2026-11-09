@@ -152,6 +152,12 @@ class TrainPlayer:
         self.boltzmann_epsilon = cfg['boltzmann_epsilon']
         self.boltzmann_temp = cfg['boltzmann_temp']
         self.top_p = cfg['top_p']
+        # top-k 探索（2026-11-09）：0 = 旧行为（在全部合法动作上采样）；>0 = 只在当前模型的
+        # top-k 候选里抽。后者把反事实样本集中在"质量相近"的动作上。
+        self.boltzmann_top_k = int(cfg.get('boltzmann_top_k', 0))
+        if self.boltzmann_top_k > 0:
+            logging.info(f'[train_play] top-k 探索：k={self.boltzmann_top_k}、'
+                         f'eps={self.boltzmann_epsilon}、temp={self.boltzmann_temp}')
 
         self.repeats = cfg['repeats']
         self.repeat_counter = 0
@@ -166,6 +172,7 @@ class TrainPlayer:
             boltzmann_epsilon = self.boltzmann_epsilon,
             boltzmann_temp = self.boltzmann_temp,
             top_p = self.top_p,
+            boltzmann_top_k = self.boltzmann_top_k,
             device = device,
             enable_amp = True,
             extra_features = self.chal_extra_features,

@@ -31,6 +31,7 @@ class FileDatasetsIter(IterableDataset):
         always_include_kan_select = True,
         extra_features = '',
         filter_invalid_actions = False,
+        seed = None,
     ):
         """reward_mode（2026-10-12 加，对应 NEXT_STEPS_ANALYSIS.md §3.1）：
 
@@ -91,6 +92,12 @@ class FileDatasetsIter(IterableDataset):
         self.always_include_kan_select = always_include_kan_select
         self.extra_features = extra_features
         self.filter_invalid_actions = filter_invalid_actions
+        # seed（2026-11-13 加）：
+        #   缺省 None = 旧行为（沿用全局 random 状态，训练时不可预测）。
+        #   给值时在 build_iter 开头重置 random，使 file_list / buffer 的 shuffle 序列可复现。
+        #   用途：AI similarity 诊断需要把同一批局面分别编码成 v3 / v4 obs 后配对比较，
+        #   两个 iter 必须吐出逐位相同的样本顺序。
+        self.seed = seed
         self.n_filtered = 0
         self.iterator = None
 
@@ -107,6 +114,9 @@ class FileDatasetsIter(IterableDataset):
         return desc
 
     def build_iter(self):
+        # 固定随机源（仅当显式传入 seed；None 时与旧行为完全一致）
+        if self.seed is not None:
+            random.seed(self.seed)
         # do not put it in __init__, it won't work on Windows
         self.grp = GRP(**config['grp']['network'])
         grp_state = torch.load(config['grp']['state_file'], weights_only=True, map_location=torch.device('cpu'))

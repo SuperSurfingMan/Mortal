@@ -124,3 +124,6 @@ mortal/config.style_*.toml
 # local_shape 的正式缓存已在 tools/read_model/local_shape/.gitignore（.cache/、.cache_p2/）；
 # 这里是调试时写进 mortal/ 的 smoke 副本，属运行期产物，不入库。
 mortal/local_shape_cache*/
+
+# ---- 本项目追加（2026-11-13）：本地交付/传输包（zip 与解包目录不入库）----
+/mortal/deliver/

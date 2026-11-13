@@ -1,14 +1,15 @@
-"""AI similarity 诊断：本项目 S6c（v4 + 2 行 s6c）vs 官方血缘 Mortal v3（v3 obs 934 通道）。
+"""AI similarity 诊断：本项目 S6c（v4 + 2 行 s6c）vs 社区分发的 Mortal v3 权重（v3 obs 934 通道）。
 
 背景与口径
 ----------
 社区模型卡（`VoidShine/mortal-298k`）报 "AI similarity 83%~92% on mjai.ekyu.moe"，
 那是把自家模型牌谱提交到官方在线服务、读报告里的「与 Mortal 的一致率」；官方不公开权重。
-HF 上有官方血缘的 v3 权重（`hhim8826/mortal3-b40c192`：v3 / 192ch / 40blocks / 10.77M）。
+HF 上的 `hhim8826/mortal3-b40c192`（v3 / 192ch / 40blocks / 10.77M）是**个人发布、第三方重打包** 的 v3 权重（**非官方，来源未证实**），下文称 **v3-ref**；
+详见 memory/AI_SIMILARITY_20261113.md §2.1。
 
 本脚本用**更严格的本地口径**：同一批人类 holdout、同一批决策点，两模型各出 argmax：
-  - agree   = argmax(S6c) == argmax(v3)              ← 我们在不在官方谱系上
-  - top1_x  = argmax(x) == 人类动作                   ← 谁更接近人类
+  - agree   = argmax(S6c) == argmax(v3-ref)            ← 两个 v3/v4 实现是否收敛到同一解
+  - top1_x  = argmax(x) == 人类动作                    ← 谁更接近人类
   - 分歧样本中谁更常与人类一致（附 McNemar 检验）      ← 分歧处谁对
 
 实现要点：v3 与 v4 的 obs 编码走不同分支（不是子集关系），且 FileDatasetsIter 的

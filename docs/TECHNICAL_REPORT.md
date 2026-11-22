@@ -57,7 +57,7 @@ mjai 是一种事件流格式的牌谱：一局牌被记录为 `{"type":"tsumo",
 
 | 符号 | 含义 | 本项目中的对应 |
 |---|---|---|
-| \(s \in \mathcal{S}\) | 状态 | 某决策时刻的完整可观测局面（编码为 128 通道特征平面） |
+| \(s \in \mathcal{S}\) | 状态 | 某决策时刻的完整可观测局面（编码为 1012 通道 × 34 列特征平面） |
 | \(a \in \mathcal{A}\) | 动作 | 46 维动作空间中的一个（见 §4.3） |
 | \(r\) | 奖励 | 每局结束时的期望点差（见 §6） |
 | \(\gamma\) | 折扣因子 | 0.997（iql 模式） |
@@ -86,14 +86,14 @@ mjai 是一种事件流格式的牌谱：一局牌被记录为 `{"type":"tsumo",
 │  mortal/  (Python + PyTorch)                                 │
 │    dataloader.py   样本组装：奖励、折扣计数、next_obs          │
 │    model.py        Brain(ResNet) + DQN 头 + GRP + VHead      │
-│    train.py        训练循环与损失函数（cql_mc / iql 两套）     │
+│    train.py        训练循环与损失函数（cql_mc / iql / bc_style 三套）│
 │    player.py       对局推演（AI 实战）                        │
 │    ladder.py       配对对抗评估                               │
 │    train_grp.py    GRP 模型训练（顺位预测器）                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**为什么用 Rust 写数据引擎？** 一个 8 人局牌谱要重放出上千个决策点，每个决策点要维护四家的手牌/牌河/副露状态并编码成上百个通道的特征平面——这是 CPU 密集型计算，Rust 的性能使数据管道跟得上 GPU 的训练速度。
+**为什么用 Rust 写数据引擎？** 一副 4 人牌谱要重放出上千个决策点，每个决策点要维护四家的手牌/牌河/副露状态并编码成上百个通道的特征平面——这是 CPU 密集型计算，Rust 的性能使数据管道跟得上 GPU 的训练速度。
 
 ---
 
@@ -117,14 +117,14 @@ mjai 是一种事件流格式的牌谱：一局牌被记录为 `{"type":"tsumo",
 
 | 字段 | 说明 |
 |---|---|
-| `obs` | 玩家视角特征平面（version 4：128 通道 × 34 列） |
+| `obs` | 玩家视角特征平面（version 4：1012 通道 × 34 列） |
 | `actions[i]` | label ∈ [0, 46) |
 | `masks[i]` | 合法动作布尔掩码 |
 | `at_kyoku[i]` | 该决策点属于第几局 |
 | `dones[i]` | 是否局边界（下一条目进入新局） |
 | `apply_gamma[i]` | 该动作是否"消耗一个巡目"（参与折扣计数，判据 `label ≤ 37`） |
 
-**视角增强**：同一局牌会为 4 个座位各生成一套数据（4 个视角），还可加"换位/换局序"增广（augmentation），这使有效样本量 ×4 以上。
+**视角增强**：同一局牌会为 4 个座位各生成一套数据（4 个视角），还可加"万子↔筒子花色互换"增广（augmentation，实现见 [libriichi/src/tile.rs](libriichi/src/tile.rs) 的 `Tile::augment` 与 [libriichi/src/mjai/event.rs](libriichi/src/mjai/event.rs) 的 `Event::augment`），这使有效样本量 ×4 以上。
 
 ### 4.3 动作空间（46 维）
 
@@ -136,7 +136,7 @@ mjai 是一种事件流格式的牌谱：一局牌被记录为 `{"type":"tsumo",
 | — | — | 44 | 九种九牌流局 |
 | — | — | 45 | 主动 pass（不鸣牌/不和） |
 
-细节：立直后必打的那张牌在**立直宣告决策点**已隐含确定，不产生额外决策点；多候选杠时额外生成一个"杠选牌"决策点（`at_kan_select=True`，label 为牌 id 0–36）。
+细节：立直后必打的那张牌在**立直宣告决策点**已隐含确定，不产生额外决策点；杠会额外生成一个"杠选牌"决策点（`at_kan_select=True`，label 为牌 id 0–36）——训练管线默认对**所有**杠（含单候选）都生成该条目（`always_include_kan_select=True`，见 [mortal/dataloader.py](mortal/dataloader.py)），对局部署侧默认仅多候选杠出现。
 
 ---
 
@@ -154,7 +154,7 @@ mjai 是一种事件流格式的牌谱：一局牌被记录为 `{"type":"tsumo",
 \phi_\theta(s) \in \mathbb{R}^{1024}
 \]
 
-- 输入：\(\mathbb{R}^{128 \times 34}\) 特征平面；
+- 输入：\(\mathbb{R}^{1012 \times 34}\) 特征平面；
 - 40 个预激活 **1D ResNet 块**（每块两层 \(3\times1\) 卷积 + BN + Mish 激活），每块带**通道注意力**（SE 风格：全局平均+最大池化 → 两层 MLP → sigmoid 门控）；
 - 尾部：卷积降到 32 通道 → Flatten → 线性层得 1024 维隐向量。
 
@@ -166,7 +166,7 @@ Q_\theta(s,a) = V(s) + A(s,a) - \frac{1}{|\mathcal{A}_{\text{legal}}(s)|}\sum_{a
 
 其中非法动作被填 \(-\infty\)。**通俗地说**：Q 值 = "这个局面本身值多少"（V）+ "这个动作相对平均好在哪"（A）。 duel 结构让网络可以"先评估局面、再比较动作"，学起来更稳。策略 \(\pi_\theta\) 直接取 Q 的 softmax（AWR 阶段）或 argmax（对局阶段）。
 
-**VHead**（Stage B 新增）：\(V_\eta(s)\)，结构 Linear(1024→256)→Mish→Linear(256→1)。（IQL 路线关闭后该头仅随 `objective='iql'` 存档保留，主链 cql_mc 不实例化。）
+**VHead**（Stage B 新增）：\(V_\eta(s)\)，结构 Linear(1024→256)→Mish→Linear(256→1)。（实例化条件：`objective='iql'`，或 cql_mc 开启 baseline 降方差路径 `baseline_v_weight>0`——见 [mortal/train.py](mortal/train.py)。）
 
 **GRP（Game Rank Predictor，`GRP` 类见 [mortal/model.py](mortal/model.py)，训练脚本 [mortal/train_grp.py](mortal/train_grp.py)）**：GRU 循环网络（全程 float64；当前正式轮 hidden_size=128、num_layers=3）。输入是**按局的前缀序列**（每个训练样本取 `feature[:i+1]`，即"已看到前 i+1 个局的开局形势"），每步一个 7 维向量（`GRP_SIZE=7`，[libriichi/src/consts.rs](libriichi/src/consts.rs)，由 [libriichi/src/dataset/grp.rs](libriichi/src/dataset/grp.rs) 从 `StartKyoku` 事件构造）：
 
@@ -256,7 +256,7 @@ L(\theta) = \tfrac{1}{2}\,\mathbb{E}_{\mathcal{D}}\Big[\big(Q_\theta(s,a) - \gam
 
 **严格版**：数据 \(\mathcal{D} = \{(s_t, a_t, r_t, s_{t+1}, d_t)\}\)（\(r_t\) 仅局边界非零，\(d_t\) = 终端标志），\(\gamma = 0.997\)。
 
-**① \(L_Q\) —— Bellman 回归（[train.py#L560-L569](mortal/train.py#L560-L569)）**
+**① \(L_Q\) —— Bellman 回归（[train.py#L852-L905](mortal/train.py#L852-L905)）**
 
 \[
 L_Q(\theta) = \tfrac{1}{2}\,\mathbb{E}_{\mathcal{D}}\Big[\big(Q_\theta(s,a) - y\big)^2\Big],\qquad
@@ -286,11 +286,11 @@ w(s,a) \propto \exp\!\Big(\frac{Q_\theta(s,a) - V_\eta(s)}{\beta}\Big),\;\; \bet
 
 - \(\tau \to 1\)：\(V\) 是 \(\bar{Q}\) 在数据动作上的高分位 ≈ "近似取 max"（强乐观）；
 - \(\tau = 0.5\)：权重对称，\(L_V\) 退化为普通 L2 回归，\(V = \mathbb{E}_{a\sim\pi_\beta}[\bar{Q}(s,a)]\)（行为均值）；
-- \(\tau > 0.5\) 的不对称有一个**实测出的坑**：当价值在增长期，\(V\) 持续落后于目标 → 残差系统性为正 → 被权重 \(\tau\) 强势上拉、负残差只被 \(1-\tau\) 弱势下拉 → 价值尺度**指数漂移**（v2 用 \(\tau=0.7\)：目标尺度每 ~3.2 万步翻一倍，10 万步膨胀 60 倍，模型被毁；\(\tau=0.6\) 只减半、仍发散；**唯一验证的稳定修复是 \(\tau=0.5\)**，v3 采用）。
+- \(\tau > 0.5\) 的不对称有一个**实测出的坑**：当价值在增长期，\(V\) 持续落后于目标 → 残差系统性为正 → 被权重 \(\tau\) 强势上拉、负残差只被 \(1-\tau\) 弱势下拉 → 价值尺度**指数漂移**（v2 用 \(\tau=0.7\)：目标尺度每 ~3.2 万步翻一倍，105k 步内 q_target 中位数从 +0.6 涨到 +61，模型被毁；\(\tau=0.6\) 只减半、仍发散；**唯一验证的稳定修复是 \(\tau=0.5\)**，v3 采用）。
 
 > **通俗总结 v3**：\(\tau=0.5\) 时 IQL 的"乐观取高分位"特性被完全关闭，剩下的本质是"fitted-Q 价值迭代 + 优势加权模仿"——先用 Bellman 方程把价值沿决策链传播（这解决了"看不到未来"），再用优势权重挑出"人类选择中相对更好的那些"来加强模仿（这提供了超越行为克隆的机制）。代价是放弃了"隐式 max"的乐观性——这正是本轮实验要回答的科学问题：**在稳定的训练条件下，离线价值学习能否带来强度增益？**
 
-> **2026-10-16 判定（答案：不能）**：v3 干净轮（τ=0.5）双向 ladder 5000 sets + block bootstrap 给出 **δ=+0.646，95%CI[−0.35,+1.63]（t=+1.09）**——按预注册守则（CI 下界 >0 才算赢）判"无结论"，与 Stage A 合并，**目标形式改造两子路线全部关闭**。归因：基线 B 的局内 MC 回传本就近全权重（每局 16 个决策点、局内折扣 0.997¹⁶≈0.95），跨局共同分量（std≈1.2）被全场 ~190 个决策摊薄（单决策 SNR≈1:10），且 AWR 在近最优专家数据（top1 0.8167）上权重≈均匀——瓶颈在数据分布的信息天花板，不在目标函数。holdout top1 0.8167 为历轮最高但未转化为强度，再次印证"更像人 ≠ 更能赢"。
+> **2026-10-16 判定（答案：不能）**：v3 干净轮（τ=0.5）双向 ladder 5000 sets + block bootstrap 给出 **δ=+0.646，bootstrap 95%CI[−0.35,+1.63]**——按预注册守则（CI 下界 >0 才算赢）判"无结论"，与 Stage A 合并，**目标形式改造两子路线全部关闭**。归因：基线 B 的局内 MC 回传本就近全权重（每局 16 个决策点、局内折扣 0.997¹⁶≈0.95），跨局共同分量（std≈1.2）被全场 ~190 个决策摊薄（单决策 SNR≈1:10），且 AWR 在近最优专家数据（top1 0.8167）上权重≈均匀——瓶颈在数据分布的信息天花板，不在目标函数。holdout top1 0.8167 为历轮最高但未转化为强度，再次印证"更像人 ≠ 更能赢"。
 
 ### 7.4 三代目标一览表
 

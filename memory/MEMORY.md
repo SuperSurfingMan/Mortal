@@ -1332,7 +1332,7 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 - ⚠️ **本表的 S6c 行是「本地 mask>=2 全量」口径，与 4.1c 的 `reviewed` 集合
   不是同一批点**（分母巧合都是 7791，但本地重放会多出 31 个「碰/杠 vs 跳过」点）。
   同点集重算见 **§3.22c**：S6c **80.349%**，差值 **+1.93pp**（本表 +2.20pp 偏乐观 0.27pp）。
-- **产物**：`mortal/deliver/`（`results.csv` 48 行、`reports/` 48 份 HTML、`ai41c_summary.json`；已 gitignore）。
+- **产物**：`mortal/deliver/`（顶层 `ai41c_summary.json`；`results.csv` 48 行与 `reports/` 48 份 HTML 在 `mortal/deliver/_extract/ai_similarity_kit/` 下；已 gitignore）。
 
 #### 3.22c 4.1c 报告里的 Q 表：两个模型"价值观"高度重合，但蒸馏价值低（2026-11-14）
 
@@ -1427,7 +1427,7 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 - **现役最强**：`mortal/checkpoints/s6c/mortal.pth`（956k，v4 obs + 2 行速度特征；**守卫 λ=0**）。换代依据 δ=+0.422、CI[+0.15,+0.69]（§3.11）。
 - **判定基线**：B/756k（`reward_ablation/B_rank_pt_aligned/mortal.pth`，top400_v2 + `[2,1,0,−3]` + aug）。
 - **绝对锚点已测**：anchor3 两臂共 2,388 局（S6c+λ=10 1,588 / S6c 无守卫 800）⇒ pooled **+0.00 ± 1.68**（§3.16）。
-- **读牌归档**：A2c best@153k（`tools/read_model/checkpoints/`），真实收敛 ≈2.060；不再注入主模型。
+- **读牌归档**：A2c best@153k（`mortal/read_model_v2s_a2c/`），真实收敛 ≈2.060；不再注入主模型。
 - **自博弈产物（全部未采纳，保留复核）**：`selfplay_m5/`（含 `mortal_COLLAPSED_1140000.pth` 坍塌证据）、`selfplay_lr/`、`selfplay_4m{,_expl,_top5}/`、`selfplay_top5_bl/`、`selfplay_top5_blpool/`、`selfplay_blpool_e10/`、`selfplay_top5_blcql/`（各目录仅留 `mortal.pth` + 必要的 960k/970k/1100k 快照；见 §6.3b）。
 - **其它归档**：`tierA/1,140k`、`tierA2/1,340k`（档 A）、`strength_probe/1,056k`（数据质量加权）、`og/`（Oracle Guiding 1,056k）。
 - **判定牌谱**：保留在对应 `ladder/` 或 `logs/ladder_r*/`，可事后重算/bootstrap；路径台账见 §6.3。
@@ -1523,7 +1523,7 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | `train/` | 主模型训练/轮次链 | `main_r{2..5}_train`、`round{4,5}_chain`、`round4_resume` |
 | `grp/` | GRP 训练/探针 | `grp_train`、`grp_h128_train`、`grp_capacity` |
 | `read_model/` | 读牌模型训练/守护 | `read_model_v{1,2,2s,2x}_{train,tmux}`、`a2c_accept_20261021/` |
-| `iql/` | IQL 全链路（含 `iql_beta/` 探针） | `iql_{a,b,b_v2,b_v3,probe}_chain`、`status_iql_*`、`diag_iql_reward` |
+| `iql/` | IQL 全链路（β 扫描在兄弟目录 `iql_beta/`） | `iql_{a,b,b_v2,b_v3,probe}_chain`、`status_iql_*`、`diag_iql_reward` |
 | `eval/` | ladder/holdout/bootstrap | `ladder_*`、`holdout_r{3,4}`、`bootstrap_r{3,4}` |
 | `smoke/` | 冒烟 | `smoke_*`、`smoke_v{2,3}_*` |
 | `check/` | 代码/配置/环境检查 | `cfg_*_check`、`gamma_check_*`、`envcheck_selftest` |
@@ -1538,9 +1538,9 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | `mix_v1/` | D1 数据混入 | `SUMMARY.md`、`ladder/` |
 | `d2_2026/` | D2 数据补量 | `SUMMARY.md`、`ladder/` |
 | `anchor1/` | akochan 锚点（按 tag） | `p0.log`…`p5.log` |
-| `arena/` | 自博弈两模型对打（位置对称 `py_vs_py`，每组 2000 局） | `arena/b2_s6c_r1.log`、`arena/c_a_r2.log` |
+| `arena/` | 自博弈两模型对打（位置对称 `py_vs_py`，每组 2000 局；**在仓库根 `logs/`，不在 mortal/logs/**） | `arena/b2_s6c_r1.log`、`arena/c_a_r2.log` |
 | `og/` | Oracle Guiding 链 | `og_probe.log`、`holdout.log` |
-| `selfplay_{m5,lr,4m,4m_expl,4m_top5,top5_bl,blpool_e10,top5_blcql}/` | 在线自博弈各臂 | `trainer*.log`、`client_w*.log`、`holdout.log`、`server.log` |
+| `selfplay{,_smoke,_test,_lr,_4m,_4m_expl,_4m_top5,_top5_bl,_top5_blpool,_blpool_e10,_top5_blcql}/` | 在线/离线自博弈各臂（**在仓库根 `logs/`，不在 mortal/logs/**；档 A 数据在 `logs/selfplay/`） | `trainer*.log`、`client_w*.log`、`holdout.log`、`server.log` |
 | `monitor/` | 训练监控/估算 | `progress_*`、`r2_monitor` |
 | `misc/` | 其它 | `pack_zip`、`tensorboard` |
 | `s6a_isolated/code/logs/` | S6a 隔离区（不在 `mortal/logs/`） | `s6a_chain.log`、`s6a/{train,holdout,ladder_summary}.log` |
@@ -1583,7 +1583,7 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | `tools/training/grp_quality_probe.py` | GRP 分位置 hit@1/3/6/9/末、mae、nll |
 | `mortal/run_grp_capacity.sh` | GRP 容量实验（注意 `grp_best.pth` 会被不同尺寸互盖）**（已归档 10-28）** |
 | `tools/training/dump_curves.py` / `check_selection_stats.py` / `paired_selection_diff.py` | 曲线/解析交叉校验/同牌山配对差 |
-| `tools/training/make_round{3,4,5}_cfg.sh` | 从上一轮配置派生下一轮 |
+| `tools/training/make_round{3,4}_cfg.sh` | 从上一轮配置派生下一轮（round5 配置为手改，无生成脚本） |
 | `mortal/run_round4.sh` / `run_round5.sh` | 端到端链：env_check→暖启→训练→双向判定→汇总 |
 | `tools/training/smoke_round4_augmentation.py` | 启前验白名单+增强样本守恒 |
 | `mortal/launch_round3.sh` / `run_r2_ladder.sh` / `run_ladder_r3.sh` | tmux 长跑入口（内建 env 重置）**（均已归档 10-28）** |
@@ -1613,8 +1613,8 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | 推理/实验钩子 | `mortal/mortal.py`（推理入口，**守卫默认 λ=0**，`MORTAL_GUARD_LAMBDA` 可开）、`defense_guard.py`、`ev_rerank.py`、`s6c_features.py`、`one_vs_three.py`（含 `py_vs_ako`）、`agg_anchor.py`、`diag_q_rank.py`（Q 排序诊断）、`holdout_metrics.py`、`behavior_profile.py`（在 `tools/`） |
 | Python 入口 | `mortal/server.py`/`client.py`（**在线自博弈已跑通**，§3.20；默认 `online=false`）、`train_grp.py`、`start_anchor3.sh`（锚点一键） |
 | Rust 核心 | `libriichi/src/{lib.rs,consts.rs,state/,dataset/,arena/,algo/,mjai/,agent/,bin/}`（`agent/akochan.rs` 为锚点客户端） |
-| 配置（现存 **59**：历史 15 + 自博弈 11 + anchor3 22 + OG/strength 4 + style 5 等） | 主链：`config.round{2,3,4,5}.toml`、`config.s6c{,_base,_probe,_smoke}.toml`、`config.offline.toml`、`config.grp_h128.toml`；实验：`config.tierA{,2}.toml`、`config.mix_v1.toml`、`config.strength_probe{,_smoke}.toml`、`config.og_{smoke,probe}.toml`、`config.iql_b_v{2,3}.toml`；在线：`config.selfplay_{smoke,test,lr,4m,4m_smoke,4m_expl,4m_top5,top5_bl,top5_blpool,blpool_e10,top5_blcql}.toml`；锚点：`config.anchor_ako.toml` + `config.anchor3{,_noguard}{,_p0..p9}.toml`；生成物 `config.style_*.toml` 5 个 |
-| 脚本（现存 11） | `mortal/run_round{4,5}.sh`、`run_s6c.sh`、`run_s6c_chain.sh`、`run_guard_s6c_wave2.sh`、`ladder_arm.sh`、`run_anchor.sh`、`start_anchor3.sh`、`run_og.sh`、`run_strength_probe.sh`、`run_selfplay_8k.sh` |
+| 配置（现存 **59**：主链/单线实验 19 + 自博弈 11 + anchor3 22 + anchor_ako 1 + style 5 + example 1） | 主链：`config.round{2,3,4,5}.toml`、`config.s6c{,_base,_probe,_smoke}.toml`、`config.offline.toml`、`config.grp_h128.toml`；实验：`config.tierA{,2}.toml`、`config.mix_v1.toml`、`config.strength_probe{,_smoke}.toml`、`config.og_{smoke,probe}.toml`、`config.iql_b_v{2,3}.toml`；在线：`config.selfplay_{smoke,test,lr,4m,4m_smoke,4m_expl,4m_top5,top5_bl,top5_blpool,blpool_e10,top5_blcql}.toml`；锚点：`config.anchor_ako.toml` + `config.anchor3_guard.toml`、`config.anchor3_noguard.toml`、`config.anchor3{,_noguard}_p{0..9}.toml`；生成物 `config.style_*.toml` 5 个 |
+| 脚本（现存 12） | `mortal/run_round{4,5}.sh`、`run_s6c.sh`、`run_s6c_chain.sh`、`run_guard_s6c_wave2.sh`、`ladder_arm.sh`、`run_anchor.sh`、`start_anchor3.sh`、`run_og.sh`、`run_strength_probe.sh`、`run_selfplay_8k.sh`、`watch_arm2.sh` |
 | 文档 | `memory/MEMORY.md`（本文）、`memory/NEXT_STEPS_ANALYSIS.md`、`tools/training/TRAINING_MANUAL.md`、`tools/training/ENV_SETUP_P100.md`、`tools/tenhou_data/TASKLIST.md`、`tools/read_model/docs/README.md`、`tools/akochan_build_notes.md` |
 | 数据索引 | `dataset/index/{player_ratings_*.csv,top_players_*.txt,repair_names_report.json}`；`mortal/indexes/*.pth` |
 
@@ -1638,7 +1638,7 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | `mortal/train_grp.py` | `grp.control.max_train_steps`、`grp_best.pth` 按 val loss、固定验证种子、`est. %` 日志 |
 | `libriichi/src/agent/akochan.rs` | 新增：akochan pipe 客户端（`sent_new` 判定、非触发点不读） |
 | `libriichi/src/dataset/gameplay.rs` | `apply_gamma` 注释改为实测口径（仅注释，无行为变更） |
-| `libriichi/src/consts.rs` / `state/obs_repr.rs` | S6a v5（仅隔离区）：`MAX_VERSION=5`、`obs_shape(5)=(1018,34)`、6 行 `encode_urgency` |
+| `libriichi/src/consts.rs` / `state/obs_repr.rs` | S6a v5（**仅隔离区**，经 `s6a_isolated/patches/v5_obs_features.patch` 应用；共享树已还原 v4）：`MAX_VERSION=5`、`obs_shape(5)=(1018,34)`、6 行 `encode_urgency` |
 | 配置/脚本 | `config.round{2,3,4,5}.toml`、`config.iql_{a,b,b_v2,b_v3}.toml`、`config.s6c*.toml`、各 `run_*.sh`、`prepare_*.py`、`test_*.py`；S6b 注入代码曾短暂入 main，10-22 已回退（`7bb5b7d`，5 个 py 恢复 `3a793a1`）；此后 S6c/守卫又各自改动，当前文件不等于 `3a793a1` |
 | 读牌模型 | 全部资产在 `tools/read_model/`（对 `mortal/`、`libriichi/` **零改动**）；代码改动台账见该目录 `README.md` §15.2 |
 
@@ -1650,7 +1650,7 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | `dataset/mjai/houou4_names/` | 2026 names 补丁树（130,407 文件） | 607.6 MiB |
 | `dataset/tenhou_hf/` | 18 个 HF 年度 tar | 17 GB |
 | `dataset/raw/`、`dataset/index/` | 2026 原始 mjlog；清单/榜单/manifest | 1.2 GB / 197 MB |
-| `mortal/checkpoints/` | R1–R5、reward_ablation A/B/C、hp_ablation×3、iql_a、iql_b_v2/v3、grp×3、baseline；每目录只留 `mortal.pth` + `best.pth`（step 快照已于 2026-11-09 清理） | **12 GB / 96 个 .pth** |
+| `mortal/checkpoints/` | R2–R5（R1 无目录，产物为顶层散文件 `mortal.pth`/`best.pth`）、reward_ablation A/B/C、hp_ablation×3、iql_a、iql_b_v2/v3、grp×3、baseline；每目录只留 `mortal.pth` + `best.pth`（step 快照已于 2026-11-09 清理；另 `_ref/` 1 个注明不入库） | **11.2 GB / 96 个 .pth** |
 | `mortal/checkpoints/{s6c,mix_v1,d2_2026}` | S6c 956k+best+init；D1 856k；D2 856k+best（step 快照已清理） | 375 MB / 250 MB / 250 MB |
 | `mortal/checkpoints/inject_s6b/` | S6b 四臂 A0~A3（A1~A3 需 checkout `27632a2`）+ `B756k_v6_init.pth` | 见目录 |
 | `mortal/read_model_bayes/`、`mortal/read_model_v2s_a2b/`、`mortal/read_model_v2s_a2c/`、`mortal/logs/read_model/a2c_accept_20261021/`、`tools/read_model/diagnostics/results/` | 读牌全部产物（Bayes 上界 / A2b 对照 / **A2c 注入基线 best(153k)+last(200k)+train_log.jsonl+三份验收报告** / 验收日志与 A2b 回归 / 诊断 json） | 台账见 README §15.3；json 272 KB |
@@ -1658,13 +1658,13 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | `mortal/logs/ladder_r{2,3,4,5}/`、`mortal/{reward_ablation,hp_ablation,iql_a,iql_b_v2,iql_b_v3}/ladder*/` | 各轮判定牌谱（每轮约 20,000 局） | 每轮 ≈0.8 GB |
 | `mortal/logs/{s6c,mix_v1,d2_2026}/` | 各探针 SUMMARY、holdout、ladder 牌谱与 bootstrap 日志 | ≈0.83 GB 每个 |
 | `mortal/logs/guard_pipeline/` | 守卫剂量曲线各 λ 的双向牌谱/汇总 | 见目录 |
-| `mortal/checkpoints/{tierA,tierA2}/`、`mortal/logs/selfplay/` | 档 A 两轮 ckpt（tierA 1,140k；tierA2 1,340k，**该 step 作为判定对象保留**）；自博弈数据 8 目录共 35,200 半庄（生成种子 700000~715100） | 250 MB / 375 MB / 1.5 GB |
-| `mortal/checkpoints/strength_probe/`、`mortal/indexes/strength_weights_v1.pth` | 数据质量加权探针 ckpt（1,056k + 20k 快照 + best）与权重表（492,810 文件；min avg_pt 分档 ×1/×2/×3，mean 1.350） | 874 MB / 50 MB |
+| `mortal/checkpoints/{tierA,tierA2}/`、`logs/selfplay/`（仓库根） | 档 A 两轮 ckpt（tierA 1,140k；tierA2 1,340k，**该 step 作为判定对象保留**）；自博弈数据 8 目录共 35,200 半庄（生成种子 700000~715100） | 250 MB / 375 MB / 1.5 GB |
+| `mortal/checkpoints/strength_probe/`、`mortal/indexes/strength_weights_v1.pth` | 数据质量加权探针 ckpt（仅 `mortal.pth` + `best.pth`，step 快照已于 2026-11-09 清理）与权重表（492,810 文件；min avg_pt 分档 ×1/×2/×3，mean 1.350） | 250 MB / 50 MB |
 | `mortal/logs/anchor1/` | akochan 锚点 408 局日志（已完成） | 28 KB |
 | `mortal/logs/anchor_ako_*.log` | 早期锚点冒烟/排障日志（t9~t11、full） | 顶层历史，见 §5.3 例外 |
 | `s6a_isolated/code/{checkpoints/s6a,s6a,logs,runs}` | S6a 隔离产物（867k+best+step_800/850k、判定牌谱、TB、链日志） | ≈1 GB |
 | `mortal/logs/tb_archive/` | TB 坏段取证 | 72 KB |
-| `mortal/indexes/` | 各轮文件索引（`main_r2_whitelist_v1.pth` 等） | 248 MB |
+| `mortal/indexes/` | 各轮文件索引（`main_r2_whitelist_v1.pth` 等） | 591 MB |
 | `backups/cleanup_20261028/`、`backups/libriichi_20261025/` | 10-28 归档删除清单 + tar；akochan 改动前源码+.so | 52 KB / 24 MB |
 | `tools/akochan_src/` | akochan 源码与 `system.exe`（`NPROCS=2` 构建） | 124 MB |
 ### 6.3b 空间管理：2026-11-09 清理（释放 21.4 GB）

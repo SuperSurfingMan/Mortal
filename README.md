@@ -63,7 +63,7 @@
 | `mortal/` | Python 训练与推理主代码。原版骨架（`train.py`、`model.py`、`client.py`、`server.py` 等）+ 本地大量扩展：`defense_guard.py`、`guard_risk.py`、`guard_state.py`（推理期守卫）、`ev_rerank.py`、`selfplay_gen.py`、`ladder.py`、`holdout_metrics.py`、`diag_ai_similarity.py`、`one_vs_three.py`、59 个实验配置 `config.*.toml`、各代模型权重 `checkpoints/`。**训练必须在 `mortal/` 目录下执行** | 原版骨架 + 本地扩展 |
 | `tools/` | 实验工具集：`read_model/`（读牌模型全链 + 单一维护的 README）、`style_ft/`（风格模仿）、`training/`（编排）、`data_audit/`、`oracle_*`、`ei_*`（搜索线）、akochan 对接（`akochan_pipe_shim.py` 等）、`mjai_score.py`、`label_ceiling.py` 等 | 本地新增 |
 | `s6a_isolated/` | S6a 隔离实验工作区，「完全隔离工作流」的范例与 v5 复现路径（patches + 首层手术工具） | 本地新增 |
-| `memory/` | 项目上下文记忆：`MEMORY.md`（§0 快速接手 / 结论 / 坑位台账）+ 各线 `DESIGN_*.md` | 本地新增 |
+| `memory/` | 项目上下文记忆：`MEMORY.md`（§0 快速接手 / 结论 / 坑位台账）+ `DESIGNS.md`（7 篇实验设计合订）+ `REPORTS.md`（4 篇专项报告合订） | 本地新增 |
 | `docs/` | `TECHNICAL_REPORT.md` 技术原理报告（本地新增）+ 原版 mdBook 用户文档（`book.toml`、`src/`） | 原版 + 本地 |
 | `log-viewer/` | mjai 牌谱查看器（静态页面） | 原版 |
 | `exe-wrapper/` | Windows 可执行文件包装器（Cargo workspace 成员） | 原版 |

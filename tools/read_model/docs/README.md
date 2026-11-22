@@ -125,7 +125,7 @@ token」的 alloc_ce 仅 **+0.0005**、删「立直前」**+0.0819**（R=0.006�
 > **最终定位**：P2c = 立直层最优读牌器（+5pp）；P1/P2b = 概率校准组件（CE −0.18 nats）；
 > P2a 全面最差，立直显式特征路线证伪。**不重启 200k。**
 >
-> 详见 `local_shape/README.md`（§5b~§5e）、`memory/DESIGN_local_shape_cond_20261103.md`，
+> 详见 `local_shape/README.md`（§5b~§5e）、`memory/DESIGNS.md` §6，
 > 以及 `results/{P0,P1,P2,P2B,P2C,BAYES_CEILING,P0A_BAYES_COND,SEMANTIC_LABEL,COND_RECHECK}_REPORT.md`。
 
 ## 0. 交付物与边界

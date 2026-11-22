@@ -5,7 +5,7 @@
 社区模型卡（`VoidShine/mortal-298k`）报 "AI similarity 83%~92% on mjai.ekyu.moe"，
 那是把自家模型牌谱提交到官方在线服务、读报告里的「与 Mortal 的一致率」；官方不公开权重。
 HF 上的 `hhim8826/mortal3-b40c192`（v3 / 192ch / 40blocks / 10.77M）是**个人发布、第三方重打包** 的 v3 权重（**非官方，来源未证实**），下文称 **v3-ref**；
-详见 memory/AI_SIMILARITY_20261113.md §2.1。
+详见 memory/REPORTS.md §3（原 AI_SIMILARITY_20261113）§2.1。
 
 本脚本用**更严格的本地口径**：同一批人类 holdout、同一批决策点，两模型各出 argmax：
   - agree   = argmax(S6c) == argmax(v3-ref)            ← 两个 v3/v4 实现是否收敛到同一解

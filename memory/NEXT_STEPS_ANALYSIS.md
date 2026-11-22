@@ -161,7 +161,7 @@ Mortal 侧：`riichi.Stat`（与训练日志 `behavior:` 行、ladder 的 `run_m
 
 > ⚠️ **旧口径已证伪**：仓库里长期流传的「人类副露 48.26% / Mortal 31.09% ⇒ 模型太保守、弃和不足」是**跨口径比较**（48.26% 可能混了副露次数或其他定义）。按 `stat.rs` 的统一定义，人类副露局占比是 **32.63%**。
 > 历史数字（B/756k，旧口径，仅作参考、不可与上表横比）：和了 22.28% / 立直 17.94% / 副露 45.66% / 放铳 14.05% / 流局 10.9%；守卫 λ=10 把放铳压到 11.1%、和了降到 20.7%。
-> 详见 [`BEHAVIOR_PROFILE_20261107.md`](BEHAVIOR_PROFILE_20261107.md)、MEMORY §2.5。
+> 详见 [`REPORTS.md`](REPORTS.md) §2、MEMORY §2.5。
 
 ### 3.3 相对绝对锚点：**≈ 0（2026-11-07 已测定）**
 
@@ -201,7 +201,7 @@ Mortal 侧：`riichi.Stat`（与训练日志 `behavior:` 行、ladder 的 `run_m
 
 **实践含义**：别再为了「把 top1 拉回 0.8167」而做改动——那是向拟人度方向优化，与强度目标相反。
 
-证据：MEMORY §3.22 / §3.22b、`AI_SIMILARITY_20261113.md` §3.2、`mortal/deliver/ai41c_summary.json`。
+证据：MEMORY §3.22 / §3.22b、`REPORTS.md` §3（§3.2）、`mortal/deliver/ai41c_summary.json`。
 
 ---
 
@@ -250,7 +250,7 @@ Mortal 侧：`riichi.Stat`（与训练日志 `behavior:` 行、ladder 的 `run_m
 
 - **做法**：`invisible_obs` 拼进网络输入；α 调度（10k 步保持 1 → 50k 步线性→ 0 → 后 40k 步 α=0）；推理不喂（engine 自动全零）。
 - **状态（2026-11-04）**：✅ 实现+冒烟；❌ **100k 探针 GATE FAIL**——见
-  [`DESIGN_oracle_guiding_20261103.md`](DESIGN_oracle_guiding_20261103.md) §5b。
+  [`DESIGNS.md`](DESIGNS.md) §7（§5b）。
   手术透明性逐位一致；α=0 终点 holdout top1 **0.8118（−0.49pp，容差 −0.3pp）**，
   dqn_loss 0.3529（**−2.3%**，这一半通过）；5 个 checkpoint 均值 −0.28pp，压在容差线。
   但 **行为明显转向防守**（1,050k test_play：放铳 12.27%→**9.83%**、
@@ -337,8 +337,8 @@ Mortal 侧：`riichi.Stat`（与训练日志 `behavior:` 行、ladder 的 `run_m
 | 文献：Tjong | CAAI Trans. Intell. Technol. 9(4):982-995, 2024 |
 | 文献：Mahjax / 吞吐参照 | https://arxiv.org/html/2605.20577v1 |
 | 文献：ReBeL / Student of Games | NeurIPS 2020 / Science Advances 2023 |
-| 档 A 自博弈（已结案） | `memory/DESIGN_tierA_selfplay_20261029.md` §7、MEMORY §3.18 |
-| 数据质量加权（已结案） | `memory/DESIGN_strength_weight_20261102.md`、MEMORY §3.19 |
+| 档 A 自博弈（已结案） | `memory/DESIGNS.md` §3（§7）、MEMORY §3.18 |
+| 数据质量加权（已结案） | `memory/DESIGNS.md` §5、MEMORY §3.19 |
 | 守卫 G3 实现 | `mortal/defense_guard.py`、`mortal/mortal.py`、`mortal/engine.py` |
 | S6c 特征/复判 | `mortal/s6c_features.py`、`mortal/run_s6c.sh`、`config.s6c.toml` |
 | ladder 标准臂 | `mortal/ladder_arm.sh`、`mortal/ladder.py`、`tools/training/agg_ladder.py` |

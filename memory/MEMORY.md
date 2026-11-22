@@ -30,7 +30,7 @@
 
 - **只采纳过两个增益**：R2「top400 + GRP h128」（**+2.86±0.59**，§3.3）与 S6c 换代（**+0.422**，CI[+0.15,+0.69]，§3.11）。其余数据 reshuffle、奖励改造、超参、IQL、S6a/S6b、读牌注入、数据扩窗、数据质量加权、守卫 G3、EV 重排、Guard-P2 **全部 null 或负**（§4.1）。
 - **「我们多强」已有答案**：anchor3 打完 **2,388 局**（vs 3×akochan），**avg_pt +0.00 ± 1.68**，CI[−3.3,+3.3] ⇒ **≈ 凤凰场常客平均**（+0.08），距 p95（+5.38）还差 **5.4 pt**（§3.16）；相对同类：与社区分发的 **v3 权重（v3-ref，非官方）** 人类 top1 持平；**2026-11-14 补官方对照**：同 12 局 7,791 点（分母与官方逐局相同）**同点集**下 S6c **80.349%** / v3-ref **80.978%** / **官方 4.1c 78.424%** ⇒ **4.1c 反而更低** ⇒ **一致率衡量拟人度、与强度反向，不能用来排名**（§3.22b/§3.22c）。
-- **「模型太保守」被证伪**：按 `stat.rs` 同一定义实测人类凤凰场（126,288 人·局）——和了 21.14% / 放铳 12.65% / **副露局占比 32.63%** / 立直 18.25% / 流局 16.00%；S6c 四项均在 **±1.6pp** 内。旧的「人类副露 48.26%」是错误口径（§2.5、`BEHAVIOR_PROFILE_20261107.md`）。
+- **「模型太保守」被证伪**：按 `stat.rs` 同一定义实测人类凤凰场（126,288 人·局）——和了 21.14% / 放铳 12.65% / **副露局占比 32.63%** / 立直 18.25% / 流局 16.00%；S6c 四项均在 **±1.6pp** 内。旧的「人类副露 48.26%」是错误口径（§2.5、`REPORTS.md` §2）。
 - **自博弈线彻底关闭**：在线七变体（M5 / 4M / 4M-expl / 4M-top5 / A / B2 / C）+ 档 A 离线两轮，强度**全部等于起点**；机制已查清——真实动作差异 < 单次回报噪声 SD≈0.59（§3.18/§3.20/§3.21e）。
 - **读牌侧已冻结**：A2c 作为归档资产保留，不再注入主模型；S6b 四臂证明「同源信息注入」无行为效应，代码已回退（§3.12）。
 - **「蒸馏官方」也不是出路**：把 4.1c 报告里 7,791 个决策点的**完整 Q 表**全部榨出来后——与 S6c 的 Q 排序相关 **ρ 中位 0.846**、argmax 已 86.4% 一致，剩余分歧中 **68.6% 我们本来就不同意人类**（蒸馏不改变策略），而「教师独有」的 527 点其 gap 中位仅 **0.107**（教师自己也没把握）；样本量只 7,791 点 ≈ 一次训练的 0.008% ⇒ **蒸馏 4.1c 能补的信息极少**（§3.22c）。
@@ -59,15 +59,15 @@ python3 ladder.py <challenger> <champion> <seed> 500 <log_dir>   # 单卡判定
 | 数据质量加权探针（为何关闭） | §3.19 |
 | **在线自博弈管线**（server/client/trainer 怎么起、修过哪些坑） | §3.20 |
 | **自博弈七变体 + Q 排序诊断**（gap/RMSE/信噪比、为何强度不变） | §3.21、`mortal/diag_q_rank.py` |
-| **AI 一致率 / 与官方 4.1c 的对照**（为何这个指标不能用来排名） | §3.22、**§3.22b**、`memory/AI_SIMILARITY_20261113.md` |
-| **4.1c 报告里的 Q 表**（同点集修正、ρ 0.85、argmax 86.4%、蒸馏价值评估） | **§3.22c**、`memory/TEACHER_41C_20261114.md` |
-| 行为画像口径（人类 vs Mortal，唯一真源 `stat.rs`） | §2.5、`memory/BEHAVIOR_PROFILE_20261107.md`、`tools/behavior_profile.py` |
+| **AI 一致率 / 与官方 4.1c 的对照**（为何这个指标不能用来排名） | §3.22、**§3.22b**、`memory/REPORTS.md` §3 |
+| **4.1c 报告里的 Q 表**（同点集修正、ρ 0.85、argmax 86.4%、蒸馏价值评估） | **§3.22c**、`memory/REPORTS.md` §4 |
+| 行为画像口径（人类 vs Mortal，唯一真源 `stat.rs`） | §2.5、`memory/REPORTS.md` §2、`tools/behavior_profile.py` |
 | 现在该做什么、哪些路线已死 | §4（§4.1 状态表 / §4.2 剩余候选） |
 | 踩过的坑、日志规范 | §5 |
 | 工具、文件、产物在哪 | §6 |
 | 种子块台账（下一块用什么） | §2.4 |
 | **读牌模型（暗牌/听牌/待牌预测）的一切** | **`tools/read_model/docs/README.md`**（本文仅 §3.12 摘要） |
-| 局部形状线终结论（**有条件成立**）+ cond 口径修正 | `tools/read_model/local_shape/README.md`、`memory/DESIGN_local_shape_cond_20261103.md` |
+| 局部形状线终结论（**有条件成立**）+ cond 口径修正 | `tools/read_model/local_shape/README.md`、`memory/DESIGNS.md` §6 |
 
 ---
 
@@ -350,7 +350,7 @@ v3 重建后玩家池 4,883→**5,356**，合格（≥400 局且 avg_pt≥2）47
 > ⇒ **「弃和不足 / 太保守」不成立**（它是拿 S6c 的 31.09% 比了一个错误口径的 48.26%）。
 > B/756k 的副露 −4.37pp 才是真实偏离，而 S6c 已把它修到 −1.54pp。
 > 唯一未结：流局率（Mortal 侧未记录 `ryukyoku_rate`），但和了+放铳已解释绝大部分局的结束方式。
-> 详见 [`BEHAVIOR_PROFILE_20261107.md`](BEHAVIOR_PROFILE_20261107.md) 与 `tools/behavior_profile.py`。
+> 详见 [`REPORTS.md`](REPORTS.md) §2 与 `tools/behavior_profile.py`。
 
 ---
 
@@ -495,7 +495,7 @@ v3 冒烟 10/10：avg_rank 2.527、top1 **0.8134**（>父代 0.8112）、lse **+
 读牌模型的实验记录、判决依据、复核修正、改进路线（RM1~RM16）、坑位与产物台账自 2026-10-19 起统一维护在 **`tools/read_model/docs/README.md`**；诊断脚本与原始数字在 `tools/read_model/diagnostics/`。旧章节号（§3.12/§3.14/§3.15.x）对照见该 README **§16**。这里只留四件事：
 
 1. **基线是 A2c**（v2s + RM4/RM5，best@153k）：官方 20000 固定集（seed 20261016）全项通过——tenpai AUC **0.9698**（≥0.9685）、标定 **1.0364**（∈[0.95,1.05]）、cond_ce **2.7532**（≤2.896）、hit@1 **0.1993**（≥0.16）、立直 **0.1724**（≥0.135）、val_score **2.0524**（< A2b 2.0924）。A2c 取代 A2b 成为注入基线，特征口径冻结；A2b 归档作对照。对 A3 规则法：alloc/cond_ce/tenpai_AUC/hit@1 全面显著胜，立直 hit@1 **0.1724 vs 0.1121**，nlt 由 rule 胜转为打平。**A2c 模型本身从未注入 `mortal/`**（S6b 只注入其 2 行后验且已回退），强度只认「注入 + ladder」在线验收，离线指标仅诊断。
-2. **两条旧判决被推翻**（零训练成本）：① 「P(听牌) 过标定 6.3×」实为读错输出——BCE 标定的是 logit 而项目读 softmax，换 `1−sigmoid(wait_logits[34])` 后标定比值 **0.998**、AUC **0.9461→0.9685**（显著胜 A3 规则法 0.9468）；② wait_ce 的「+0.758 nats 优势」**71% 是听牌因子伪影**，真实待牌条件分布优势仅 **+0.217** ⇒「读侧已近天花板」证据不足；实测空间在输出层参数化、H2 缺逐牌列特征（冻结骨干探针 hit@1 相对 +35%）与训练规模（只用了全量数据的 **4.05%**）。P0 零成本项落地后回归 **52 项 ALL PASS**；口径纪律：报 `wait_ce_active` 必须同时给 `−logP(t)` 与 `cond_ce`（README §11.2）。⚠️ **2026-11-04 更正**：上述三项里“训练规模”已探完且为负结论——从 best@153k 续训四组配置（init 1.2e-4 跑 86k 步 / init 8e-5 / init 4e-5 / resume 4e-5）**全部退化 +0.008~+0.018**，resume（保 optimizer 动量）不改变结论 ⇒ **A2c 的 2.0524 是 cosine 末端噪声低谷，真实收敛水平 ≈2.060**；“val 单调降”是 LR 退火效应而非数据不足。立直层温度校准也仅能回收 ≈16%（0.011/0.065 nats，见 `local_shape/README.md` §5f）。**加训练/加校准两条线均关闭**，详见 `tools/read_model/docs/README.md` 文首两段。③ **2026-11-04 P0-a（cond 口径重算 bayes_ceiling 三层 tier）**：strict tier 信息 only **+0.023 nats**（all/active_any）、**+0.129**（clean_t8/active_any）⇒ 任务信号确实稀薄；但在 8 个「tier 优于 prior」的 cell 上 **A2c 低 0.135~0.209 nats** ⇒ **tier 不是上界**；失配集中在 active_both/立直/called（mask 本身含信息）；**P2c 在 15/18 cell 的 cond CE 最低** ⇒ 早先 P1/P2a/P2c 的 FAIL 是 top1 门禁判定，不是能力不足。详见 `local_shape/results/P0A_BAYES_COND_REPORT.md`、`memory/DESIGN_local_shape_cond_20261103.md` §11。
+2. **两条旧判决被推翻**（零训练成本）：① 「P(听牌) 过标定 6.3×」实为读错输出——BCE 标定的是 logit 而项目读 softmax，换 `1−sigmoid(wait_logits[34])` 后标定比值 **0.998**、AUC **0.9461→0.9685**（显著胜 A3 规则法 0.9468）；② wait_ce 的「+0.758 nats 优势」**71% 是听牌因子伪影**，真实待牌条件分布优势仅 **+0.217** ⇒「读侧已近天花板」证据不足；实测空间在输出层参数化、H2 缺逐牌列特征（冻结骨干探针 hit@1 相对 +35%）与训练规模（只用了全量数据的 **4.05%**）。P0 零成本项落地后回归 **52 项 ALL PASS**；口径纪律：报 `wait_ce_active` 必须同时给 `−logP(t)` 与 `cond_ce`（README §11.2）。⚠️ **2026-11-04 更正**：上述三项里“训练规模”已探完且为负结论——从 best@153k 续训四组配置（init 1.2e-4 跑 86k 步 / init 8e-5 / init 4e-5 / resume 4e-5）**全部退化 +0.008~+0.018**，resume（保 optimizer 动量）不改变结论 ⇒ **A2c 的 2.0524 是 cosine 末端噪声低谷，真实收敛水平 ≈2.060**；“val 单调降”是 LR 退火效应而非数据不足。立直层温度校准也仅能回收 ≈16%（0.011/0.065 nats，见 `local_shape/README.md` §5f）。**加训练/加校准两条线均关闭**，详见 `tools/read_model/docs/README.md` 文首两段。③ **2026-11-04 P0-a（cond 口径重算 bayes_ceiling 三层 tier）**：strict tier 信息 only **+0.023 nats**（all/active_any）、**+0.129**（clean_t8/active_any）⇒ 任务信号确实稀薄；但在 8 个「tier 优于 prior」的 cell 上 **A2c 低 0.135~0.209 nats** ⇒ **tier 不是上界**；失配集中在 active_both/立直/called（mask 本身含信息）；**P2c 在 15/18 cell 的 cond CE 最低** ⇒ 早先 P1/P2a/P2c 的 FAIL 是 top1 门禁判定，不是能力不足。详见 `local_shape/results/P0A_BAYES_COND_REPORT.md`、`memory/DESIGNS.md` §6 §11。
 3. **集合级充分、顺序级非立直层约 8 成、立直层仍缺口**：集合级局部推断 A2b 已学 **75~79%**（A3 仅 13~19%）；真顺序盲地板（`rule_predict(order_blind=True)`）下 A2b 扣地板复现率 66.6% / 非立直 81.9% / 立直 +31.0%，A2c 验收后重测为全样本 **85%**、非立直 **92.7%**、立直 **+66.2%**；区域级（同色 ±2）all +0.0062（CI 跨 0）/ 非立直 +0.0155（CI>0）已转正，但**立直窗口仍显著为负（−0.0656，CI[−0.1134,−0.0142]）**、反事实斜率仅 **b=0.0093** ⇒ 「逐牌列通路被激活、时序注意力仍空转」。P1b 两版（RM12 v1 b=0.0131、RM14 next-tedashi aux b=0.0038）20k 均 FAIL，不启动 200k；原计划的显式 order 特征/输入消融（README §13.5~§13.7）未再启动，读牌侧随后冻结（第 4 点）。
 4. **注入 P0 GO → P1 四臂 20k FAIL，读牌侧冻结**：P0-A 冻结主模型 `phi` 探针 5-fold by file——linear alloc_ce **0.7761±0.0012** / hit@1 **0.0785±0.0089** / AUC **0.7273±0.0078**；mlp128 **0.7588±0.0014 / 0.0775±0.0182 / 0.7993±0.0049**，A2c 同批 **0.6517 / 0.2003 / 0.9701** ⇒ 主模型表示缺读牌（探针 train hit@1 0.42 vs val 0.08 ⇒ 只在训练分布内可解码）；P0-B 主模型 top-1 点炮 **1.32%** ≈ 人类 **1.40%**、A2c 最安全 **0.27%**，与 A2c 最安全牌一致率 **28.5%**，`fixable` **1.20%（239/20000，30/30 文件，turn≥8 2.28% / 有立直家 2.59% / turn<8 0.49%）**；P0-C 20k `deal_pure` **0.0108**（≈16 个事件）vs 100k **0.0147**，**差 36%** ⇒ deal 类判据一律 ≥100k；P0-D 零 `tl_tokens` 只掉 2.5% ⇒ 可复用主模型 obs 预计算。**注入形态 = 2 行 obs**（1012 = 三家 union 危险度 `Σ_j P(听_j)P(待牌_j=t)`，1013 = `P(至少一家听牌)`），不是 102 维后验。P1 四臂（A0 基线 / A1 真特征 / A2 同批 shuffle 安慰剂 / A3 turn<8 置零）同数据同种子 20261022，756k→776k：`deal_top1` 0.0120/0.0121/0.0118/0.0123、holdout top1 0.8135/0.8143/0.8156/0.8136，**A1≈A2（全部 <1σ）**；新通道 `abs(w)` 均值 A1 **0.0158** vs A2 **0.0062** ⇒ 权重长起来但行为不变，**信息效应为零** ⇒ S6b 关闭、不再跑 100k/200k（完整记录 README §13.14.8）。`mortal/{model,dataloader,train,holdout_metrics,ladder}.py` 已恢复为注入前 `3a793a1`（commit `7bb5b7d`），`config.s6b_*` 删除；B/756k holdout top1=0.8223 / dqn_loss=0.3881 / agari 29/29 与注入前一致。读牌侧自此**冻结为归档资产**。
 
@@ -652,7 +652,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 `Q' = Q − λ0·w_state(s)·max(risk_w−τ,0)`，`w_state = w_opp(立直家数) × w_turn(早/中/晚) × w_score(点差)`，
 `risk_w = Σ_j P(听_j)P(待_j=t)·v_j`（v_j：默听 1.0 / 立直 1.3 / 副露 0.7）。
 **只调风险价格、不动进攻价值**；默认 `mode='fixed'` 保持线上行为逐位不变。
-设计文档：`memory/DESIGN_guard_statewise_20261027.md`（含 M1~M4 工时与终止条件）。
+设计文档：`memory/DESIGNS.md` §1（含 M1~M4 工时与终止条件）。
 
 **M1（已实现，回归 ALL PASS）**：`mortal/guard_state.py` + `tools/test_guard_state.py`。
 两个关键实测：
@@ -710,7 +710,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 
 ### 3.18 档 A：自博弈数据（tierA → tierA2，2026-10-29~11-01，两轮零效应 → 关闭）
 
-**动机与设计**：搜索/EI（档 B/C）与全知铳损两条线均已否证；档 A 不依赖任何 teacher，只把模型自己的对局按比例混入人类数据（`train.py` 新增 `dataset.extra_logs/extra_repeat`，不写 `file_index` manifest，不触发索引重建），再用双向标准臂判强度。设计见 `memory/DESIGN_tierA_selfplay_20261029.md`（启动时计划 16k sets、种子 700000/720000，实际执行见下）。
+**动机与设计**：搜索/EI（档 B/C）与全知铳损两条线均已否证；档 A 不依赖任何 teacher，只把模型自己的对局按比例混入人类数据（`train.py` 新增 `dataset.extra_logs/extra_repeat`，不写 `file_index` manifest，不触发索引重建），再用双向标准臂判强度。设计见 `memory/DESIGNS.md` §3（启动时计划 16k sets、种子 700000/720000，实际执行见下）。
 
 **第一轮（tierA：3.1% / 200k）**
 
@@ -765,13 +765,13 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 
 **边界**：① 无同预算不加权对照，dqn_loss 上升可能混入续训漂移（但 tierA 200k 是 −4.7%，更可能归因加权）；② 评分表为全窗口静态值，早期牌局有轻微未来信息泄漏；③ 重复条目降低 100k 内的唯一牌谱数（~16 万 vs 父代 220k），本探针只回答“该方案是否值得继续”，不等于“机制必然无效”；④ `best.pth` 因 reset 不可与父代比较。
 
-**产物**：`memory/DESIGN_strength_weight_20261102.md`、`tools/training/build_strength_weights.py`、`mortal/config.strength_probe{,_smoke}.toml`、`mortal/run_strength_probe.sh`、`mortal/indexes/strength_weights_v1.pth`、`mortal/checkpoints/strength_probe/`、`mortal/logs/strength_probe_*.log`。
+**产物**：`memory/DESIGNS.md` §5、`tools/training/build_strength_weights.py`、`mortal/config.strength_probe{,_smoke}.toml`、`mortal/run_strength_probe.sh`、`mortal/indexes/strength_weights_v1.pth`、`mortal/checkpoints/strength_probe/`、`mortal/logs/strength_probe_*.log`。
 
 ### 3.19b Oracle Guiding：训练期特权信息 + 退火（2026-11-03~04，GATE FAIL → 关闭）
 
 **动机**：文献（Suphx / Kanachan）里最强的单点技巧之一——训练时把「对手暗牌」这类推理期拿不到的特权信息喂进网络（`invisible_obs`，217 通道），配合 α 线性退火到 0，让模型在推理期（α=0）也能利用其学到的推断。理论上它改善的是**学习效率**，不是天花板。
 
-**实现**：`control.oracle = true` + `[oracle]` 的 α 调度（10k 步保持 1 → 50k 线性 → 0 → 后 40k 恒 0）；只支持 `objective='cql_mc'`（IQL 需要 `next_invisible_obs`，dataloader 未提供，已加断言）；旧 ckpt（无 `is_oracle`）逐位不变，oracle ckpt 在 engine/ladder/one_vs_three/test_play 一律零填充。文件：`config.og_{smoke,probe}.toml`、`run_og.sh`、`memory/DESIGN_oracle_guiding_20261103.md`。
+**实现**：`control.oracle = true` + `[oracle]` 的 α 调度（10k 步保持 1 → 50k 线性 → 0 → 后 40k 恒 0）；只支持 `objective='cql_mc'`（IQL 需要 `next_invisible_obs`，dataloader 未提供，已加断言）；旧 ckpt（无 `is_oracle`）逐位不变，oracle ckpt 在 engine/ladder/one_vs_three/test_play 一律零填充。文件：`config.og_{smoke,probe}.toml`、`run_og.sh`、`memory/DESIGNS.md` §7。
 
 **100k 探针（2026-11-04 01:03 UTC 完成，956k→1,056k，同一 12,288 样本）**：
 
@@ -1278,7 +1278,7 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 **方法（比社区口径更严）**：
 - 参照系：HF 上**社区分发的 v3 权重** **`hhim8826/mortal3-b40c192`**（v3 obs/934、192×40、10.77M、2023-03-25，AGPL-3.0）。
   ⚠️ **不是官方发布**：个人账号上传、经第三方重新打包（缺 optimizer/steps、多出官方代码没有的 `tag`、config 被裁剪）；
-  官方自 2022-08-19 起就不公开权重。下文称 **v3-ref**，来源与两种解读见 `AI_SIMILARITY_20261113.md` §2.1
+  官方自 2022-08-19 起就不公开权重。下文称 **v3-ref**，来源与两种解读见 `REPORTS.md` §3 §2.1
 - 比较对象：**同一批人类 holdout 的决策点**（不是自博弈牌谱）
 - 对齐：**逐文件配对**——同一个 `.json.gz` 分别用 `version=3` 与 `version=4+s6c` 解码，逐位校验 actions/masks 相同后才比 argmax
   （v3/v4 的 obs 编码走不同分支、不是子集关系；两个 DataLoader 并行会在第 18 批漂移）
@@ -1304,7 +1304,7 @@ Q 被拉向这些相近的回报 ⇒ gap 缩小。而全域探索会包含“差
 ② v3 是 2023-03，官方现役 4.1c 是 v4 系；**与 4.1c 的差距已于 2026-11-14 测定**（见 §3.22b：
 我们比 4.1c 高 2.20pp，但这是因为一致率与强度反向，**不能据此说我们更强**）。
 
-**产物**：`memory/AI_SIMILARITY_20261113.md`、`mortal/diag_ai_similarity.py`、
+**产物**：`memory/REPORTS.md` §3、`mortal/diag_ai_similarity.py`、
 `mortal/logs/ai_sim_{,seed2_}20261113.log`、`mortal/checkpoints/_ref/mortal3_b40c192.pth`（本地，不入库；md5 098c59b8…）。
 
 #### 3.22b 官方 4.1c 同局对照：4.1c 反而比自家 v3 低 2.55pp（2026-11-14）
@@ -1370,7 +1370,7 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 `π = softmax(Q/τ)`（偏差中位 0.00000）、**argmax 与 τ 无关** ⇒ 与 `engine.py` 的
 `boltzmann_temp` 语义一致。
 
-**产物**：`memory/TEACHER_41C_20261114.md`（完整报告）、
+**产物**：`memory/REPORTS.md` §4（完整报告）、
 `logs/teacher41c/{teacher_41c.jsonl,SUMMARY.md,aligned.jsonl,ALIGN.md}`（已 gitignore）。
 
 ---
@@ -1615,7 +1615,7 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | Rust 核心 | `libriichi/src/{lib.rs,consts.rs,state/,dataset/,arena/,algo/,mjai/,agent/,bin/}`（`agent/akochan.rs` 为锚点客户端） |
 | 配置（现存 **59**：主链/单线实验 19 + 自博弈 11 + anchor3 22 + anchor_ako 1 + style 5 + example 1） | 主链：`config.round{2,3,4,5}.toml`、`config.s6c{,_base,_probe,_smoke}.toml`、`config.offline.toml`、`config.grp_h128.toml`；实验：`config.tierA{,2}.toml`、`config.mix_v1.toml`、`config.strength_probe{,_smoke}.toml`、`config.og_{smoke,probe}.toml`、`config.iql_b_v{2,3}.toml`；在线：`config.selfplay_{smoke,test,lr,4m,4m_smoke,4m_expl,4m_top5,top5_bl,top5_blpool,blpool_e10,top5_blcql}.toml`；锚点：`config.anchor_ako.toml` + `config.anchor3_guard.toml`、`config.anchor3_noguard.toml`、`config.anchor3{,_noguard}_p{0..9}.toml`；生成物 `config.style_*.toml` 5 个 |
 | 脚本（现存 12） | `mortal/run_round{4,5}.sh`、`run_s6c.sh`、`run_s6c_chain.sh`、`run_guard_s6c_wave2.sh`、`ladder_arm.sh`、`run_anchor.sh`、`start_anchor3.sh`、`run_og.sh`、`run_strength_probe.sh`、`run_selfplay_8k.sh`、`watch_arm2.sh` |
-| 文档 | `memory/MEMORY.md`（本文）、`memory/NEXT_STEPS_ANALYSIS.md`、`tools/training/TRAINING_MANUAL.md`、`tools/training/ENV_SETUP_P100.md`、`tools/tenhou_data/TASKLIST.md`、`tools/read_model/docs/README.md`、`tools/akochan_build_notes.md` |
+| 文档 | `memory/MEMORY.md`（本文）、`memory/NEXT_STEPS_ANALYSIS.md`、`memory/DESIGNS.md`（7 篇实验设计合订）、`memory/REPORTS.md`（4 篇专项报告合订）、`tools/training/TRAINING_MANUAL.md`、`tools/training/ENV_SETUP_P100.md`、`tools/tenhou_data/TASKLIST.md`、`tools/read_model/docs/README.md`、`tools/akochan_build_notes.md` |
 | 数据索引 | `dataset/index/{player_ratings_*.csv,top_players_*.txt,repair_names_report.json}`；`mortal/indexes/*.pth` |
 
 **代码改动台账（相对上游）**
@@ -1683,7 +1683,7 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | 路径 | 引用方 |
 |---|---|
 | `checkpoints/mortal_step_000200000.pth` | **168 处配置**的 `[baseline].state_file`（早期 baseline 权重） |
-| `checkpoints/tierA2/mortal_step_001340000.pth` | `DESIGN_tierA_selfplay` 的「判定对象」 |
+| `checkpoints/tierA2/mortal_step_001340000.pth` | `DESIGNS.md` §3 的「判定对象」 |
 | `checkpoints/selfplay_4m/mortal_step_000960000.pth` | MEMORY §3.21b（同步数对比） |
 | `checkpoints/selfplay_4m/mortal_step_000970000.pth` | MEMORY §3.21（最终态副本） |
 | `checkpoints/selfplay_m5/mortal_step_001100000.pth` | MEMORY §3.20（跨 test 点证据） |

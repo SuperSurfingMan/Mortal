@@ -1,6 +1,6 @@
 """Guard-P2 局面特征：从 v4 obs 读取押し引き所需的三类状态量。
 
-设计见 `memory/DESIGN_guard_statewise_20261027.md`。本模块只做**读取与权重**，
+设计见 `memory/DESIGNS.md` §1。本模块只做**读取与权重**，
 不碰 Q、不改 `defense_guard.py`（`mode='fixed'` 必须逐位不变）。
 
 v4 obs 布局（本文件依赖的常量，均有 `tools/test_guard_state.py` 覆盖）：

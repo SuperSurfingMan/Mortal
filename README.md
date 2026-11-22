@@ -49,10 +49,7 @@
 ### 9. 风格模仿微调（`tools/style_ft/`）
 - bc_style 白名单一致率微调流程（白名单提取/一致率评测/行为画像/选优），含职业选手风格配置（如 okada_sayaka、toi_takaharu）。
 
-### 10. MortalSimulator 对局模拟器（`simulator/`）
-- Windows 自包含运行包：3 家 Mortal AI + 1 名人类 + 读牌助手 + 实时张量检查器，双击启动，一键环境脚本；分发快照见 `dist/` 与根目录 zip。
-
-### 11. 工程基建与文档
+### 10. 工程基建与文档
 - **结构化项目记忆**（`memory/`）：`MEMORY.md` 六版全量梳理 + 各实验线 DESIGN 文档，新会话可从 §0「快速接手」直接续作。
 - **技术原理报告**（`docs/TECHNICAL_REPORT.md`）：系统架构/数据管线/模型结构/奖励与 gamma 语义/训练目标三代演化/统计评估/工程可靠性，通俗版 + 严格版双写。
 - 事故复盘与 **80+ 坑位台账**（如 resume 后 lr=0 静默冻结、TF32 破坏 fp32 口径、worker RSS 泄漏等），全部有修复与门禁。
@@ -65,22 +62,18 @@
 | `libriichi/` | Rust 规则引擎：和牌/向听/牌效率/观测编码/对局竞技场（arena）/统计 | 原版，含本地修复与埋点 |
 | `mortal/` | Python 训练与推理主代码。原版骨架（`train.py`、`model.py`、`client.py`、`server.py` 等）+ 本地大量扩展：`defense_guard.py`、`guard_risk.py`、`guard_state.py`（推理期守卫）、`ev_rerank.py`、`selfplay_gen.py`、`ladder.py`、`holdout_metrics.py`、`diag_ai_similarity.py`、`one_vs_three.py`、59 个实验配置 `config.*.toml`、各代模型权重 `checkpoints/`。**训练必须在 `mortal/` 目录下执行** | 原版骨架 + 本地扩展 |
 | `tools/` | 实验工具集：`read_model/`（读牌模型全链 + 单一维护的 README）、`style_ft/`（风格模仿）、`training/`（编排）、`data_audit/`、`oracle_*`、`ei_*`（搜索线）、akochan 对接（`akochan_pipe_shim.py` 等）、`mjai_score.py`、`label_ceiling.py` 等 | 本地新增 |
-| `simulator/` | MortalSimulator 对局模拟器（GUI/引擎/测试），见其 `README_FIRST.md` | 本地新增 |
 | `s6a_isolated/` | S6a 隔离实验工作区，「完全隔离工作流」的范例与 v5 复现路径（patches + 首层手术工具） | 本地新增 |
 | `memory/` | 项目上下文记忆：`MEMORY.md`（§0 快速接手 / 结论 / 坑位台账）+ 各线 `DESIGN_*.md` | 本地新增 |
 | `docs/` | `TECHNICAL_REPORT.md` 技术原理报告（本地新增）+ 原版 mdBook 用户文档（`book.toml`、`src/`） | 原版 + 本地 |
 | `log-viewer/` | mjai 牌谱查看器（静态页面） | 原版 |
 | `exe-wrapper/` | Windows 可执行文件包装器（Cargo workspace 成员） | 原版 |
-| `dist/` | 发布产物（`MortalMajsoulSuite` Windows 套件），以权重 sha256 标识版本 | 本地产物 |
 | `dataset/` `logs/` `runs/` `backups/` | 牌谱数据、训练日志/产物、实验运行目录、备份（大体量，多数不入 git） | 本地产物 |
-| `MortalSimulator_20261023.zip` | 模拟器分发快照（651 MB，附 `.sha256` 校验） | 本地产物 |
 
 ## 三、从哪里开始读
 
 - 想快速接手项目现状 → [`memory/MEMORY.md`](memory/MEMORY.md) §0（TL;DR：当前坐标 / 七条结论 / 三条命令）
 - 想理解技术原理 → [`docs/TECHNICAL_REPORT.md`](docs/TECHNICAL_REPORT.md)
 - 想了解读牌线全部细节 → [`tools/read_model/docs/README.md`](tools/read_model/docs/README.md)
-- 想跑对局模拟器 → [`simulator/README_FIRST.md`](simulator/README_FIRST.md)
 
 ## License
 

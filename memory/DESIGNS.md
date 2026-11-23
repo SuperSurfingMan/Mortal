@@ -331,7 +331,7 @@ V(s,a) = E_draw[ V_off(s') ]  −  Σ_j P(听_j|s')·P(待牌_j = a|s')·E[loss_
 | SP 前瞻 | ✅ 已在 obs（961..1011，`ev_rerank.sp_features` 已解析） | 无需重写 DP |
 | 对手后验 | ✅ A2c（`defense_guard` 已接线） | 每决策一次前向 |
 | **teacher 接口** | ❌ 需新增 `tools/ei_teacher.py` | 输入 obs/risk/SP → 输出 `V(s,a)` 与软标签 |
-| **蒸馏训练** | ❌ 需在 `train.py` 加 `target_mode = 'bc'|'soft_teacher'` | 现有 BC + MC 回报 |
+| **蒸馏训练** | ❌ 需在 `train.py` 加 `target_mode = 'bc'|'soft_teacher'` | 现有 MC 回报回归 + CQL（无 BC 监督项） |
 | 判定 | ✅ `ladder_arm.sh`（16k sets，δ_min≈0.43）+ `run_anchor.sh` | 新种子从 **600000** 起 |
 
 ---
@@ -840,12 +840,12 @@ cd mortal && CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 MORTAL_CFG=conf
 
 ## 3. 训练怎么改（最小改动）
 
-现有 `train.py` 已经是「BC + MC 回报」的混合目标，因此档 A 的改动只有两处：
+现有 `train.py` 的目标（cql_mc）是「MC 回报回归 + CQL」，因此档 A 的改动只有两处：
 
 1. **数据来源**：把自博弈日志目录加入 `dataset` 列表（与人类日志按比例混合，
    `human:selfplay = 8:1 ~ 4:1`），避免分布漂移；
 2. **损失权重**：对自博弈样本提高 MC 项的权重（例如 `1.0 → 1.5`），
-   因为它们没有「人类示范」的意义，只有回报意义。
+   因为自博弈动作来自模型自己，锚点信号弱于人类决策（cql_mc 本无示范项）。
 
 CLI 形式（示意）：
 
@@ -1418,8 +1418,8 @@ loss[a]   = danger[a] × 3000 点     （先按每家 3000 粗算，立直应改
 
 ## 0. 目标与假设
 
-- **假设**：R2 的 top400 是文件/座位级白名单，只保证一局至少 1 名强手；另外 3 席可能偏弱。
-  BC 可能连弱手的坏习惯一起模仿，因此「牌局质量」还有未被利用的方差。
+- **假设**：R2 的 top400 是文件/座位级白名单，只保证一局至少 1 名强手；另外 3 席可能偏弱，
+  Q 锚点可能连弱手的坏决策一起学进去（cql_mc 下样本即锚点），因此「牌局质量」还有未被利用的方差。
 - **变量**：只改「每条牌谱被抽到的概率」，不改模型、损失、数据集合、超参。
 - **预注册门禁**（holdout 202609，digest `9c5362bf`，与 S6c/956k 同口径）：
   1. top1 ≥ **0.8117**（父代 0.8167 − 0.5pp）

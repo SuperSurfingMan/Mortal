@@ -744,7 +744,7 @@ risk(t) = Σ_j P(听_j) · P(待牌_j = t)          # A2c 后验，三家 union
 
 ### 3.19 数据质量加权：100k 探针（2026-11-02，门禁未过 → 关闭）
 
-**动机**：数据侧只剩“局内 4 人强度加权”未试；top400 只保证一局至少 1 名强手，另外 3 席可能偏弱，BC 可能模仿弱手坏习惯。
+**动机**：数据侧只剩“局内 4 人强度加权”未试；top400 只保证一局至少 1 名强手，另外 3 席可能偏弱，Q 锚点可能被弱手的决策带偏。
 
 **设计**：每局取 4 名玩家长期 avg_pt 的最小值（每人 ≥100 局）作为质量分；按分位 [0.5,0.75,0.9] 映射重复 [1,1,2,3]（q50 惰性，实际为底部 75% ×1、75–90% ×2、前 10% ×3），mean **1.350**；492,810 文件全部保留，扩到 **665,485** 条；只改 file_list，不改损失/file_index manifest（`train.py` 新增 `[dataset.strength_weight]`，权重表 `indexes/strength_weights_v1.pth`）。
 
@@ -1503,7 +1503,7 @@ S6c = **6,260/7,791 = 80.349%**，与 4.1c 的 78.424% 差 **+1.925pp**。
 | 69 | 工程 | **同名 `model.py` 会静默串味**（2026-10-22）：`tools/read_model/model.py`（读牌 v1 骨干，含 `ReadBackbone`）与 `mortal/model.py`（主模型 `Brain`）同名；`_common.bootstrap_paths()` 把 `mortal/` 插到 `sys.path` 最前（脚本目录已存在时它不会再插 `tools/read_model`），裸 `import model` 会命中主模型版本，`model_v2.py` 报 `ReadBackbone` 缺失。处置：用 `spec_from_file_location` 显式占住名字（读牌=`model`、主模型=`mortal_model`），`train.py` 同理 |
 | 70 | 工程 | **首层手术后必须重置 optimizer**（2026-10-22 S6b 冒烟实证）：`Conv1d(192,1012,3)→(192,1014,3)` 的模型已换形，但 ckpt 里的 AdamW 动量仍是 1012 维 ⇒ 第一步 `AdamW.step` 报 `size of tensor a (1012) must match b (1014)`。处置：config 设 `reset_optimizer='<新 token>'` 触发跳过 optimizer/scheduler 加载（新通道零初始化，旧动量本就不适用）；另注意新通道梯度 = 上游×输入，零填充样本对它的梯度为 0，预计算覆盖不全时信号会被稀释 |
 | 71 | 工程 | **暖启训练的 `state_file` 绝不能指向基线/共享起手 ckpt**（2026-10-22 S6b 实证）：train.py 每个 `save_every` 会把训练中权重**原地写回** `control.state_file`。A0 臂直接指向 `reward_ablation/B_rank_pt_aligned/mortal.pth`（判定基线），2000 步后基线被覆盖（mtime 04:19、steps 756000→758000）。可精确恢复的唯一原因：`inject_s6b/B756k_v6_init.pth` 是手术前从基线复制的，首层前 1012 通道逐位相同（手术自检 phi diff=0），裁掉新增 2 通道即还原。处置：每个实验臂先复制一份独立起手 ckpt（A0.pth/A1.pth/...），`state_file` 指向副本；基线只作只读父代 |
-| 72 | 建模 | **「权重长起来」+「行为不变」= 信息冗余，不是学习不足**（2026-10-22 S6b 四臂实证）：2 行读牌危险度注入后，A1 新通道 `abs(w)` 均值 **0.0158**（A2 安慰剂 0.0062，2.5×），但 `deal_top1` 0.0121 vs 0.0118、holdout top1 0.8143 vs 0.8156，全部 <1σ。合并 S6a（6 行紧迫度 null）与坑 64（显式 order 权重涨但反事实 b 不动）：**当注入特征与 obs 已有信息同源时，权重增长只反映「无害正则」，不构成行为改变的证据**。判据必须是 **A1 vs A2（安慰剂）的配对差**，而不是「权重是否非零」；同信息注入的天花板由「BC 目标是否需要它」决定，不由「表示里有没有它」决定（P0-A 的 0.80 vs 0.97 与 P1 的 null 同时成立） |
+| 72 | 建模 | **「权重长起来」+「行为不变」= 信息冗余，不是学习不足**（2026-10-22 S6b 四臂实证）：2 行读牌危险度注入后，A1 新通道 `abs(w)` 均值 **0.0158**（A2 安慰剂 0.0062，2.5×），但 `deal_top1` 0.0121 vs 0.0118、holdout top1 0.8143 vs 0.8156，全部 <1σ。合并 S6a（6 行紧迫度 null）与坑 64（显式 order 权重涨但反事实 b 不动）：**当注入特征与 obs 已有信息同源时，权重增长只反映「无害正则」，不构成行为改变的证据**。判据必须是 **A1 vs A2（安慰剂）的配对差**，而不是「权重是否非零」；同信息注入的天花板由「现目标训出的行为是否需要它」决定，不由「表示里有没有它」决定（P0-A 的 0.80 vs 0.97 与 P1 的 null 同时成立） |
 | 73 | 训练 | **`dataset.strength_weight.table` 必须与当前 `file_index` 同源**：换索引/白名单/数据版本后不重建权重表，命中率会下降，缺失文件按 1 次处理（只 warning），加权会静默退化为“部分生效”；开跑后核对日志里的 `命中=...` 与重复直方图 |
 | 74 | 训练 | **online 的 LR 必须随 batch 缩放**（2026-11-08 M5-A 实战）：`[optim.scheduler] peak=1e-4` 是 **batch-512** 口径，改成 `batch_size=32` 后等效 LR 放大 16 倍 ⇒ **45 分钟内 top1 0.8167→0.2417、agari 21.7%→0.55%、avg_rank 3.89**。规则：`lr_new = lr_old × batch_new / 512`。叠加因子：`train.py` 的 `if not online or state[...]['online']` 在 online 时**整块跳过** optimizer/scheduler 加载 ⇒ LR 是全新 warmup，不是父代末端值 |
 | 75 | 训练 | **online 的终止条件必须用绝对步数 + 落在 save 点**：① 重启后 `online_start_steps` 重置，增量口径 `online_max_steps` **永远达不到**（实测 11 h 重启 7 次）⇒ 用 `control.online_target_steps`（绝对）；② 停机点不是 `save_every` 倍数时**最后一段静默丢失**（4M-expl 丢 8,339 步，事后只剩 960k）⇒ 现已加告警，配置时就把 target 对齐 |
